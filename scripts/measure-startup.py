@@ -64,7 +64,7 @@ def main():
     args = ap.parse_args()
 
     if not os.path.exists(BINARY):
-        print(f"{BINARY} がない。先に `cargo build --release` を実行する", file=sys.stderr)
+        print(f"{BINARY} not found; run `cargo build --release` first", file=sys.stderr)
         return 1
 
     work = os.path.join(REPO, ".work", "startup")
@@ -89,10 +89,10 @@ def main():
         json.dump(result, f, ensure_ascii=False, indent=2)
         f.write("\n")
 
-    print(f"バイナリ {size / 1024:.0f}KB")
+    print(f"binary {size / 1024:.0f}KB")
     for m in measurements:
         print(
-            "  dowel {:<22} 最小 {:6.2f}ms  中央 {:6.2f}ms".format(
+            "  dowel {:<22} min {:6.2f}ms  median {:6.2f}ms".format(
                 " ".join(m["args"]), m["min_ms"], m["median_ms"]
             )
         )
@@ -100,7 +100,7 @@ def main():
     worst = max(m["median_ms"] for m in measurements)
     if worst > CEILING_MS:
         print(
-            f"中央値 {worst:.2f}ms が上限 {CEILING_MS:.0f}ms を超えている",
+            f"median {worst:.2f}ms exceeds the ceiling of {CEILING_MS:.0f}ms",
             file=sys.stderr,
         )
         return 1

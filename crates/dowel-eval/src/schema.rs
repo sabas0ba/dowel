@@ -146,7 +146,7 @@ pub fn root_props() -> Vec<PropDef> {
         name: "sources",
         ty: list(Type::Path),
         merge: Merge::Append,
-        doc: "コンパイル対象。伝播しない",
+        doc: "sources to compile. does not propagate",
     }]
 }
 
@@ -160,37 +160,37 @@ pub fn block_props() -> Vec<PropDef> {
             name: "includes",
             ty: set(Type::Path),
             merge: Merge::Union,
-            doc: "インクルード探索パス。順序は依存グラフのトポロジカル順",
+            doc: "include search paths. ordered along the dependency graph",
         },
         PropDef {
             name: "defines",
             ty: Type::Map(Box::new(Type::Val)),
             merge: Merge::ErrorOnConflict,
-            doc: "プリプロセッサ定義。異なる値が到達したら失敗する",
+            doc: "preprocessor definitions. fails when conflicting values arrive",
         },
         PropDef {
             name: "flags",
             ty: list(Type::Str),
             merge: Merge::Append,
-            doc: "コンパイルフラグ。順序を保存する",
+            doc: "compile flags. order preserving",
         },
         PropDef {
             name: "link_flags",
             ty: list(Type::Str),
             merge: Merge::Append,
-            doc: "リンクフラグ。順序を保存する",
+            doc: "link flags. order preserving",
         },
         PropDef {
             name: "deps",
             ty: list(Type::Unknown),
             merge: Merge::Append,
-            doc: "依存。dep(...) はパッケージ依存、target(...) は同一パッケージ内",
+            doc: "dependencies. dep(...) is a package dependency, target(...) is same-package",
         },
         PropDef {
             name: "abi",
             ty: Type::AbiLabel,
             merge: Merge::MustEqual,
-            doc: "ABI ラベル。一致しなければリンク前に失敗する",
+            doc: "ABI label. mismatches fail before linking",
         },
     ]
 }
@@ -309,15 +309,19 @@ fn conflict_diagnostic(
     cur: &Value,
     sm: &SourceMap,
 ) -> Diagnostic {
-    let mut d =
-        Diagnostic::error("merge-conflict", format!("`{prop}` の `{key}` に異なる値が到達した"))
-            .note(format!("`{prop}` の併合規則は error_on_conflict である"));
+    let mut d = Diagnostic::error(
+        "merge-conflict",
+        format!("conflicting values reached `{key}` of `{prop}`"),
+    )
+    .note(format!("the merge rule of `{prop}` is error_on_conflict"));
     if let Some(s) = cur.prov.nearest_site() {
-        d = d.at(s.file, s.span, format!("こちらは {}", cur.display()));
+        d = d.at(s.file, s.span, format!("this one is {}", cur.display()));
     }
-    if let Some(l) =
-        site_label(sm, prev.prov.nearest_site(), &format!("先に到達した値は {}", prev.display()))
-    {
+    if let Some(l) = site_label(
+        sm,
+        prev.prov.nearest_site(),
+        &format!("the value that arrived first is {}", prev.display()),
+    ) {
         d = d.with_label(l);
     }
     for line in provenance_notes(prev).into_iter().chain(provenance_notes(cur)) {
@@ -329,15 +333,19 @@ fn conflict_diagnostic(
 fn must_equal_diagnostic(prop: &str, first: &Value, other: &Value, sm: &SourceMap) -> Diagnostic {
     let mut d = Diagnostic::error(
         "abi-mismatch",
-        format!("`{prop}` が一致しない: {} と {}", first.display(), other.display()),
+        format!("`{prop}` does not match: {} vs {}", first.display(), other.display()),
     )
-    .note(format!("`{prop}` の併合規則は must_equal である。不整合は伝播させず失敗させる"));
+    .note(format!(
+        "the merge rule of `{prop}` is must_equal. a mismatch fails instead of propagating"
+    ));
     if let Some(s) = other.prov.nearest_site() {
-        d = d.at(s.file, s.span, format!("こちらは {}", other.display()));
+        d = d.at(s.file, s.span, format!("this one is {}", other.display()));
     }
-    if let Some(l) =
-        site_label(sm, first.prov.nearest_site(), &format!("先に到達した値は {}", first.display()))
-    {
+    if let Some(l) = site_label(
+        sm,
+        first.prov.nearest_site(),
+        &format!("the value that arrived first is {}", first.display()),
+    ) {
         d = d.with_label(l);
     }
     d
@@ -384,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn union_は重複を落とし到達順を保つ() {
+    fn union_drops_duplicates_and_keeps_arrival_order() {
         let def = lookup(Block::Public, "includes").unwrap();
         let a = Value::list(Type::Path, vec![path("include", 0), path("src", 10)], Prov::none());
         let b = Value::list(Type::Path, vec![path("src", 20), path("gen", 30)], Prov::none());
@@ -399,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn append_は重複も順序も保つ() {
+    fn append_keeps_duplicates_and_order() {
         let def = lookup(Block::Private, "flags").unwrap();
         let f = |s: &str, at: u32| Value::str(s, Prov::at(Origin::Literal, site(at)));
         let a = Value::list(Type::Str, vec![f("-O2", 0), f("-g", 5)], Prov::none());
@@ -410,19 +418,19 @@ mod tests {
     }
 
     #[test]
-    fn error_on_conflict_は異なる値で失敗する() {
+    fn error_on_conflict_fails_on_differing_values() {
         let def = lookup(Block::Private, "defines").unwrap();
         let mut diags = Vec::new();
         let sm = SourceMap::new();
         merge_values(&def, &[map_of(&[("A", 1)], 0), map_of(&[("A", 1)], 9)], &sm, &mut diags);
-        assert!(diags.is_empty(), "同じ値なら衝突しない");
+        assert!(diags.is_empty(), "identical values must not conflict");
         merge_values(&def, &[map_of(&[("A", 1)], 0), map_of(&[("A", 2)], 9)], &sm, &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "merge-conflict");
     }
 
     #[test]
-    fn must_equal_は不一致で失敗する() {
+    fn must_equal_fails_on_mismatch() {
         let def = lookup(Block::Public, "abi").unwrap();
         let label = |s: &str, at: u32| Value {
             ty: Type::AbiLabel,
@@ -439,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn 既知のプロパティ名を列挙できる() {
+    fn lists_known_property_names() {
         assert!(prop_names(Block::Public).contains(&"includes"));
         assert!(prop_names(Block::Root).contains(&"sources"));
         assert!(!prop_names(Block::Root).contains(&"includes"));

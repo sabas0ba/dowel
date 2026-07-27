@@ -44,10 +44,10 @@ pub struct Failure {
 
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{} が失敗した", self.description)?;
-        writeln!(f, "  コマンド: {}", self.command)?;
+        writeln!(f, "{} failed", self.description)?;
+        writeln!(f, "  command: {}", self.command)?;
         if let Some(c) = self.status {
-            writeln!(f, "  終了状態: {c}")?;
+            writeln!(f, "  exit status: {c}")?;
         }
         if !self.stdout.trim().is_empty() {
             writeln!(f, "--- stdout ---\n{}", self.stdout.trim_end())?;
@@ -74,7 +74,7 @@ pub fn write_ninja_file(plan: &Plan) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(&plan.build_dir)?;
     let path = plan.build_dir.join("build.ninja");
     std::fs::write(&path, crate::ninja::generate(plan))?;
-    log_debug!("{} を書き出した", path.display());
+    log_debug!("wrote {}", path.display());
     Ok(path)
 }
 
@@ -88,7 +88,7 @@ pub fn run(plan: &Plan, executor: Executor, jobs: Option<usize>) -> Result<(), F
 
 fn run_ninja(plan: &Plan, jobs: Option<usize>) -> Result<(), Failure> {
     let file = write_ninja_file(plan).map_err(|e| Failure {
-        description: "ninja ファイルの書き出し".into(),
+        description: "writing the ninja file".into(),
         command: plan.build_dir.join("build.ninja").display().to_string(),
         status: None,
         stdout: String::new(),
@@ -102,11 +102,11 @@ fn run_ninja(plan: &Plan, jobs: Option<usize>) -> Result<(), Failure> {
     }
     log_info!("ninja -f {}", file.display());
     let out = cmd.output().map_err(|e| Failure {
-        description: "ninja の起動".into(),
+        description: "starting ninja".into(),
         command: format!("ninja -f {}", file.display()),
         status: None,
         stdout: String::new(),
-        stderr: format!("{e}。`--executor=direct` なら ninja なしで実行できる"),
+        stderr: format!("{e}. `--executor=direct` runs without ninja"),
     })?;
 
     // ninja の進捗は stdout に出る。そのまま見せる。
@@ -132,7 +132,7 @@ fn run_direct(plan: &Plan) -> Result<(), Failure> {
     for id in plan.order() {
         let action = plan.action(id);
         if is_up_to_date(action) {
-            log_trace!("最新: {}", action.description);
+            log_trace!("up to date: {}", action.description);
             skipped += 1;
             continue;
         }
@@ -152,7 +152,7 @@ fn run_direct(plan: &Plan) -> Result<(), Failure> {
             command: action.command_line(),
             status: None,
             stdout: String::new(),
-            stderr: format!("{e}（`{}` を起動できない）", action.program),
+            stderr: format!("{e} (cannot start `{}`)", action.program),
         })?;
         if !out.status.success() {
             return Err(Failure {
@@ -165,16 +165,22 @@ fn run_direct(plan: &Plan) -> Result<(), Failure> {
         }
         ran += 1;
     }
-    log_debug!("実行 {ran} 件、最新のため省略 {skipped} 件");
+    log_debug!("ran {ran} actions, skipped {skipped} already up to date");
     Ok(())
 }
 
 /// 出力が全ての入力より新しいか。
+///
+/// 「なぜ再実行されたのか（されなかったのか）」は最も問い合わせの多い挙動である。
+/// 判断の根拠を trace に落としておく。
 fn is_up_to_date(action: &Action) -> bool {
     // 出力が1つでも欠けていれば再実行する。
     let mut oldest_output: Option<SystemTime> = None;
     for out in &action.outputs {
-        let Some(t) = mtime(out) else { return false };
+        let Some(t) = mtime(out) else {
+            log_trace!("  stale: output missing {}", out.display());
+            return false;
+        };
         oldest_output = Some(oldest_output.map_or(t, |cur: SystemTime| cur.min(t)));
     }
     let Some(oldest_output) = oldest_output else { return false };
@@ -186,8 +192,14 @@ fn is_up_to_date(action: &Action) -> bool {
     for input in &inputs {
         match mtime(input) {
             // 入力が消えているなら再実行して誤りを表に出す。
-            None => return false,
-            Some(t) if t > oldest_output => return false,
+            None => {
+                log_trace!("  stale: input missing {}", input.display());
+                return false;
+            }
+            Some(t) if t > oldest_output => {
+                log_trace!("  stale: {} is newer than the output", input.display());
+                return false;
+            }
             Some(_) => {}
         }
     }
@@ -235,7 +247,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn depfile_の継続行を読む() {
+    fn reads_continuation_lines_in_a_depfile() {
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch");
         std::fs::create_dir_all(&dir).unwrap();
@@ -253,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn 空白を含むパスを読む() {
+    fn reads_paths_containing_spaces() {
         let dir =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch");
         std::fs::create_dir_all(&dir).unwrap();
@@ -263,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn 存在しない_depfile_は空() {
+    fn a_missing_depfile_is_empty() {
         assert!(read_depfile(Path::new("/nonexistent/x.d")).is_empty());
     }
 }

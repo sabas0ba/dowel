@@ -19,16 +19,16 @@ impl Project {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = workspace_target().join("e2e").join(format!("{name}-{n}"));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("一時ディレクトリを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the scratch directory");
         Project { root }
     }
 
     pub fn write(&self, rel: &str, contents: &str) -> PathBuf {
         let path = self.root.join(rel);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("親ディレクトリを作れない");
+            std::fs::create_dir_all(parent).expect("cannot create the parent directory");
         }
-        std::fs::write(&path, contents).expect("書き込めない");
+        std::fs::write(&path, contents).expect("cannot write the file");
         path
     }
 
@@ -45,7 +45,7 @@ impl Project {
             // ログ水準を環境から漏らさない。テストの出力を安定させる。
             .env_remove("DOWEL_LOG")
             .output()
-            .expect("dowel を起動できない");
+            .expect("cannot start dowel");
         Run::new(args, out)
     }
 }
@@ -68,22 +68,22 @@ impl Run {
     }
 
     pub fn success(&self) -> &Run {
-        assert_eq!(self.status, Some(0), "`dowel {}` が失敗した\n{self}", self.args);
+        assert_eq!(self.status, Some(0), "`dowel {}` failed\n{self}", self.args);
         self
     }
 
     pub fn failure(&self) -> &Run {
-        assert_ne!(self.status, Some(0), "`dowel {}` が成功してしまった\n{self}", self.args);
+        assert_ne!(self.status, Some(0), "`dowel {}` unexpectedly succeeded\n{self}", self.args);
         self
     }
 
     pub fn stderr_contains(&self, needle: &str) -> &Run {
-        assert!(self.stderr.contains(needle), "stderr に `{needle}` がない\n{self}");
+        assert!(self.stderr.contains(needle), "stderr does not contain `{needle}`\n{self}");
         self
     }
 
     pub fn stdout_contains(&self, needle: &str) -> &Run {
-        assert!(self.stdout.contains(needle), "stdout に `{needle}` がない\n{self}");
+        assert!(self.stdout.contains(needle), "stdout does not contain `{needle}`\n{self}");
         self
     }
 }
@@ -92,7 +92,7 @@ impl std::fmt::Display for Run {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "--- 終了状態: {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+            "--- exit status: {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
             self.status, self.stdout, self.stderr
         )
     }
@@ -102,8 +102,8 @@ impl std::fmt::Display for Run {
 pub fn run_artifact(path: &Path) -> String {
     let out = Command::new(path)
         .output()
-        .unwrap_or_else(|e| panic!("{} を起動できない: {e}", path.display()));
-    assert!(out.status.success(), "{} が異常終了した: {:?}", path.display(), out.status);
+        .unwrap_or_else(|e| panic!("cannot start {}: {e}", path.display()));
+    assert!(out.status.success(), "{} exited abnormally: {:?}", path.display(), out.status);
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
@@ -111,14 +111,14 @@ pub fn run_artifact(path: &Path) -> String {
 pub fn build_dir(project_dir: &Path, opt: &str) -> PathBuf {
     let base = project_dir.join(".dowel/build");
     let entries =
-        std::fs::read_dir(&base).unwrap_or_else(|e| panic!("{} を読めない: {e}", base.display()));
+        std::fs::read_dir(&base).unwrap_or_else(|e| panic!("cannot read {}: {e}", base.display()));
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name.ends_with(opt) {
             return e.path();
         }
     }
-    panic!("{} に `{opt}` 構成のビルドディレクトリがない", base.display());
+    panic!("no `{opt}` build directory under {}", base.display());
 }
 
 fn workspace_target() -> PathBuf {

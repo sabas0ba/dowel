@@ -43,7 +43,7 @@ run() {
     for skipped in $SKIP; do
         if [ "$skipped" = "$name" ]; then
             printf '%s\tskipped\t0\t0\t0\t%s\n' "$name" "$gating" >>"$records"
-            printf '  \033[90m—\033[0m %-22s 省略\n' "$name"
+            printf '  \033[90m-\033[0m    %-22s skipped\n' "$name"
             return 0
         fi
     done
@@ -63,21 +63,21 @@ run() {
     local state
     if [ $status -eq 0 ]; then
         state=ok
-        printf '  \033[32m✓\033[0m %-22s %5sms  通過 %s\n' "$name" "$((end - start))" "$passed"
+        printf '  \033[32mok\033[0m   %-22s %5sms  %s passed\n' "$name" "$((end - start))" "$passed"
     elif [ "$gating" = advisory ]; then
         state=warn
-        printf '  \033[33m!\033[0m %-22s %5sms  参考（失敗しても全体は落とさない）\n' \
+        printf '  \033[33mwarn\033[0m %-22s %5sms  advisory (does not fail the run)\n' \
             "$name" "$((end - start))"
     else
         state=failed
-        printf '  \033[31m✗\033[0m %-22s %5sms  失敗\n' "$name" "$((end - start))"
+        printf '  \033[31mFAIL\033[0m %-22s %5sms\n' "$name" "$((end - start))"
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$name" "$state" "$((end - start))" "$passed" "$failed" "$gating" >>"$records"
     return 0
 }
 
-echo "検証を開始する（出力: ${OUT#"$repo_root"/}）"
+echo "running verification (output: ${OUT#"$repo_root"/})"
 echo
 
 # --- 静的な検査 ---------------------------------------------------------
@@ -114,9 +114,9 @@ status=$?
 
 echo
 if [ $status -eq 0 ]; then
-    echo "検証は通った。要約: ${OUT#"$repo_root"/}/summary.md"
+    echo "verification passed. summary: ${OUT#"$repo_root"/}/summary.md"
 else
-    echo "検証は失敗した。要約: ${OUT#"$repo_root"/}/summary.md"
-    echo "各段階の出力は ${OUT#"$repo_root"/}/logs/ にある"
+    echo "verification failed. summary: ${OUT#"$repo_root"/}/summary.md"
+    echo "per-step output is under ${OUT#"$repo_root"/}/logs/"
 fi
 exit $status

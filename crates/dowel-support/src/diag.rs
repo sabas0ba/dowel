@@ -354,11 +354,11 @@ mod tests {
     }
 
     #[test]
-    fn 人間向け描画にキャレットと位置が出る() {
+    fn human_rendering_shows_caret_and_location() {
         let (sm, f) = sample();
-        let d = Diagnostic::error("unknown-property", "未知のプロパティ `include`")
-            .at(f, Span::new(19, 26), "`lib.public` にこの名前のプロパティはない")
-            .suggest(f, Span::new(19, 26), "includes", "`includes` の誤りではないか");
+        let d = Diagnostic::error("unknown-property", "unknown property `include`")
+            .at(f, Span::new(19, 26), "`lib.public` has no property with this name")
+            .suggest(f, Span::new(19, 26), "includes", "did you mean `includes`?");
         let out = render(&d, &sm, false);
         assert!(out.contains("error[unknown-property]"), "{out}");
         assert!(out.contains("--> libfoo/dowel.build:2:3"), "{out}");
@@ -367,11 +367,11 @@ mod tests {
     }
 
     #[test]
-    fn json_描画は位置と置換文字列を含む() {
+    fn json_rendering_carries_location_and_replacement() {
         let (sm, f) = sample();
-        let d = Diagnostic::error("unknown-property", "未知のプロパティ")
-            .at(f, Span::new(19, 26), "ここ")
-            .suggest(f, Span::new(19, 26), "includes", "綴りの修正");
+        let d = Diagnostic::error("unknown-property", "unknown property")
+            .at(f, Span::new(19, 26), "here")
+            .suggest(f, Span::new(19, 26), "includes", "fix the spelling");
         let json = render_json(&d, &sm);
         assert!(json.contains(r#""severity":"error""#), "{json}");
         assert!(json.contains(r#""line":2"#), "{json}");
@@ -380,15 +380,17 @@ mod tests {
     }
 
     #[test]
-    fn closest_は綴り違いを拾い遠い語は拾わない() {
+    fn closest_finds_typos_but_not_distant_words() {
         let cands = ["includes", "defines", "flags", "deps"];
         assert_eq!(closest("include", cands), Some("includes"));
         assert_eq!(closest("define", cands), Some("defines"));
+        assert_eq!(closest("totally_unrelated", cands), None);
+        // 非 ASCII は検査対象そのもの。閾値をバイト長で決めると無関係な候補に一致する。
         assert_eq!(closest("完全に別物", cands), None);
     }
 
     #[test]
-    fn 診断集積は誤りの有無を数える() {
+    fn collector_counts_errors_and_warnings() {
         let (_, f) = sample();
         let mut ds = Diagnostics::new();
         ds.push(Diagnostic::warning("w", "warn").at(f, Span::EMPTY, ""));

@@ -80,11 +80,15 @@ pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>)
                         ev.diags.push(
                             Diagnostic::error(
                                 "duplicate-table",
-                                format!("テーブル `[{}]` が重複している", path.join(".")),
+                                format!("duplicate table `[{}]`", path.join(".")),
                             )
-                            .at(file, node.span, "2度目の定義")
+                            .at(file, node.span, "defined again here")
                             .with_label(
-                                dowel_support::Label::secondary(file, prev.site.span, "最初の定義"),
+                                dowel_support::Label::secondary(
+                                    file,
+                                    prev.site.span,
+                                    "first defined here",
+                                ),
                             ),
                         );
                     }
@@ -93,18 +97,18 @@ pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>)
             }
             NodeKind::KeyValue => {
                 let entry = ev.key_value(node);
-                let table = tables.last_mut().expect("根のテーブルが必ず存在する");
+                let table = tables.last_mut().expect("the root table always exists");
                 if let Some(prev) = table.entries.iter().find(|e| e.key == entry.key) {
                     ev.diags.push(
                         Diagnostic::error(
                             "duplicate-key",
-                            format!("キー `{}` が重複している", entry.key.join(".")),
+                            format!("duplicate key `{}`", entry.key.join(".")),
                         )
-                        .at(file, entry.site.span, "2度目の指定")
+                        .at(file, entry.site.span, "set again here")
                         .with_label(dowel_support::Label::secondary(
                             file,
                             prev.site.span,
-                            "最初の指定",
+                            "first set here",
                         )),
                     );
                 }
@@ -184,8 +188,8 @@ impl<'a> Evaluator<'a> {
                 self.err(
                     node.span,
                     "unexpected-reference",
-                    format!("`{name}` は値の位置に置けない"),
-                    "構成への参照は match の対象と when の述語にのみ置ける",
+                    format!("`{name}` cannot appear in a value position"),
+                    "configuration references belong in a `match` scrutinee or a `when` predicate",
                 );
                 Value::error(Prov::at(Origin::Literal, self.site(node.span)))
             }
@@ -207,7 +211,12 @@ impl<'a> Evaluator<'a> {
             TokenKind::Int => match parse_int(self.text(t.span)) {
                 Some(i) => Value { ty: Type::Int, data: Data::Int(i), prov },
                 None => {
-                    self.err(t.span, "invalid-integer", "整数として読めない", "桁を確認する");
+                    self.err(
+                        t.span,
+                        "invalid-integer",
+                        "not a readable integer",
+                        "check the digits",
+                    );
                     Value::error(prov)
                 }
             },
@@ -261,8 +270,8 @@ impl<'a> Evaluator<'a> {
                             self.err(
                                 span,
                                 "invalid-escape",
-                                format!("`\\u{hex}` は文字を表さない"),
-                                "4桁の16進で符号位置を書く",
+                                format!("`\\u{hex}` is not a character"),
+                                "write a code point as four hexadecimal digits",
                             );
                         }
                     }
@@ -271,8 +280,8 @@ impl<'a> Evaluator<'a> {
                     self.err(
                         span,
                         "invalid-escape",
-                        format!("`\\{other}` は認識できないエスケープ"),
-                        "使えるのは \\n \\t \\r \\0 \\\\ \\\" \\uXXXX",
+                        format!("`\\{other}` is not a recognized escape"),
+                        "supported escapes are \\n \\t \\r \\0 \\\\ \\\" \\uXXXX",
                     );
                     out.push(other);
                 }
@@ -299,8 +308,8 @@ impl<'a> Evaluator<'a> {
                 self.err(
                     kv.span,
                     "duplicate-key",
-                    format!("キー `{key}` が重複している"),
-                    "同じテーブル内に同じキーは1つ",
+                    format!("duplicate key `{key}`"),
+                    "a key may appear only once per table",
                 );
                 continue;
             }
@@ -319,12 +328,12 @@ impl<'a> Evaluator<'a> {
 
         const FUNCTIONS: &[&str] = &["glob", "dir", "file", "dep", "target"];
         if !FUNCTIONS.contains(&name) {
-            let mut d = Diagnostic::error("unknown-function", format!("未知の関数 `{name}`"))
-                .at(self.file, node.span, "この名前の関数はない")
-                .note(format!("使えるのは {}", FUNCTIONS.join(", ")));
+            let mut d = Diagnostic::error("unknown-function", format!("unknown function `{name}`"))
+                .at(self.file, node.span, "no function has this name")
+                .note(format!("available functions: {}", FUNCTIONS.join(", ")));
             if let Some(c) = closest(name, FUNCTIONS.iter().copied()) {
                 if let Some(t) = name_tok {
-                    d = d.suggest(self.file, t.span, c, format!("`{c}` の誤りではないか"));
+                    d = d.suggest(self.file, t.span, c, format!("did you mean `{c}`?"));
                 }
             }
             self.diags.push(d);
@@ -336,8 +345,8 @@ impl<'a> Evaluator<'a> {
             self.err(
                 node.span,
                 "wrong-arity",
-                format!("`{name}` は引数を1つ取るが {} 個与えられた", args.len()),
-                "引数の個数",
+                format!("`{name}` takes one argument but {} were given", args.len()),
+                "wrong number of arguments",
             );
             return Value::error(prov);
         }
@@ -346,8 +355,8 @@ impl<'a> Evaluator<'a> {
                 self.err(
                     node.span,
                     "type-mismatch",
-                    format!("`{name}` の引数は文字列"),
-                    "文字列を渡す",
+                    format!("the argument of `{name}` must be a string"),
+                    "pass a string",
                 );
             }
             return Value::error(prov);
@@ -363,7 +372,7 @@ impl<'a> Evaluator<'a> {
             },
             "dep" => Value { ty: Type::DepRef, data: Data::Dep(arg), prov },
             "target" => Value { ty: Type::TargetRef, data: Data::Target(arg), prov },
-            _ => unreachable!("未知の関数は上で弾いている"),
+            _ => unreachable!("unknown functions are rejected above"),
         }
     }
 
@@ -388,23 +397,23 @@ impl<'a> Evaluator<'a> {
             self.err(
                 node.span,
                 "invalid-reference",
-                format!("`{}` は構成への参照として不正", parts.join(".")),
-                "`cfg.opt` のように名前空間と名前の2段で書く",
+                format!("`{}` is not a valid configuration reference", parts.join(".")),
+                "write a namespace and a name, as in `cfg.opt`",
             );
             return None;
         }
         let Some(ns) = Ns::parse(parts[0]) else {
             let known = ["cfg", "host", "feature", "tc"];
             let mut d =
-                Diagnostic::error("unknown-namespace", format!("未知の名前空間 `{}`", parts[0]))
-                    .at(self.file, node.span, "この名前空間はない")
-                    .note(format!("使えるのは {}", known.join(", ")));
+                Diagnostic::error("unknown-namespace", format!("unknown namespace `{}`", parts[0]))
+                    .at(self.file, node.span, "no such namespace")
+                    .note(format!("available namespaces: {}", known.join(", ")));
             if let Some(c) = closest(parts[0], known) {
                 d = d.suggest(
                     self.file,
                     node.span,
                     format!("{c}.{}", parts[1]),
-                    format!("`{c}` の誤りではないか"),
+                    format!("did you mean `{c}`?"),
                 );
             }
             self.diags.push(d);
@@ -413,11 +422,13 @@ impl<'a> Evaluator<'a> {
         let key = CfgKey { ns, name: parts[1].to_string() };
         if domain_of(&key).is_none() {
             let known = known_keys(ns);
-            let mut d =
-                Diagnostic::error("unknown-cfg-key", format!("未知の構成キー `{}`", key.display()))
-                    .at(self.file, node.span, "この名前は語彙にない")
-                    .note(format!("`{}` に置けるのは {}", ns.name(), known.join(", ")))
-                    .note("語彙は暫定であり、docs/99-open-questions.md Q1 で検討中である");
+            let mut d = Diagnostic::error(
+                "unknown-cfg-key",
+                format!("unknown configuration key `{}`", key.display()),
+            )
+            .at(self.file, node.span, "this name is not in the vocabulary")
+            .note(format!("`{}` accepts: {}", ns.name(), known.join(", ")))
+            .note("the vocabulary is provisional; see Q1 in docs/99-open-questions.md");
             if let Some(c) = closest(
                 &key.name,
                 known_keys(ns).iter().map(|s| {
@@ -430,7 +441,7 @@ impl<'a> Evaluator<'a> {
                     self.file,
                     node.span,
                     format!("{}.{c}", ns.name()),
-                    format!("`{c}` の誤りではないか"),
+                    format!("did you mean `{c}`?"),
                 );
             }
             self.diags.push(d);
@@ -471,8 +482,8 @@ impl<'a> Evaluator<'a> {
                 self.err(
                     arm_node.span,
                     "duplicate-arm",
-                    format!("アーム `{}` が重複している", pattern.display()),
-                    "同じ値に対するアームは1つ",
+                    format!("duplicate match arm `{}`", pattern.display()),
+                    "one arm per value",
                 );
                 continue;
             }
@@ -505,16 +516,16 @@ impl<'a> Evaluator<'a> {
                         if !values.contains(&v.as_str()) {
                             let mut d = Diagnostic::error(
                                 "unknown-pattern",
-                                format!("`{}` は `{}` の取りうる値にない", v, key.display()),
+                                format!("`{}` is not a possible value of `{}`", v, key.display()),
                             )
-                            .at(self.file, a.site.span, "この値は語彙にない")
-                            .note(format!("取りうる値は {}", values.join(", ")));
+                            .at(self.file, a.site.span, "this value is not in the vocabulary")
+                            .note(format!("possible values: {}", values.join(", ")));
                             if let Some(c) = closest(v, values.iter().copied()) {
                                 d = d.suggest(
                                     self.file,
                                     a.site.span,
                                     c,
-                                    format!("`{c}` の誤りではないか"),
+                                    format!("did you mean `{c}`?"),
                                 );
                             }
                             self.diags.push(d);
@@ -535,10 +546,10 @@ impl<'a> Evaluator<'a> {
                     self.diags.push(
                         Diagnostic::error(
                             "non-exhaustive-match",
-                            format!("`{}` に対する match が網羅していない", key.display()),
+                            format!("non-exhaustive match on `{}`", key.display()),
                         )
-                        .at(self.file, span, format!("{} が漏れている", missing.join(", ")))
-                        .note("`_ => ...` を置くか、漏れている値のアームを足す"),
+                        .at(self.file, span, format!("missing: {}", missing.join(", ")))
+                        .note("add `_ => ...`, or an arm for each missing value"),
                     );
                 }
             }
@@ -554,10 +565,10 @@ impl<'a> Evaluator<'a> {
                         self.diags.push(
                             Diagnostic::error(
                                 "non-exhaustive-match",
-                                format!("`{}` に対する match が網羅していない", key.display()),
+                                format!("non-exhaustive match on `{}`", key.display()),
                             )
-                            .at(self.file, span, "true と false の双方が必要")
-                            .note("`_ => ...` を置いてもよい"),
+                            .at(self.file, span, "both true and false are required")
+                            .note("`_ => ...` works too"),
                         );
                     }
                 }
@@ -567,10 +578,10 @@ impl<'a> Evaluator<'a> {
                     self.diags.push(
                         Diagnostic::error(
                             "non-exhaustive-match",
-                            format!("`{}` は値域が閉じていない", key.display()),
+                            format!("`{}` has an open domain", key.display()),
                         )
-                        .at(self.file, span, "`_ => ...` が必要")
-                        .note("ターゲットトリプルのような自由文字列は列挙しきれないため"),
+                        .at(self.file, span, "`_ => ...` is required")
+                        .note("free-form strings such as target triples cannot be enumerated"),
                     );
                 }
             }
@@ -607,8 +618,8 @@ impl<'a> Evaluator<'a> {
                     self.err(
                         clause.span,
                         "expected-comparison",
-                        format!("`{}` は真偽値ではない", key.display()),
-                        "`== \"...\"` で比較する",
+                        format!("`{}` is not a boolean", key.display()),
+                        "compare it with `== \"...\"`",
                     );
                     return None;
                 }
@@ -618,7 +629,12 @@ impl<'a> Evaluator<'a> {
                 let v = self.literal(lit);
                 let Some(s) = v.as_str() else {
                     if !v.is_error() {
-                        self.err(lit.span, "type-mismatch", "比較の右辺は文字列", "文字列を置く");
+                        self.err(
+                            lit.span,
+                            "type-mismatch",
+                            "the right-hand side must be a string",
+                            "write a string",
+                        );
                     }
                     return None;
                 };
@@ -626,16 +642,16 @@ impl<'a> Evaluator<'a> {
                     if !values.contains(&s) {
                         let mut d = Diagnostic::error(
                             "unknown-pattern",
-                            format!("`{}` は `{}` の取りうる値にない", s, key.display()),
+                            format!("`{}` is not a possible value of `{}`", s, key.display()),
                         )
-                        .at(self.file, lit.span, "この値は語彙にない")
-                        .note(format!("取りうる値は {}", values.join(", ")));
+                        .at(self.file, lit.span, "this value is not in the vocabulary")
+                        .note(format!("possible values: {}", values.join(", ")));
                         if let Some(c) = closest(s, values.iter().copied()) {
                             d = d.suggest(
                                 self.file,
                                 lit.span,
                                 format!("{c:?}"),
-                                format!("`{c}` の誤りではないか"),
+                                format!("did you mean `{c}`?"),
                             );
                         }
                         self.diags.push(d);
@@ -695,7 +711,7 @@ mod tests {
 
     fn run(src: &str) -> (Document, Vec<Diagnostic>) {
         let parsed = dowel_syntax::parse(src, FileId(0));
-        assert!(parsed.diagnostics.is_empty(), "構文誤り: {:?}", parsed.diagnostics);
+        assert!(parsed.diagnostics.is_empty(), "syntax errors: {:?}", parsed.diagnostics);
         eval(&parsed.root, src, FileId(0))
     }
 
@@ -704,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn テーブルとキーを取り出す() {
+    fn extracts_tables_and_keys() {
         let (doc, diags) = run("[lib.foo]\nsources = glob(\"src/*.c\")\n\n[lib.foo.public]\nincludes = [dir(\"include\")]\n");
         assert!(diags.is_empty(), "{:?}", codes(&diags));
         assert_eq!(doc.tables.len(), 2);
@@ -716,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn 文字列のエスケープを解釈する() {
+    fn interprets_string_escapes() {
         let (doc, diags) = run("a = \"x\\ny\"\nb = 'x\\ny'\nc = \"\"\"\nmulti\n\"\"\"\n");
         assert!(diags.is_empty(), "{:?}", codes(&diags));
         let t = &doc.tables[0];
@@ -724,13 +740,13 @@ mod tests {
         assert_eq!(
             t.entry("b").unwrap().value.as_str(),
             Some("x\\ny"),
-            "リテラル文字列は解釈しない"
+            "literal strings are not interpreted"
         );
         assert_eq!(t.entry("c").unwrap().value.as_str(), Some("multi\n"));
     }
 
     #[test]
-    fn 整数の各種記法() {
+    fn integer_notations() {
         let (doc, diags) = run("a = 1_000\nb = 0xff\nc = -3\n");
         assert!(diags.is_empty(), "{:?}", codes(&diags));
         let t = &doc.tables[0];
@@ -740,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    fn パスは文字列と別型になる() {
+    fn path_is_a_distinct_type_from_str() {
         let (doc, _) = run("a = dir(\"include\")\nb = \"include\"\n");
         let t = &doc.tables[0];
         assert_eq!(t.entry("a").unwrap().value.ty, Type::Path);
@@ -748,52 +764,52 @@ mod tests {
     }
 
     #[test]
-    fn 未知の関数に候補を提示する() {
+    fn suggests_a_candidate_for_an_unknown_function() {
         let (_, diags) = run("a = glab(\"src\")\n");
         assert_eq!(codes(&diags), vec!["unknown-function"]);
         assert_eq!(diags[0].suggestions[0].replacement, "glob");
     }
 
     #[test]
-    fn 引数の個数を検査する() {
+    fn checks_argument_count() {
         let (_, diags) = run("a = dir(\"x\", \"y\")\n");
         assert_eq!(codes(&diags), vec!["wrong-arity"]);
     }
 
     #[test]
-    fn match_は網羅していなければ失敗する() {
+    fn non_exhaustive_match_fails() {
         let (_, diags) = run("flags = match cfg.opt { debug => [\"-O0\"] }\n");
         assert_eq!(codes(&diags), vec!["non-exhaustive-match"]);
     }
 
     #[test]
-    fn match_はワイルドカードで網羅できる() {
+    fn a_wildcard_makes_a_match_exhaustive() {
         let (_, diags) = run("flags = match cfg.opt { debug => [\"-O0\"], _ => [\"-O2\"] }\n");
         assert!(diags.is_empty(), "{:?}", codes(&diags));
     }
 
     #[test]
-    fn 値域が開いた_cfg_はワイルドカードを要求する() {
+    fn open_domain_cfg_requires_a_wildcard() {
         let (_, diags) =
             run("a = match cfg.target { \"x86_64-unknown-linux-gnu\" => [\"-m64\"] }\n");
         assert_eq!(codes(&diags), vec!["non-exhaustive-match"]);
     }
 
     #[test]
-    fn 語彙にないアームを診断する() {
+    fn diagnoses_arms_outside_the_vocabulary() {
         let (_, diags) = run("a = match cfg.opt { debug => [], releaes => [], _ => [] }\n");
         assert_eq!(codes(&diags), vec!["unknown-pattern"]);
         assert_eq!(diags[0].suggestions[0].replacement, "release");
     }
 
     #[test]
-    fn 未知の構成キーを診断する() {
+    fn diagnoses_unknown_configuration_keys() {
         let (_, diags) = run("a = match cfg.optimization { _ => [] }\n");
         assert_eq!(codes(&diags), vec!["unknown-cfg-key"]);
     }
 
     #[test]
-    fn when_は述語を検証する() {
+    fn when_validates_its_predicate() {
         let (doc, diags) = run("deps = [dep(\"zlib\") when feature.zlib]\n");
         assert!(diags.is_empty(), "{:?}", codes(&diags));
         let v = &doc.tables[0].entry("deps").unwrap().value;
@@ -802,25 +818,25 @@ mod tests {
     }
 
     #[test]
-    fn 真偽でない_when_は比較を要求する() {
+    fn non_boolean_when_requires_a_comparison() {
         let (_, diags) = run("deps = [dep(\"zlib\") when cfg.opt]\n");
         assert_eq!(codes(&diags), vec!["expected-comparison"]);
     }
 
     #[test]
-    fn when_の比較値を検証する() {
+    fn when_validates_the_compared_value() {
         let (_, diags) = run("flags = [\"-g\"] when cfg.opt == \"dbg\"\n");
         assert_eq!(codes(&diags), vec!["unknown-pattern"]);
     }
 
     #[test]
-    fn テーブルとキーの重複を診断する() {
+    fn diagnoses_duplicate_tables_and_keys() {
         let (_, diags) = run("[lib.foo]\na = 1\na = 2\n\n[lib.foo]\nb = 1\n");
         assert_eq!(codes(&diags), vec!["duplicate-key", "duplicate-table"]);
     }
 
     #[test]
-    fn 配列テーブルは重複と見なさない() {
+    fn array_tables_are_not_duplicates() {
         let (doc, diags) =
             run("[[dependencies]]\nname = \"a\"\n\n[[dependencies]]\nname = \"b\"\n");
         assert!(diags.is_empty(), "{:?}", codes(&diags));
@@ -828,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn 来歴が値に付く() {
+    fn values_carry_provenance() {
         let (doc, _) = run("includes = [dir(\"include\")]\n");
         let v = &doc.tables[0].entry("includes").unwrap().value;
         let elem = &v.as_list().unwrap()[0];

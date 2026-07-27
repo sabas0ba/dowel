@@ -66,7 +66,7 @@ fn load(s: &Scratch, rel: &str) -> Session {
     let sess = Session::load(&s.path(rel));
     assert!(
         !sess.has_errors(),
-        "診断: {:#?}",
+        "diagnostics: {:#?}",
         sess.diagnostics.iter().map(|d| (d.code, d.message.clone())).collect::<Vec<_>>()
     );
     sess
@@ -77,7 +77,7 @@ fn codes(sess: &Session) -> Vec<&str> {
 }
 
 #[test]
-fn パス依存を辿ってパッケージを読み込む() {
+fn loads_packages_through_path_dependencies() {
     let s = two_packages();
     let sess = load(&s, "app");
     assert_eq!(sess.packages.len(), 2);
@@ -89,7 +89,7 @@ fn パス依存を辿ってパッケージを読み込む() {
 }
 
 #[test]
-fn 公開プロパティは依存元へ伝播し非公開は伝播しない() {
+fn public_properties_propagate_and_private_ones_do_not() {
     let s = two_packages();
     let sess = load(&s, "app");
     let cfg = Config::host_default();
@@ -103,23 +103,23 @@ fn 公開プロパティは依存元へ伝播し非公開は伝播しない() {
     let env = interface::compile_env(&sess, &g, &ifaces, app, &cfg, &mut diags);
     assert!(diags.is_empty(), "{diags:#?}");
 
-    let includes = env.get("includes").expect("includes が伝播していない");
+    let includes = env.get("includes").expect("includes did not propagate");
     let shown: Vec<String> = includes.as_list().unwrap().iter().map(|v| v.display()).collect();
-    assert!(shown.contains(&"include".to_string()), "public.includes が伝播していない: {shown:?}");
-    assert!(!shown.contains(&"src".to_string()), "private.includes が伝播してはならない");
+    assert!(shown.contains(&"include".to_string()), "public.includes did not propagate: {shown:?}");
+    assert!(!shown.contains(&"src".to_string()), "private.includes must not propagate");
 
     // public.defines も伝播する。
-    let defines = env.get("defines").expect("defines が伝播していない");
+    let defines = env.get("defines").expect("defines did not propagate");
     assert!(defines.as_map().unwrap().contains_key("FOO_API"));
 
     // libfoo の private.flags は app に効かない。
     let flags = env.get("flags").unwrap();
     let shown: Vec<String> = flags.as_list().unwrap().iter().map(|v| v.display()).collect();
-    assert_eq!(shown, vec!["\"-O0\""], "private.flags が伝播してはならない");
+    assert_eq!(shown, vec!["\"-O0\""], "private.flags must not propagate");
 }
 
 #[test]
-fn 伝播した値の来歴が辿れる() {
+fn propagated_values_keep_a_traceable_provenance() {
     let s = two_packages();
     let sess = load(&s, "app");
     let cfg = Config::host_default();
@@ -137,7 +137,7 @@ fn 伝播した値の来歴が辿れる() {
 }
 
 #[test]
-fn 未宣言の依存を診断し候補を出す() {
+fn diagnoses_undeclared_dependencies_with_a_suggestion() {
     let s = Scratch::new("undeclared");
     s.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
     s.write(
@@ -151,7 +151,7 @@ fn 未宣言の依存を診断し候補を出す() {
 }
 
 #[test]
-fn 未知のプロパティに候補を出す() {
+fn suggests_a_candidate_for_an_unknown_property() {
     let s = Scratch::new("unknown-prop");
     s.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
     s.write("dowel.build", "[lib.a]\nsources = []\n\n[lib.a.public]\ninclude = [dir(\"x\")]\n");
@@ -161,7 +161,7 @@ fn 未知のプロパティに候補を出す() {
 }
 
 #[test]
-fn パスを文字列で書くと型で落ちて助言が出る() {
+fn a_string_where_a_path_is_expected_fails_with_advice() {
     let s = Scratch::new("path-type");
     s.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
     s.write("dowel.build", "[lib.a]\nsources = []\n\n[lib.a.public]\nincludes = [\"include\"]\n");
@@ -175,7 +175,7 @@ fn パスを文字列で書くと型で落ちて助言が出る() {
 }
 
 #[test]
-fn 依存の閉路を検出する() {
+fn detects_dependency_cycles() {
     let s = Scratch::new("cycle");
     s.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
     s.write(
@@ -199,7 +199,7 @@ deps = [target("a")]
 }
 
 #[test]
-fn abi_ラベルの不一致を失敗させる() {
+fn abi_label_mismatch_fails() {
     let s = Scratch::new("abi");
     s.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
     s.write(
@@ -232,7 +232,7 @@ deps = [target("a"), target("b")]
 }
 
 #[test]
-fn 機能フラグで依存の辺が現れる() {
+fn a_feature_flag_adds_a_dependency_edge() {
     let s = Scratch::new("feature-dep");
     s.write("libz/dowel.toml", "[package]\nname = \"libz\"\nversion = \"0\"\n");
     s.write("libz/dowel.build", "[lib.z]\nsources = []\n");
@@ -263,15 +263,15 @@ zlib = ["libz"]
     let a = sess.find_target("a").unwrap();
 
     let (g, _) = graph::build(&sess, &cfg);
-    assert_eq!(g.deps_of(a).len(), 0, "機能が無効なら辺は現れない");
+    assert_eq!(g.deps_of(a).len(), 0, "no edge appears while the feature is off");
 
     cfg.features.insert("zlib".into());
     let (g, _) = graph::build(&sess, &cfg);
-    assert_eq!(g.deps_of(a).len(), 1, "機能が有効なら辺が現れる");
+    assert_eq!(g.deps_of(a).len(), 1, "the edge appears once the feature is on");
 }
 
 #[test]
-fn 取得を要する依存は未実装として診断する() {
+fn dependencies_needing_a_fetch_are_diagnosed_as_unimplemented() {
     let s = Scratch::new("registry-dep");
     s.write(
         "dowel.toml",

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "型つき値と来歴、式評価、スキーマと併合意味論、構成による具体化。"
+description = "Typed values with provenance, expression evaluation, schema and merge semantics, configuration specialization."
 
 [dependencies]
 dowel-support.workspace = true

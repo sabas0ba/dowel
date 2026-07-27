@@ -33,17 +33,17 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: チェックアウト
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: ツールチェーンの確認
+      - name: Toolchain
         run: |
           rustup component add rustfmt clippy
           rustc --version
           cargo --version
           cc --version | head -1
 
-      - name: ninja の導入
+      - name: Install ninja
         # e2e は ninja が無ければ direct 実行器へ落ちる。
         # 既定の経路（ninja）を実際に通すために入れる。
         run: |
@@ -51,19 +51,19 @@ jobs:
           sudo apt-get install -y -qq ninja-build
           ninja --version
 
-      - name: 検証
+      - name: Verify
         run: make verify
 
-      - name: 要約
+      - name: Summary
         if: always()
         run: |
           if [ -f .work/verify/summary.md ]; then
             cat .work/verify/summary.md >> "$GITHUB_STEP_SUMMARY"
           else
-            echo '検証の要約が生成されなかった。ログを参照する。' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No verification summary was produced. See the job log.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: 結果の保存
+      - name: Upload results
         # 失敗した実行の結果こそ残す価値がある。
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

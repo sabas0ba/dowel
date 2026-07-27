@@ -112,17 +112,22 @@ pub enum Domain {
 
 /// 語彙表。`dowel schema dump --section=cfg` の出力元でもある。
 pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
-    ("cfg", "opt", Domain::Finite(&["debug", "release"]), "最適化構成"),
-    ("cfg", "target", Domain::Open, "ターゲットトリプル"),
-    ("host", "os", Domain::Finite(&["linux", "macos", "windows"]), "ビルドホストの OS"),
+    ("cfg", "opt", Domain::Finite(&["debug", "release"]), "optimization configuration"),
+    ("cfg", "target", Domain::Open, "target triple"),
+    (
+        "host",
+        "os",
+        Domain::Finite(&["linux", "macos", "windows"]),
+        "operating system of the build host",
+    ),
     (
         "host",
         "arch",
         Domain::Finite(&["x86_64", "aarch64", "riscv64"]),
-        "ビルドホストのアーキテクチャ",
+        "architecture of the build host",
     ),
-    ("feature", "*", Domain::Bool, "機能フラグ（dowel.toml の [features] で宣言されたもの）"),
-    ("tc", "c", Domain::Open, "選択された C ツールチェーンの識別子"),
+    ("feature", "*", Domain::Bool, "feature flag declared in [features] of dowel.toml"),
+    ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
 ];
 
 /// キーが語彙に存在するか。存在しなければ型検査で落とす。
@@ -187,7 +192,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 語彙にないキーは見つからない() {
+    fn keys_outside_the_vocabulary_are_not_found() {
         assert!(domain_of(&CfgKey { ns: Ns::Cfg, name: "opt".into() }).is_some());
         assert!(domain_of(&CfgKey { ns: Ns::Cfg, name: "optimization".into() }).is_none());
         // feature は任意の名前を受ける。
@@ -195,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn 構成から値を引ける() {
+    fn looks_up_values_from_the_configuration() {
         let mut c = Config::host_default();
         c.features.insert("zlib".into());
         assert_eq!(
@@ -213,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn 構成識別子は機能フラグを含む() {
+    fn configuration_id_includes_feature_flags() {
         let mut c = Config::host_default();
         c.opt = Opt::Release;
         c.target = "x86_64-unknown-linux-gnu".into();

@@ -148,12 +148,12 @@ impl TreeBuilder {
     }
 
     pub fn checkpoint(&self) -> Checkpoint {
-        Checkpoint(self.stack.last().expect("スタックが空").2.len())
+        Checkpoint(self.stack.last().expect("builder stack is empty").2.len())
     }
 
     /// `cp` 以降に積んだ子を取り出し、`kind` のノードで包み直す。
     pub fn start_node_at(&mut self, cp: Checkpoint, kind: NodeKind) {
-        let top = self.stack.last_mut().expect("スタックが空");
+        let top = self.stack.last_mut().expect("builder stack is empty");
         let taken: Vec<Child> = top.2.split_off(cp.0);
         let at = taken
             .first()
@@ -166,17 +166,18 @@ impl TreeBuilder {
     }
 
     pub fn token(&mut self, t: Token) {
-        self.stack.last_mut().expect("スタックが空").2.push(Child::Token(t));
+        self.stack.last_mut().expect("builder stack is empty").2.push(Child::Token(t));
     }
 
     pub fn finish_node(&mut self) {
-        let (kind, at, children) = self.stack.pop().expect("対応しない finish_node");
+        let (kind, at, children) =
+            self.stack.pop().expect("finish_node without a matching start_node");
         let node = build(kind, at, children);
-        self.stack.last_mut().expect("Root を閉じてはならない").2.push(Child::Node(node));
+        self.stack.last_mut().expect("the root node must not be closed").2.push(Child::Node(node));
     }
 
     pub fn finish(mut self) -> Node {
-        assert_eq!(self.stack.len(), 1, "閉じられていないノードがある");
+        assert_eq!(self.stack.len(), 1, "a node was left unclosed");
         let (kind, at, children) = self.stack.pop().unwrap();
         build(kind, at, children)
     }
@@ -207,7 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 部分木のスパンは子を覆う() {
+    fn subtree_span_covers_its_children() {
         let mut b = TreeBuilder::new();
         b.start_node(NodeKind::KeyValue, 0);
         b.token(Token { kind: TokenKind::Ident, span: Span::new(4, 7) });
@@ -218,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn start_node_at_は既存の子を包み直す() {
+    fn start_node_at_rewraps_existing_children() {
         let mut b = TreeBuilder::new();
         let cp = b.checkpoint();
         b.token(Token { kind: TokenKind::Ident, span: Span::new(0, 3) });

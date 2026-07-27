@@ -12,8 +12,8 @@ use common::{build_dir, run_artifact, Project};
 use std::path::Path;
 
 fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).expect("複製先を作れない");
-    for entry in std::fs::read_dir(from).expect("複製元を読めない").flatten() {
+    std::fs::create_dir_all(to).expect("cannot create the destination directory");
+    for entry in std::fs::read_dir(from).expect("cannot read the source directory").flatten() {
         let src = entry.path();
         let dst = to.join(entry.file_name());
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -23,7 +23,7 @@ fn copy_dir(from: &Path, to: &Path) {
             }
             copy_dir(&src, &dst);
         } else {
-            std::fs::copy(&src, &dst).expect("ファイルを複製できない");
+            std::fs::copy(&src, &dst).expect("cannot copy the file");
         }
     }
 }
@@ -36,7 +36,7 @@ fn staged_example() -> Project {
 }
 
 #[test]
-fn 例をビルドして実行できる() {
+fn the_example_builds_and_runs() {
     let p = staged_example();
     p.run("app", &["check"]).success();
     p.run("app", &["build"]).success();
@@ -50,7 +50,7 @@ fn 例をビルドして実行できる() {
 }
 
 #[test]
-fn 例の_readme_に書いたコマンドが動く() {
+fn the_commands_in_the_example_readme_work() {
     let p = staged_example();
     p.run("app", &["why", "app:app", "includes"])
         .success()

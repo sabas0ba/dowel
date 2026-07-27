@@ -31,19 +31,19 @@ pub fn parse(src: &str, file: FileId) -> Parsed {
         let d = match e.kind {
             LexErrorKind::UnterminatedString => Diagnostic::error(
                 "unterminated-string",
-                "文字列が閉じられていない",
+                "unterminated string",
             )
-            .at(file, e.span, "ここで始まった文字列に対応する引用符がない"),
+            .at(file, e.span, "the string opened here is never closed"),
             LexErrorKind::UnterminatedBlockComment => Diagnostic::error(
                 "unterminated-comment",
-                "ブロックコメントが閉じられていない",
+                "unterminated block comment",
             )
-            .at(file, e.span, "`*/` が必要"),
+            .at(file, e.span, "expected `*/`"),
             LexErrorKind::UnknownChar => Diagnostic::error(
                 "unknown-char",
-                "認識できない文字がある",
+                "unrecognized character",
             )
-            .at(file, e.span, "この位置に置ける文字ではない"),
+            .at(file, e.span, "this character cannot appear here"),
         };
         p.diagnostics.push(d);
     }
@@ -76,7 +76,7 @@ impl<'a> Parser<'a> {
             }
             seen += 1;
         }
-        *self.tokens.last().expect("Eof が必ず存在する")
+        *self.tokens.last().expect("an Eof token is always present")
     }
 
     fn nth(&self, n: usize) -> TokenKind {
@@ -142,10 +142,10 @@ impl<'a> Parser<'a> {
         }
         let found = self.nth_token(0);
         self.diagnostics.push(
-            Diagnostic::error("expected-token", format!("{} が必要", kind.describe())).at(
+            Diagnostic::error("expected-token", format!("expected {}", kind.describe())).at(
                 self.file,
                 found.span,
-                format!("{} が現れた", found.kind.describe()),
+                format!("found {} instead", found.kind.describe()),
             ),
         );
         false
@@ -196,8 +196,8 @@ impl<'a> Parser<'a> {
                 self.err_at(
                     span,
                     "missing-newline",
-                    "項目は行で区切る",
-                    "直前の項目と同じ行に次の項目がある",
+                    "entries must be separated by a newline",
+                    "this entry starts on the same line as the previous one",
                 );
             }
             match kind {
@@ -208,8 +208,8 @@ impl<'a> Parser<'a> {
                     self.err_at(
                         t.span,
                         "unexpected-token",
-                        format!("{} はここに置けない", t.kind.describe()),
-                        "テーブル見出し `[...]` かキーが必要",
+                        format!("{} cannot appear here", t.kind.describe()),
+                        "expected a table header `[...]` or a key",
                     );
                     self.recover(&[]);
                 }
@@ -257,8 +257,8 @@ impl<'a> Parser<'a> {
                 self.err_at(
                     t.span,
                     "expected-key",
-                    "キーが必要",
-                    "識別子または引用符つき文字列を置く",
+                    "expected a key",
+                    "write an identifier or a quoted string",
                 );
                 self.recover(&[TokenKind::RBracket, TokenKind::Eq, TokenKind::Dot]);
             }
@@ -308,7 +308,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Str | TokenKind::Int | TokenKind::Ident => self.literal(),
                 _ => {
                     let t = self.nth_token(0);
-                    self.err_at(t.span, "expected-value", "比較の右辺が必要", "文字列を置く");
+                    self.err_at(
+                        t.span,
+                        "expected-value",
+                        "expected the right-hand side of the comparison",
+                        "write a string",
+                    );
                     self.recover(&[TokenKind::Comma, TokenKind::RBracket]);
                 }
             }
@@ -338,8 +343,8 @@ impl<'a> Parser<'a> {
                 self.err_at(
                     t.span,
                     "expected-value",
-                    format!("値が必要だが {} が現れた", t.kind.describe()),
-                    "文字列・整数・真偽値・配列・インラインテーブル・関数呼び出し・`match` のいずれか",
+                    format!("expected a value but found {}", t.kind.describe()),
+                    "one of: string, integer, boolean, array, inline table, function call, `match`",
                 );
                 self.recover(&[
                     TokenKind::Comma,
@@ -372,13 +377,23 @@ impl<'a> Parser<'a> {
                     self.bump();
                 } else {
                     let t = self.nth_token(0);
-                    self.err_at(t.span, "expected-name", "`.` の後に名前が必要", "名前を置く");
+                    self.err_at(
+                        t.span,
+                        "expected-name",
+                        "expected a name after `.`",
+                        "write a name",
+                    );
                     break;
                 }
             }
         } else {
             let t = self.nth_token(0);
-            self.err_at(t.span, "expected-name", "名前が必要", "`cfg.opt` のような参照を置く");
+            self.err_at(
+                t.span,
+                "expected-name",
+                "expected a name",
+                "write a reference such as `cfg.opt`",
+            );
             self.recover(&[TokenKind::LBrace, TokenKind::Comma, TokenKind::RBracket]);
         }
         self.builder.finish_node();
@@ -404,7 +419,12 @@ impl<'a> Parser<'a> {
                 TokenKind::RParen | TokenKind::Eof => break,
                 _ => {
                     let t = self.nth_token(0);
-                    self.err_at(t.span, "expected-token", "`,` か `)` が必要", "引数の区切り");
+                    self.err_at(
+                        t.span,
+                        "expected-token",
+                        "expected `,` or `)`",
+                        "argument separator",
+                    );
                     self.recover(&[TokenKind::Comma, TokenKind::RParen]);
                 }
             }
@@ -431,7 +451,12 @@ impl<'a> Parser<'a> {
                 TokenKind::RBracket | TokenKind::Eof => break,
                 _ => {
                     let t = self.nth_token(0);
-                    self.err_at(t.span, "expected-token", "`,` か `]` が必要", "要素の区切り");
+                    self.err_at(
+                        t.span,
+                        "expected-token",
+                        "expected `,` or `]`",
+                        "element separator",
+                    );
                     self.recover(&[TokenKind::Comma, TokenKind::RBracket]);
                 }
             }
@@ -464,7 +489,12 @@ impl<'a> Parser<'a> {
                 TokenKind::RBrace | TokenKind::Eof => break,
                 _ => {
                     let t = self.nth_token(0);
-                    self.err_at(t.span, "expected-token", "`,` か `}` が必要", "要素の区切り");
+                    self.err_at(
+                        t.span,
+                        "expected-token",
+                        "expected `,` or `}`",
+                        "element separator",
+                    );
                     self.recover(&[TokenKind::Comma, TokenKind::RBrace]);
                 }
             }
@@ -494,7 +524,12 @@ impl<'a> Parser<'a> {
                 TokenKind::RBrace | TokenKind::Eof => break,
                 _ => {
                     let t = self.nth_token(0);
-                    self.err_at(t.span, "expected-token", "`,` か `}` が必要", "アームの区切り");
+                    self.err_at(
+                        t.span,
+                        "expected-token",
+                        "expected `,` or `}`",
+                        "match arm separator",
+                    );
                     self.recover(&[TokenKind::Comma, TokenKind::RBrace]);
                 }
             }
@@ -517,8 +552,8 @@ impl<'a> Parser<'a> {
                 self.err_at(
                     t.span,
                     "expected-pattern",
-                    "アームの左辺が必要",
-                    "取りうる値の名前、または `_`",
+                    "expected the left-hand side of a match arm",
+                    "a possible value, or `_`",
                 );
                 self.recover(&[TokenKind::FatArrow, TokenKind::Comma, TokenKind::RBrace]);
             }
@@ -543,11 +578,11 @@ mod tests {
     /// CST がロスレスであること。全ての木の検査の前提になる。
     fn assert_lossless(src: &str) {
         let parsed = p(src);
-        assert_eq!(parsed.root.text(src), src, "CST が入力を復元できない");
+        assert_eq!(parsed.root.text(src), src, "the CST cannot reproduce its input");
     }
 
     #[test]
-    fn ターゲット定義を解析する() {
+    fn parses_a_target_definition() {
         let src = "[lib.foo]\nsources = glob(\"src/**.c\")\n";
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
@@ -558,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn 配列テーブル見出しを区別する() {
+    fn distinguishes_array_table_headers() {
         let src = "[[dependencies]]\nname = \"zlib\"\n";
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
@@ -567,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn match_式を解析する() {
+    fn parses_a_match_expression() {
         let src = "flags = match cfg.opt {\n  debug   => [\"-O0\", \"-g3\"],\n  release => [\"-O2\"],\n}\n";
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
@@ -578,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn 後置の_when_は式を包む() {
+    fn postfix_when_wraps_the_expression() {
         let src = "deps = [dep(\"zlib\") when feature.zlib]\n";
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
@@ -590,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn 後置の_when_はキーにも付く() {
+    fn postfix_when_also_attaches_to_a_key() {
         let src = "flags = [\"-fsanitize=address\"] when feature.asan\n";
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
@@ -600,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn 後置の_when_は改行を跨がない() {
+    fn postfix_when_does_not_cross_a_newline() {
         // 次の行のキーが `when` である場合（dowel.toml の条件付き依存）に、
         // 前の行の値へ吸い込まれてはならない。
         let src = "version = \"0.2\"\nwhen    = { os = \"windows\" }\n";
@@ -612,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn インラインテーブルを解析する() {
+    fn parses_an_inline_table() {
         let src = "defines = { FOO_BUILDING = 1, BAR = \"x\" }\n";
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
@@ -623,7 +658,7 @@ mod tests {
     }
 
     #[test]
-    fn 誤りがあっても後続の項目を解析する() {
+    fn keeps_parsing_after_an_error() {
         let src = "[lib.foo]\nsources = @@@\nincludes = [dir(\"include\")]\n";
         let parsed = p(src);
         assert!(!parsed.diagnostics.is_empty());
@@ -635,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn 閉じない配列でも復元できる() {
+    fn unterminated_array_is_still_reproduced() {
         let src = "sources = [\"a.c\", \"b.c\"\n";
         let parsed = p(src);
         assert!(!parsed.diagnostics.is_empty());
@@ -643,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn 閉じないテーブル見出しでも復元できる() {
+    fn unterminated_table_header_is_still_reproduced() {
         let src = "[lib.foo\nsources = []\n";
         let parsed = p(src);
         assert!(!parsed.diagnostics.is_empty());
@@ -651,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn 同じ行に項目を並べると診断する() {
+    fn entries_on_one_line_are_diagnosed() {
         let src = "a = 1 b = 2\n";
         let parsed = p(src);
         assert!(
@@ -663,21 +698,21 @@ mod tests {
     }
 
     #[test]
-    fn コメントと空行を木に保持する() {
-        let src = "# 見出しの説明\n\n[lib.foo]  # 末尾コメント\n";
+    fn comments_and_blank_lines_are_kept_in_the_tree() {
+        let src = "# header description\n\n[lib.foo]  # trailing comment\n";
         assert_lossless(src);
         let parsed = p(src);
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
     }
 
     #[test]
-    fn 空入力を扱える() {
+    fn handles_empty_input() {
         assert_lossless("");
         assert!(p("").diagnostics.is_empty());
     }
 
     #[test]
-    fn 誤りの連続でも停止する() {
+    fn terminates_on_a_run_of_errors() {
         // 前進の保証（recover が必ず1トークン消費する）の検査。
         let src = "@ @ @ ] } ) , = =>\n@@@\n";
         let parsed = p(src);

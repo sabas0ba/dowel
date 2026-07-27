@@ -45,7 +45,7 @@ pub fn explain(
     else {
         let mut known = schema::prop_names(Block::Public);
         known.extend(schema::prop_names(Block::Root));
-        return Err(format!("未知のプロパティ `{prop}`。あるのは {}", known.join(", ")));
+        return Err(format!("unknown property `{prop}`. available: {}", known.join(", ")));
     };
 
     let mut diags: Vec<Diagnostic> = Vec::new();
@@ -101,9 +101,9 @@ fn steps_of(sess: &Session, v: &Value) -> Vec<Step> {
 
 pub fn render_text(e: &Explanation) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{} の {}  ({}, merge = {})\n\n", e.target, e.prop, e.ty, e.merge));
+    out.push_str(&format!("{} of {}  ({}, merge = {})\n\n", e.prop, e.target, e.ty, e.merge));
     if e.items.is_empty() {
-        out.push_str("  （到達した値はない）\n");
+        out.push_str("  (no values reached this target)\n");
         return out;
     }
     for item in &e.items {

@@ -18,23 +18,23 @@ pub fn check(root: &Node, file: FileId) -> Vec<Diagnostic> {
 
 fn walk(node: &Node, file: FileId, out: &mut Vec<Diagnostic>) {
     let offending = match node.kind {
-        NodeKind::Call => Some(("関数呼び出し", "値をそのまま書く")),
-        NodeKind::Match => Some(("`match`", "条件は `when = { os = \"windows\" }` の形で書く")),
+        NodeKind::Call => Some(("a function call", "write the value directly")),
+        NodeKind::Match => Some(("`match`", "write conditions as `when = { os = \"windows\" }`")),
         NodeKind::WhenClause => {
-            Some(("後置の `when`", "条件は `when = { os = \"windows\" }` の形で書く"))
+            Some(("a postfix `when`", "write conditions as `when = { os = \"windows\" }`"))
         }
-        NodeKind::NsRef => Some(("構成への参照", "値をそのまま書く")),
+        NodeKind::NsRef => Some(("a configuration reference", "write the value directly")),
         _ => None,
     };
     if let Some((what, hint)) = offending {
         out.push(
             Diagnostic::error(
                 "expression-in-strict-toml",
-                format!("`dowel.toml` の値の位置に{}は置けない", what),
+                format!("{what} cannot appear in a value position in `dowel.toml`"),
             )
-            .at(file, node.span, "ここには置けない")
-            .note("`dowel.toml` は厳密な TOML として維持する。外部ツールが独自パーサなしで読めることを保証するため")
-            .note(format!("式が必要な記述は `dowel.build` に置く。{hint}")),
+            .at(file, node.span, "not allowed here")
+            .note("`dowel.toml` stays strict TOML so third-party tools can read it without implementing this language")
+            .note(format!("put anything that needs an expression in `dowel.build`. {hint}")),
         );
         // 部分木の中をさらに報告しても情報が増えないため、ここで打ち切る。
         return;
@@ -54,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn 通常の_toml_は通る() {
+    fn plain_toml_is_accepted() {
         let src = r#"
 [package]
 name    = "libfoo"
@@ -72,20 +72,20 @@ default = ["zlib"]
     }
 
     #[test]
-    fn 関数呼び出しを拒否する() {
+    fn rejects_function_calls() {
         let d = check_src("[package]\nname = dir(\"x\")\n");
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].code, "expression-in-strict-toml");
     }
 
     #[test]
-    fn match_を拒否する() {
+    fn rejects_match() {
         let d = check_src("[package]\nname = match cfg.opt { _ => \"x\" }\n");
-        assert_eq!(d.len(), 1, "部分木の中を重ねて報告しない");
+        assert_eq!(d.len(), 1, "nested occurrences must not be reported twice");
     }
 
     #[test]
-    fn 後置の_when_を拒否する() {
+    fn rejects_postfix_when() {
         let d = check_src("[features]\ndefault = [\"zlib\"] when feature.x\n");
         assert_eq!(d.len(), 1);
     }

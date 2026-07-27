@@ -209,7 +209,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn レベル文字列を解釈する() {
+    fn parses_level_names() {
         assert_eq!(Level::parse("DEBUG"), Some(Level::Debug));
         assert_eq!(Level::parse(" trace "), Some(Level::Trace));
         assert_eq!(Level::parse("off"), Some(Level::Off));
@@ -217,13 +217,13 @@ mod tests {
     }
 
     #[test]
-    fn レベルは順序を持つ() {
+    fn levels_are_ordered() {
         assert!(Level::Error < Level::Warn);
         assert!(Level::Warn < Level::Trace);
     }
 
     #[test]
-    fn short_target_は末尾のモジュール名を返す() {
+    fn short_target_takes_the_last_module_segment() {
         assert_eq!(short_target("dowel_eval::interface"), "interface");
         assert_eq!(short_target("main"), "main");
     }

@@ -61,6 +61,7 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
 
     for target in &sess.targets {
         let mut out = Vec::new();
+        log_trace!("resolving deps of {}", sess.label(target.id));
         for block in [Block::Public, Block::Private] {
             let Some(value) = target.props(block).get("deps") else { continue };
             let Some(value) = dowel_eval::specialize(value, cfg) else { continue };
@@ -80,9 +81,9 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
                             Ok(targets) if targets.is_empty() => diags.push(
                                 Diagnostic::error(
                                     "empty-dependency",
-                                    format!("依存 `{name}` に lib ターゲットがない"),
+                                    format!("dependency `{name}` has no lib target"),
                                 )
-                                .with_label(label_at(&item, "この依存は何も供給しない")),
+                                .with_label(label_at(&item, "this dependency supplies nothing")),
                             ),
                             Ok(targets) => {
                                 for to in targets {
@@ -105,9 +106,12 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
                     _ => diags.push(
                         Diagnostic::error(
                             "invalid-dependency",
-                            format!("`deps` の要素が依存参照でない: {}", item.display()),
+                            format!(
+                                "element of `deps` is not a dependency reference: {}",
+                                item.display()
+                            ),
                         )
-                        .with_label(label_at(&item, "`dep(\"...\")` か `target(\"...\")` を書く")),
+                        .with_label(label_at(&item, "write `dep(\"...\")` or `target(\"...\")`")),
                     ),
                 }
             }
@@ -123,10 +127,14 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
     }
 
     let (order, cycle_diags) = topological_order(sess, &edges);
+    log_trace!(
+        "topological order: {}",
+        order.iter().map(|t| sess.label(*t)).collect::<Vec<_>>().join(" < ")
+    );
     diags.extend(cycle_diags);
 
     log_debug!(
-        "依存グラフ: ノード {} 件、辺 {} 本",
+        "dependency graph: {} nodes, {} edges",
         edges.len(),
         edges.values().map(|v| v.len()).sum::<usize>()
     );
@@ -184,20 +192,15 @@ fn resolve_package_targets(
 fn unknown_target(sess: &Session, pkg: PackageId, name: &str, item: &Value) -> Diagnostic {
     let names: Vec<&str> =
         sess.targets.iter().filter(|t| t.package == pkg).map(|t| t.name.as_str()).collect();
-    let mut d = Diagnostic::error("unknown-target", format!("ターゲット `{name}` がない"))
-        .with_label(label_at(item, "同じパッケージにこの名前のターゲットはない"))
+    let mut d = Diagnostic::error("unknown-target", format!("no target named `{name}`"))
+        .with_label(label_at(item, "no target with this name in the same package"))
         .note(format!(
-            "このパッケージにあるのは {}",
-            if names.is_empty() { "（なし）".to_string() } else { names.join(", ") }
+            "targets in this package: {}",
+            if names.is_empty() { "(none)".to_string() } else { names.join(", ") }
         ));
     if let Some(c) = closest(name, names.iter().copied()) {
         if let Some(s) = item.prov.nearest_site() {
-            d = d.suggest(
-                s.file,
-                s.span,
-                format!("target({c:?})"),
-                format!("`{c}` の誤りではないか"),
-            );
+            d = d.suggest(s.file, s.span, format!("target({c:?})"), format!("did you mean `{c}`?"));
         }
     }
     d
@@ -207,17 +210,17 @@ fn undeclared_dep(sess: &Session, pkg: PackageId, name: &str, item: &Value) -> D
     let names: Vec<&str> = sess.package(pkg).deps.iter().map(|d| d.name.as_str()).collect();
     let mut d = Diagnostic::error(
         "undeclared-dependency",
-        format!("依存 `{name}` が `dowel.toml` で宣言されていない"),
+        format!("dependency `{name}` is not declared in `dowel.toml`"),
     )
-    .with_label(label_at(item, "宣言されていない依存"))
+    .with_label(label_at(item, "undeclared dependency"))
     .note(format!(
-        "`dowel.toml` に宣言されているのは {}",
-        if names.is_empty() { "（なし）".to_string() } else { names.join(", ") }
+        "declared in `dowel.toml`: {}",
+        if names.is_empty() { "(none)".to_string() } else { names.join(", ") }
     ))
-    .note("同じパッケージ内のターゲットを指すなら `target(\"...\")` を使う");
+    .note("use `target(\"...\")` to refer to a target in the same package");
     if let Some(c) = closest(name, names.iter().copied()) {
         if let Some(s) = item.prov.nearest_site() {
-            d = d.suggest(s.file, s.span, format!("dep({c:?})"), format!("`{c}` の誤りではないか"));
+            d = d.suggest(s.file, s.span, format!("dep({c:?})"), format!("did you mean `{c}`?"));
         }
     }
     d
@@ -282,10 +285,10 @@ fn cycle_diagnostic(
     let start = path.iter().position(|t| *t == back_to).unwrap_or(0);
     let mut chain: Vec<String> = path[start..].iter().map(|t| sess.label(*t)).collect();
     chain.push(sess.label(back_to));
-    Diagnostic::error("dependency-cycle", "依存に閉路がある")
-        .at(site.file, site.span, "この辺で閉路になる")
+    Diagnostic::error("dependency-cycle", "dependency cycle")
+        .at(site.file, site.span, "this edge closes the cycle")
         .note(chain.join(" → "))
-        .note("テンプレートと同じく、依存グラフの閉路は静的に検出して失敗させる")
+        .note("like templates, cycles in the dependency graph are detected statically and fail")
 }
 
 #[cfg(test)]
@@ -293,7 +296,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn link_closure_は宣言順を保つ() {
+    fn link_closure_preserves_declaration_order() {
         let mut edges = BTreeMap::new();
         let site = Site::new(dowel_support::FileId(0), dowel_support::Span::EMPTY);
         edges.insert(

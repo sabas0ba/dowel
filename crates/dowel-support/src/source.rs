@@ -111,8 +111,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_col_は1始まりで文字数を数える() {
+    fn line_col_is_one_based_and_counts_chars() {
         let mut sm = SourceMap::new();
+        // 非 ASCII は検査対象そのもの。桁をバイト数ではなく文字数で数えることの検査。
         let f = sm.add("t.build", "abc\nあいう\nxyz".to_string());
         assert_eq!(sm.line_col(f, 0), LineCol { line: 1, col: 1 });
         assert_eq!(sm.line_col(f, 3), LineCol { line: 1, col: 4 });
@@ -122,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn line_text_は改行を含まない() {
+    fn line_text_excludes_the_newline() {
         let mut sm = SourceMap::new();
         let f = sm.add("t.build", "one\r\ntwo\nthree".to_string());
         assert_eq!(sm.line_text(f, 1), "one");

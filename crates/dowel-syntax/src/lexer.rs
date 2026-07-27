@@ -45,12 +45,12 @@ impl TokenKind {
     /// 診断に出す名前。
     pub fn describe(self) -> &'static str {
         match self {
-            TokenKind::Whitespace => "空白",
-            TokenKind::Newline => "改行",
-            TokenKind::Comment => "コメント",
-            TokenKind::Ident => "識別子",
-            TokenKind::Int => "整数",
-            TokenKind::Str => "文字列",
+            TokenKind::Whitespace => "whitespace",
+            TokenKind::Newline => "a newline",
+            TokenKind::Comment => "a comment",
+            TokenKind::Ident => "an identifier",
+            TokenKind::Int => "an integer",
+            TokenKind::Str => "a string",
             TokenKind::LBracket => "`[`",
             TokenKind::RBracket => "`]`",
             TokenKind::LBrace => "`{`",
@@ -62,8 +62,8 @@ impl TokenKind {
             TokenKind::EqEq => "`==`",
             TokenKind::Dot => "`.`",
             TokenKind::FatArrow => "`=>`",
-            TokenKind::Unknown => "認識できない文字",
-            TokenKind::Eof => "入力の終端",
+            TokenKind::Unknown => "an unrecognized character",
+            TokenKind::Eof => "end of input",
         }
     }
 }
@@ -352,11 +352,11 @@ mod tests {
         for t in &lexed.tokens {
             out.push_str(&src[t.span.range()]);
         }
-        assert_eq!(out, src, "字句解析が入力を復元できない");
+        assert_eq!(out, src, "the lexer cannot reproduce its input");
     }
 
     #[test]
-    fn 基本的なトークン列() {
+    fn basic_token_sequence() {
         assert_eq!(
             kinds("[lib.foo]\nsources = glob(\"src/**.c\")\n"),
             vec![
@@ -377,13 +377,13 @@ mod tests {
     }
 
     #[test]
-    fn 三種のコメントを認識する() {
+    fn recognizes_all_three_comment_forms() {
         assert_eq!(kinds("# a\n// b\n/* c */\n"), vec![TokenKind::Eof]);
         assert_lossless("# a\n// b\n/* c */\n");
     }
 
     #[test]
-    fn 入れ子のブロックコメント() {
+    fn nested_block_comments() {
         let lexed = lex("/* a /* b */ c */x");
         let non_trivia: Vec<_> =
             lexed.tokens.iter().filter(|t| !t.kind.is_trivia()).map(|t| t.kind).collect();
@@ -392,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn 閉じないブロックコメントは誤りだが停止しない() {
+    fn unterminated_block_comment_reports_but_does_not_stop() {
         let lexed = lex("/* a");
         assert_eq!(lexed.errors.len(), 1);
         assert_eq!(lexed.errors[0].kind, LexErrorKind::UnterminatedBlockComment);
@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn 文字列の三形態() {
+    fn all_three_string_forms() {
         assert_eq!(
             kinds(r#" "a" 'b' """c""" "#),
             vec![TokenKind::Str, TokenKind::Str, TokenKind::Str, TokenKind::Eof]
@@ -408,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn エスケープされた引用符は文字列を閉じない() {
+    fn escaped_quote_does_not_close_the_string() {
         let src = r#""a\"b" x"#;
         let lexed = lex(src);
         let first = lexed.tokens.iter().find(|t| t.kind == TokenKind::Str).unwrap();
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn リテラル文字列はエスケープを解釈しない() {
+    fn literal_strings_do_not_interpret_escapes() {
         let src = r"'a\' x";
         let lexed = lex(src);
         // `\` はリテラル文字列内で特別扱いされないため、`'a\'` で閉じる。
@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn 閉じない文字列は行末で打ち切る() {
+    fn unterminated_string_stops_at_end_of_line() {
         let lexed = lex("a = \"unterminated\nb = 1\n");
         assert_eq!(lexed.errors.len(), 1);
         assert_eq!(lexed.errors[0].kind, LexErrorKind::UnterminatedString);
@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn 矢印と等号を区別する() {
+    fn distinguishes_arrow_from_equals() {
         assert_eq!(
             kinds("a => b == c = d"),
             vec![
@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn 負数と桁区切り() {
+    fn signed_numbers_and_digit_separators() {
         assert_eq!(
             kinds("-1 +2 1_000 0xff"),
             vec![TokenKind::Int, TokenKind::Int, TokenKind::Int, TokenKind::Int, TokenKind::Eof]
@@ -460,12 +460,12 @@ mod tests {
     }
 
     #[test]
-    fn 識別子にハイフンを許す() {
+    fn identifiers_may_contain_hyphens() {
         assert_eq!(kinds("winsock-shim"), vec![TokenKind::Ident, TokenKind::Eof]);
     }
 
     #[test]
-    fn 未知の文字でも停止せず全体を復元できる() {
+    fn unknown_characters_do_not_stop_the_lexer() {
         let src = "a = @@@ \n b = 1\n";
         let lexed = lex(src);
         assert_eq!(lexed.errors.len(), 1);
@@ -473,7 +473,8 @@ mod tests {
     }
 
     #[test]
-    fn 非_ascii_を含んでも復元できる() {
+    fn non_ascii_input_is_reproduced() {
+        // 非 ASCII は検査対象そのもの。多バイト文字を跨いでロスレス性が保たれるか。
         let src = "# 日本語のコメント\nname = \"あいう\"\n";
         assert_lossless(src);
         assert_eq!(
@@ -483,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn crlf_を1つの改行として扱う() {
+    fn crlf_is_a_single_newline() {
         let src = "a = 1\r\nb = 2\r\n";
         assert_lossless(src);
         let newlines = lex(src).tokens.iter().filter(|t| t.kind == TokenKind::Newline).count();

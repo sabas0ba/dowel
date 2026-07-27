@@ -279,14 +279,14 @@ pub enum Origin {
 impl Origin {
     pub fn display(&self) -> String {
         match self {
-            Origin::Literal => "リテラル".into(),
+            Origin::Literal => "literal".into(),
             Origin::Call(f) => format!("{f}(...)"),
-            Origin::MatchArm(p) => format!("match のアーム `{p}`"),
+            Origin::MatchArm(p) => format!("match arm `{p}`"),
             Origin::WhenTrue(p) => format!("when {p}"),
             Origin::Propagated { from, prop } => format!("{prop} of {from}"),
-            Origin::Merged { prop, rule } => format!("{prop} の併合 ({rule})"),
-            Origin::Config => "構成".into(),
-            Origin::Default => "既定値".into(),
+            Origin::Merged { prop, rule } => format!("merge of {prop} ({rule})"),
+            Origin::Config => "configuration".into(),
+            Origin::Default => "default".into(),
         }
     }
 }
@@ -466,7 +466,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 来歴の鎖は根に向かって辿れる() {
+    fn provenance_chain_walks_towards_the_root() {
         let site = Site::new(FileId(0), Span::new(10, 20));
         let base = Prov::at(Origin::Literal, site);
         let p = base
@@ -481,19 +481,19 @@ mod tests {
     }
 
     #[test]
-    fn 型の代入互換性() {
+    fn assignment_compatibility() {
         assert!(Type::List(Box::new(Type::Path)).accepts(&Type::List(Box::new(Type::Path))));
         assert!(Type::Set(Box::new(Type::Path)).accepts(&Type::List(Box::new(Type::Path))));
-        assert!(!Type::Path.accepts(&Type::Str), "パスは文字列から作らない");
+        assert!(!Type::Path.accepts(&Type::Str), "a Path is never built from a Str");
         assert!(Type::Map(Box::new(Type::Val)).accepts(&Type::Map(Box::new(Type::Int))));
         assert!(Type::AbiLabel.accepts(&Type::Str));
-        assert!(Type::Path.accepts(&Type::Unknown), "誤りは伝播させない");
+        assert!(Type::Path.accepts(&Type::Unknown), "errors must not propagate further");
         assert!(Type::List(Box::new(Type::Str))
             .accepts(&Type::Cfg(Box::new(Type::List(Box::new(Type::Str))))));
     }
 
     #[test]
-    fn 条件つきの値を判定する() {
+    fn detects_conditional_values() {
         let prov = Prov::none();
         let plain = Value::str("a", prov.clone());
         assert!(!plain.is_conditional());

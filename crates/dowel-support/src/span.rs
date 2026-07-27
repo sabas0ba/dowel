@@ -14,7 +14,7 @@ impl Span {
     pub const EMPTY: Span = Span { start: 0, end: 0 };
 
     pub fn new(start: u32, end: u32) -> Span {
-        debug_assert!(start <= end, "span の start は end 以下でなければならない");
+        debug_assert!(start <= end, "span start must not exceed end");
         Span { start, end }
     }
 
@@ -55,14 +55,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cover_は両者を含む最小範囲を返す() {
+    fn cover_spans_both_ranges() {
         assert_eq!(Span::new(3, 5).cover(Span::new(10, 12)), Span::new(3, 12));
         assert_eq!(Span::new(10, 12).cover(Span::new(3, 5)), Span::new(3, 12));
         assert_eq!(Span::new(3, 20).cover(Span::new(5, 6)), Span::new(3, 20));
     }
 
     #[test]
-    fn contains_は終端を含まない() {
+    fn contains_excludes_the_end() {
         let s = Span::new(2, 4);
         assert!(!s.contains(1));
         assert!(s.contains(2));

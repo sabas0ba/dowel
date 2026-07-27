@@ -77,14 +77,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 安全な文字列は引用しない() {
+    fn safe_strings_are_left_unquoted() {
         assert_eq!(shell_quote("-O2"), "-O2");
         assert_eq!(shell_quote("/usr/bin/cc"), "/usr/bin/cc");
         assert_eq!(shell_quote("-DFOO=1"), "-DFOO=1");
     }
 
     #[test]
-    fn 空白と引用符を含む文字列を引用する() {
+    fn strings_with_spaces_or_quotes_are_quoted() {
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("it's"), r"'it'\''s'");

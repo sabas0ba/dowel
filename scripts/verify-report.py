@@ -54,18 +54,18 @@ def render_markdown(rows, startup, ok):
     total_ms = sum(r["duration_ms"] for r in rows)
 
     out = []
-    out.append("# 検証結果")
+    out.append("# Verification results")
     out.append("")
     out.append(
-        "**{}** — テスト {} 件通過、{} 件失敗、所要 {:.1f}s".format(
-            "通過" if ok else "失敗", total_passed, total_failed, total_ms / 1000
+        "**{}** - {} tests passed, {} failed, {:.1f}s total".format(
+            "PASSED" if ok else "FAILED", total_passed, total_failed, total_ms / 1000
         )
     )
     out.append("")
-    out.append("| | 段階 | 結果 | 通過 | 失敗 | 所要 |")
+    out.append("| | Step | Result | Passed | Failed | Time |")
     out.append("|---|---|---|---:|---:|---:|")
     for r in rows:
-        note = "" if r["gating"] else "（参考）"
+        note = "" if r["gating"] else " (advisory)"
         out.append(
             "| {} | `{}`{} | {} | {} | {} | {}ms |".format(
                 STATE_MARK.get(r["state"], "?"),
@@ -80,14 +80,14 @@ def render_markdown(rows, startup, ok):
     out.append("")
 
     if startup and startup.get("measurements"):
-        out.append("## 起動時間")
+        out.append("## Startup time")
         out.append("")
         out.append(
-            "予算は無操作時 10ms 以下（docs/20-architecture.md 5.4）。"
-            "CI の実行機は揺れるため、この段階は参考であり全体を落とさない。"
+            "The budget is 10ms or less when idle (docs/20-architecture.md 5.4). "
+            "CI runners are noisy, so this step is advisory and does not fail the run."
         )
         out.append("")
-        out.append("| 実行 | 最小 | 中央 |")
+        out.append("| Command | Min | Median |")
         out.append("|---|---:|---:|")
         for m in startup["measurements"]:
             out.append(
@@ -99,10 +99,10 @@ def render_markdown(rows, startup, ok):
 
     failures = [r for r in rows if r["state"] == "failed"]
     if failures:
-        out.append("## 失敗した段階")
+        out.append("## Failed steps")
         out.append("")
         for r in failures:
-            out.append("- `{}` — 出力は `logs/{}.log`".format(r["name"], r["name"]))
+            out.append("- `{}` - output in `logs/{}.log`".format(r["name"], r["name"]))
         out.append("")
 
     return "\n".join(out) + "\n"

@@ -51,11 +51,7 @@ impl Session {
                 }
             }
         }
-        log_debug!(
-            "パッケージ {} 件、ターゲット {} 件を読み込んだ",
-            sess.packages.len(),
-            sess.targets.len()
-        );
+        log_debug!("loaded {} packages and {} targets", sess.packages.len(), sess.targets.len());
         sess
     }
 
@@ -67,9 +63,9 @@ impl Session {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "missing-manifest",
-                        format!("{} を読めない: {e}", manifest_path.display()),
+                        format!("cannot read {}: {e}", manifest_path.display()),
                     )
-                    .note("パッケージのルートには `dowel.toml` が要る"),
+                    .note("a package root requires a `dowel.toml`"),
                 );
                 return None;
             }
@@ -92,7 +88,7 @@ impl Session {
                     self.packages.push(pkg);
                     self.build_targets(id, &doc);
                     log_debug!(
-                        "パッケージ `{}` を {} から読み込んだ",
+                        "loaded package `{}` from {}",
                         self.packages[id.0].name,
                         dir.display()
                     );
@@ -100,13 +96,13 @@ impl Session {
                 }
                 Err(e) => self.diagnostics.push(Diagnostic::error(
                     "unreadable-build",
-                    format!("{} を読めない: {e}", build_path.display()),
+                    format!("cannot read {}: {e}", build_path.display()),
                 )),
             }
         } else {
             self.diagnostics.push(
-                Diagnostic::error("missing-build", format!("{} がない", build_path.display()))
-                    .note("ターゲット定義は `dowel.build` に置く（docs/10-manifest.md）"),
+                Diagnostic::error("missing-build", format!("missing {}", build_path.display()))
+                    .note("target definitions belong in `dowel.build` (docs/10-manifest.md)"),
             );
         }
 
@@ -117,6 +113,11 @@ impl Session {
 
     fn parse_and_eval(&mut self, file: FileId, strict: bool) -> Document {
         let src = self.sm.text(file).to_string();
+        log_debug!(
+            "reading {} ({} bytes, strict={strict})",
+            self.sm.path(file).display(),
+            src.len()
+        );
         let parsed = dowel_syntax::parse(&src, file);
         self.diagnostics.extend(parsed.diagnostics);
         if strict {
@@ -124,6 +125,12 @@ impl Session {
         }
         let (doc, diags) = dowel_eval::eval(&parsed.root, &src, file);
         self.diagnostics.extend(diags);
+        for table in &doc.tables {
+            log_trace!("  table [{}] with {} entries", table.path.join("."), table.entries.len());
+            for e in &table.entries {
+                log_trace!("    {} = {}", e.key.join("."), e.value.display());
+            }
+        }
         doc
     }
 
@@ -138,10 +145,10 @@ impl Session {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "toplevel-entry",
-                            "`dowel.build` の最上位にキーは置けない",
+                            "a key cannot appear at the top level of `dowel.build`",
                         )
-                        .at(first.site.file, first.site.span, "テーブル見出しの中に書く")
-                        .note("`[lib.<名前>]` のようにターゲットを宣言してから書く"),
+                        .at(first.site.file, first.site.span, "write it inside a table header")
+                        .note("declare a target first, as in `[lib.<name>]`"),
                     );
                 }
                 continue;
@@ -152,12 +159,12 @@ impl Session {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "missing-target-name",
-                        format!("`[{}]` にターゲット名がない", table.path.join(".")),
+                        format!("`[{}]` has no target name", table.path.join(".")),
                     )
                     .at(
                         doc.file,
                         table.site.span,
-                        format!("`[{}.<名前>]` と書く", kind.name()),
+                        format!("write `[{}.<name>]`", kind.name()),
                     ),
                 );
                 continue;
@@ -166,39 +173,37 @@ impl Session {
 
             let block = match table.path.len() {
                 2 => Block::Root,
-                3 => {
-                    match Block::parse(&table.path[2]) {
-                        Some(b) => b,
-                        None => {
-                            let mut d = Diagnostic::error(
+                3 => match Block::parse(&table.path[2]) {
+                    Some(b) => b,
+                    None => {
+                        let mut d = Diagnostic::error(
                             "unknown-block",
-                            format!("未知のブロック `{}`", table.path[2]),
+                            format!("unknown block `{}`", table.path[2]),
                         )
-                        .at(doc.file, table.site.span, "`public` か `private` のみ")
-                        .note("伝播するものとしないものを構文上分離する（docs/10-manifest.md 2節）");
-                            if let Some(c) = closest(&table.path[2], ["public", "private"]) {
-                                d = d.suggest(
-                                    doc.file,
-                                    table.site.span,
-                                    format!("[{}.{}.{}]", kind.name(), name, c),
-                                    format!("`{c}` の誤りではないか"),
-                                );
-                            }
-                            self.diagnostics.push(d);
-                            continue;
+                        .at(doc.file, table.site.span, "only `public` or `private`")
+                        .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
+                        if let Some(c) = closest(&table.path[2], ["public", "private"]) {
+                            d = d.suggest(
+                                doc.file,
+                                table.site.span,
+                                format!("[{}.{}.{}]", kind.name(), name, c),
+                                format!("did you mean `{c}`?"),
+                            );
                         }
+                        self.diagnostics.push(d);
+                        continue;
                     }
-                }
+                },
                 _ => {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "too-deep-table",
-                            format!("`[{}]` は深すぎる", table.path.join(".")),
+                            format!("`[{}]` is nested too deeply", table.path.join(".")),
                         )
                         .at(
                             doc.file,
                             table.site.span,
-                            "`[種別.名前]` か `[種別.名前.ブロック]`",
+                            "expected `[kind.name]` or `[kind.name.block]`",
                         ),
                     );
                     continue;
@@ -228,7 +233,7 @@ impl Session {
 
         for t in &self.targets {
             if t.package == pkg {
-                log_trace!("ターゲット {}.{} を宣言", t.kind.name(), t.name);
+                log_trace!("declared target {}.{}", t.kind.name(), t.name);
             }
         }
     }
@@ -237,11 +242,11 @@ impl Session {
         let head = &table.path[0];
         let Some(kind) = TableKind::parse(head) else {
             let known: Vec<&str> = TableKind::ALL.iter().map(|k| k.name()).collect();
-            let mut d = Diagnostic::error("unknown-kind", format!("未知のテーブル種別 `{head}`"))
-                .at(file, table.site.span, "この種別はない")
-                .note(format!("使えるのは {}", known.join(", ")));
+            let mut d = Diagnostic::error("unknown-kind", format!("unknown table kind `{head}`"))
+                .at(file, table.site.span, "no such kind")
+                .note(format!("available kinds: {}", known.join(", ")));
             if let Some(c) = closest(head, known) {
-                d = d.suggest(file, table.site.span, c, format!("`{c}` の誤りではないか"));
+                d = d.suggest(file, table.site.span, c, format!("did you mean `{c}`?"));
             }
             self.diagnostics.push(d);
             return None;
@@ -250,10 +255,10 @@ impl Session {
             self.diagnostics.push(
                 Diagnostic::error(
                     "unimplemented-kind",
-                    format!("`{}` はまだ実装していない", kind.name()),
+                    format!("`{}` is not implemented yet", kind.name()),
                 )
-                .at(file, table.site.span, "型としては認識しているが処理できない")
-                .note("実装済みなのは lib / bin / test"),
+                .at(file, table.site.span, "recognized as a kind but not yet processed")
+                .note("implemented kinds are lib, bin and test"),
             );
             return None;
         }
@@ -281,17 +286,17 @@ impl Session {
 
         let Some(def) = schema::lookup(block, &name) else {
             let known = schema::prop_names(block);
-            let mut d = Diagnostic::error("unknown-property", format!("未知のプロパティ `{name}`"))
+            let mut d = Diagnostic::error("unknown-property", format!("unknown property `{name}`"))
                 .at(
                     site.file,
                     site.span,
-                    format!("`{}` にこの名前のプロパティはない", block.name()),
+                    format!("`{}` has no property with this name", block.name()),
                 )
-                .note(format!("`{}` に置けるのは {}", block.name(), known.join(", ")));
+                .note(format!("`{}` accepts: {}", block.name(), known.join(", ")));
             if let Some(c) = closest(&name, known.iter().copied()) {
-                d = d.suggest(site.file, site.span, c, format!("`{c}` の誤りではないか"));
+                d = d.suggest(site.file, site.span, c, format!("did you mean `{c}`?"));
             } else if let Some(other) = other_block_with(&name, block) {
-                d = d.note(format!("`{name}` は `{}` のプロパティである", other.name()));
+                d = d.note(format!("`{name}` is a property of `{}`", other.name()));
             }
             self.diagnostics.push(d);
             return;
@@ -302,12 +307,12 @@ impl Session {
                 Diagnostic::error(
                     "type-mismatch",
                     format!(
-                        "`{name}` は {} だが {} が与えられた",
+                        "`{name}` is {} but {} was given",
                         def.ty.display(),
                         value.ty.display()
                     ),
                 )
-                .at(site.file, site.span, format!("この値の型は {}", value.ty.display()))
+                .at(site.file, site.span, format!("this value has type {}", value.ty.display()))
                 .note(path_hint(&def.ty, &value.ty)),
             );
             return;
@@ -318,16 +323,23 @@ impl Session {
             let prev_site = prev.prov.nearest_site();
             let mut d = Diagnostic::error(
                 "duplicate-property",
-                format!("`{name}` が同じブロックで2度指定されている"),
+                format!("`{name}` is set twice in the same block"),
             )
-            .at(site.file, site.span, "2度目の指定");
+            .at(site.file, site.span, "set again here");
             if let Some(s) = prev_site {
-                d = d.with_label(dowel_support::Label::secondary(s.file, s.span, "最初の指定"));
+                d = d.with_label(dowel_support::Label::secondary(s.file, s.span, "first set here"));
             }
             self.diagnostics.push(d);
             return;
         }
-        target.props_mut(block).insert(name, value);
+        log_trace!(
+            "  {}.{} {} = {}",
+            self.targets[tid.0].name,
+            block.name(),
+            name,
+            value.display()
+        );
+        self.targets[tid.0].props_mut(block).insert(name, value);
     }
 
     pub fn package(&self, id: PackageId) -> &Package {
@@ -374,22 +386,22 @@ impl Session {
                 .iter()
                 .find(|t| t.name == name && self.package(t.package).name == pkg)
                 .map(|t| t.id)
-                .ok_or_else(|| format!("ターゲット `{spec}` が見つからない"));
+                .ok_or_else(|| format!("no target named `{spec}`"));
         }
         let matches: Vec<&Target> = self.targets.iter().filter(|t| t.name == spec).collect();
         match matches.len() {
             0 => {
                 let all: Vec<String> = self.targets.iter().map(|t| self.label(t.id)).collect();
                 Err(format!(
-                    "ターゲット `{spec}` が見つからない。存在するのは {}",
-                    if all.is_empty() { "（なし）".to_string() } else { all.join(", ") }
+                    "no target named `{spec}`. available: {}",
+                    if all.is_empty() { "(none)".to_string() } else { all.join(", ") }
                 ))
             }
             1 => Ok(matches[0].id),
             _ => {
                 let labels: Vec<String> = matches.iter().map(|t| self.label(t.id)).collect();
                 Err(format!(
-                    "`{spec}` は複数のパッケージにある: {}。`パッケージ名:{spec}` と書く",
+                    "`{spec}` exists in several packages: {}. write `<package>:{spec}`",
                     labels.join(", ")
                 ))
             }
@@ -419,9 +431,10 @@ fn path_hint(expected: &dowel_eval::Type, actual: &dowel_eval::Type) -> String {
     let wants_path = matches!(expected.elem().unwrap_or(expected), Type::Path);
     let gives_str = matches!(actual.elem().unwrap_or(actual), Type::Str);
     if wants_path && gives_str {
-        "パスは文字列から作らない。`dir(\"...\")` / `file(\"...\")` / `glob(\"...\")` を使う".into()
+        "a Path is not built from a string; use `dir(\"...\")`, `file(\"...\")` or `glob(\"...\")`"
+            .into()
     } else {
-        format!("期待する型は {}", expected.display())
+        format!("expected type {}", expected.display())
     }
 }
 

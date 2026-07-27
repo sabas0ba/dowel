@@ -70,26 +70,26 @@ pub fn from_document(
             if let Some(e) = t.entry("name") {
                 match e.value.as_str() {
                     Some(s) => pkg.name = s.to_string(),
-                    None => type_err(diags, e.site, "package.name", "文字列"),
+                    None => type_err(diags, e.site, "package.name", "a string"),
                 }
             } else {
-                diags.push(Diagnostic::error("missing-field", "`[package]` に `name` がない").at(
+                diags.push(Diagnostic::error("missing-field", "`[package]` has no `name`").at(
                     manifest_file,
                     t.site.span,
-                    "`name = \"...\"` を書く",
+                    "write `name = \"...\"`",
                 ));
             }
             if let Some(e) = t.entry("version") {
                 match e.value.as_str() {
                     Some(s) => pkg.version = s.to_string(),
-                    None => type_err(diags, e.site, "package.version", "文字列"),
+                    None => type_err(diags, e.site, "package.version", "a string"),
                 }
             }
         }
-        None => diags.push(Diagnostic::error("missing-table", "`[package]` がない").at(
+        None => diags.push(Diagnostic::error("missing-table", "missing `[package]`").at(
             manifest_file,
             dowel_support::Span::EMPTY,
-            "`dowel.toml` には `[package]` が要る",
+            "`dowel.toml` requires a `[package]` table",
         )),
     }
 
@@ -97,7 +97,7 @@ pub fn from_document(
         if let Some(e) = t.entry("c") {
             match e.value.as_str() {
                 Some(s) => pkg.toolchain_c = Some(s.to_string()),
-                None => type_err(diags, e.site, "toolchain.c", "文字列"),
+                None => type_err(diags, e.site, "toolchain.c", "a string"),
             }
         }
     }
@@ -111,13 +111,16 @@ pub fn from_document(
                     for item in items {
                         match item.as_str() {
                             Some(s) => enables.push(s.to_string()),
-                            None => {
-                                type_err(diags, e.site, &format!("features.{name}"), "文字列の配列")
-                            }
+                            None => type_err(
+                                diags,
+                                e.site,
+                                &format!("features.{name}"),
+                                "an array of strings",
+                            ),
                         }
                     }
                 }
-                None => type_err(diags, e.site, &format!("features.{name}"), "文字列の配列"),
+                None => type_err(diags, e.site, &format!("features.{name}"), "an array of strings"),
             }
             pkg.features.insert(name, enables);
         }
@@ -128,15 +131,15 @@ pub fn from_document(
             continue;
         }
         let Some(name_entry) = t.entry("name") else {
-            diags.push(Diagnostic::error("missing-field", "依存に `name` がない").at(
+            diags.push(Diagnostic::error("missing-field", "dependency has no `name`").at(
                 manifest_file,
                 t.site.span,
-                "`name = \"...\"` を書く",
+                "write `name = \"...\"`",
             ));
             continue;
         };
         let Some(name) = name_entry.value.as_str().map(|s| s.to_string()) else {
-            type_err(diags, name_entry.site, "dependencies.name", "文字列");
+            type_err(diags, name_entry.site, "dependencies.name", "a string");
             continue;
         };
         let optional = t.entry("optional").and_then(|e| e.value.as_bool()).unwrap_or(false);
@@ -145,26 +148,26 @@ pub fn from_document(
             match e.value.as_str() {
                 Some(p) => DepKind::Path(PathBuf::from(p)),
                 None => {
-                    type_err(diags, e.site, "dependencies.path", "文字列");
+                    type_err(diags, e.site, "dependencies.path", "a string");
                     DepKind::Unsupported("path")
                 }
             }
         } else if t.entry("git").is_some() {
-            unsupported(diags, manifest_file, t.site, "git 依存");
+            unsupported(diags, manifest_file, t.site, "git dependencies");
             DepKind::Unsupported("git")
         } else if t.entry("version").is_some() {
-            unsupported(diags, manifest_file, t.site, "レジストリ依存");
+            unsupported(diags, manifest_file, t.site, "registry dependencies");
             DepKind::Unsupported("registry")
         } else {
             diags.push(
                 Diagnostic::error(
                     "incomplete-dependency",
-                    format!("依存 `{name}` の供給元が指定されていない"),
+                    format!("dependency `{name}` has no source"),
                 )
                 .at(
                     manifest_file,
                     t.site.span,
-                    "`path` / `version` / `git` のいずれかが要る",
+                    "one of `path`, `version` or `git` is required",
                 ),
             );
             DepKind::Unsupported("none")
@@ -177,21 +180,19 @@ pub fn from_document(
 }
 
 fn type_err(diags: &mut Vec<Diagnostic>, site: Site, field: &str, expected: &str) {
-    diags.push(
-        Diagnostic::error("type-mismatch", format!("`{field}` は{expected}でなければならない")).at(
-            site.file,
-            site.span,
-            format!("{expected}を書く"),
-        ),
-    );
+    diags.push(Diagnostic::error("type-mismatch", format!("`{field}` must be {expected}")).at(
+        site.file,
+        site.span,
+        format!("write {expected}"),
+    ));
 }
 
 fn unsupported(diags: &mut Vec<Diagnostic>, file: FileId, site: Site, what: &str) {
     diags.push(
-        Diagnostic::error("unsupported-dependency", format!("{what}はまだ取得できない"))
-            .with_label(Label::primary(file, site.span, "現時点で解決できない依存"))
-            .note("実装済みなのは `path` 依存のみ。取得は Phase 5（docs/90-roadmap.md）")
-            .note("暫定的に `path` 依存へ置き換えると先へ進める"),
+        Diagnostic::error("unsupported-dependency", format!("{what} cannot be fetched yet"))
+            .with_label(Label::primary(file, site.span, "this dependency cannot be resolved yet"))
+            .note("only `path` dependencies are implemented; fetching is Phase 5 (docs/90-roadmap.md)")
+            .note("replacing it with a `path` dependency lets the build proceed"),
     );
 }
 
@@ -250,28 +251,28 @@ mod tests {
     }
 
     #[test]
-    fn 既定の機能を取り込む() {
+    fn pulls_in_default_features() {
         let p = pkg_with(&[("default", &["zlib"]), ("zlib", &[])]);
         let f = resolve_features(&p, &[], true);
         assert!(f.contains("zlib"));
-        assert!(!f.contains("default"), "`default` 自体は機能名として残さない");
+        assert!(!f.contains("default"), "`default` itself is not kept as a feature name");
     }
 
     #[test]
-    fn 既定を無効化できる() {
+    fn default_features_can_be_disabled() {
         let p = pkg_with(&[("default", &["zlib"]), ("zlib", &[])]);
         assert!(resolve_features(&p, &[], false).is_empty());
     }
 
     #[test]
-    fn 機能の連鎖を閉じる() {
+    fn closes_over_chained_features() {
         let p = pkg_with(&[("a", &["b"]), ("b", &["c"]), ("c", &[])]);
         let f = resolve_features(&p, &["a".into()], false);
         assert_eq!(f.iter().cloned().collect::<Vec<_>>(), vec!["a", "b", "c"]);
     }
 
     #[test]
-    fn 循環する機能でも停止する() {
+    fn terminates_on_cyclic_features() {
         let p = pkg_with(&[("a", &["b"]), ("b", &["a"])]);
         let f = resolve_features(&p, &["a".into()], false);
         assert_eq!(f.len(), 2);

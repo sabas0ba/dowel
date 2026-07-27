@@ -45,7 +45,7 @@ impl Plan {
         for a in &self.actions {
             debug_assert!(
                 a.deps.iter().all(|d| d.0 < a.id.0),
-                "アクションの依存が後方を指している"
+                "an action depends on a later action"
             );
         }
         self.actions.iter().map(|a| a.id).collect()
@@ -77,12 +77,12 @@ pub fn plan(
                     Diagnostic::warning(
                         "toolchain-mismatch",
                         format!(
-                            "パッケージ `{}` は C ツールチェーンに `{tc}` を要求しているが、`{}` でビルドする",
+                            "package `{}` asks for C toolchain `{tc}` but the build uses `{}`",
                             p.name, cfg.tc_c
                         ),
                     )
-                    .note("ツールチェーンの取得と切り替えは Phase 5（docs/90-roadmap.md）")
-                    .note("ABI ラベルの検証はツールチェーンが固定されていることを前提にする"),
+                    .note("fetching and switching toolchains is Phase 5 (docs/90-roadmap.md)")
+                    .note("ABI label checking assumes a single pinned toolchain"),
                 );
             }
         }
@@ -116,9 +116,9 @@ pub fn plan(
         let sources = collect_sources(sess, tid, cfg, &mut diags);
         if sources.is_empty() && target.kind != TableKind::Lib {
             diags.push(
-                Diagnostic::error("no-sources", format!("`{}` にソースがない", sess.label(tid)))
-                    .at(target.site.file, target.site.span, "`sources` が空")
-                    .note("`sources = glob(\"src/*.c\")` のように指定する"),
+                Diagnostic::error("no-sources", format!("`{}` has no sources", sess.label(tid)))
+                    .at(target.site.file, target.site.span, "`sources` is empty")
+                    .note("set it, for example `sources = glob(\"src/*.c\")`"),
             );
             continue;
         }
@@ -128,13 +128,30 @@ pub fn plan(
         let flags = collect_flags(&env, "flags");
         let link_flags = collect_flags(&env, "link_flags");
 
-        log_trace!(
-            "{}: ソース {} 件、include {} 件、define {} 件",
+        log_debug!(
+            "{}: {} sources, {} includes, {} defines",
             sess.label(tid),
             sources.len(),
             includes.len(),
             defines.len()
         );
+        // 中間結果を丸ごと出す。コンパイル引数が期待と違うとき、
+        // どの段階で入り込んだかはここを見れば分かる。
+        for s in &sources {
+            log_trace!("  source  {}", s.display());
+        }
+        for i in &includes {
+            log_trace!("  include {}", i.display());
+        }
+        for (k, v) in &defines {
+            log_trace!("  define  {k}={v}");
+        }
+        if !flags.is_empty() {
+            log_trace!("  flags   {}", flags.join(" "));
+        }
+        if !link_flags.is_empty() {
+            log_trace!("  ldflags {}", link_flags.join(" "));
+        }
 
         // --- コンパイル ---
         let mut objects = Vec::new();
@@ -180,6 +197,7 @@ pub fn plan(
                 arguments,
                 output: obj.clone(),
             });
+            log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
             objects.push(obj);
             compile_ids.push(id);
         }
@@ -203,6 +221,7 @@ pub fn plan(
                     description: format!("AR {}", rel_display(&build_dir, &out)),
                     deps: compile_ids.clone(),
                 });
+                log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
                 producer.insert(tid, id);
                 plan.artifacts.insert(tid, out);
             }
@@ -246,21 +265,22 @@ pub fn plan(
                     description: format!("LINK {}", rel_display(&build_dir, &out)),
                     deps,
                 });
+                log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
                 producer.insert(tid, id);
                 plan.artifacts.insert(tid, out);
             }
             other => diags.push(
                 Diagnostic::error(
                     "unimplemented-kind",
-                    format!("`{}` の成果物は作れない", other.name()),
+                    format!("cannot produce an artifact for `{}`", other.name()),
                 )
-                .at(target.site.file, target.site.span, "未実装の種別"),
+                .at(target.site.file, target.site.span, "unimplemented kind"),
             ),
         }
     }
 
     log_debug!(
-        "アクション {} 件（コンパイル {}、アーカイブ {}、リンク {}）",
+        "{} actions ({} compile, {} archive, {} link)",
         plan.actions.len(),
         count(&plan, ActionKind::Compile),
         count(&plan, ActionKind::Archive),
@@ -302,12 +322,12 @@ fn collect_sources(
                 if hits.is_empty() {
                     let mut d = Diagnostic::warning(
                         "empty-glob",
-                        format!("`glob({pattern:?})` に一致するファイルがない"),
+                        format!("`glob({pattern:?})` matched no files"),
                     );
                     if let Some(s) = item.prov.nearest_site() {
-                        d = d.at(s.file, s.span, "一致なし");
+                        d = d.at(s.file, s.span, "no matches");
                     }
-                    diags.push(d.note(format!("走査したのは {}", pkg_root.display())));
+                    diags.push(d.note(format!("scanned {}", pkg_root.display())));
                 }
                 out.extend(hits.into_iter().map(|rel| pkg_root.join(rel)));
             }
@@ -318,10 +338,10 @@ fn collect_sources(
             _ => {
                 let mut d = Diagnostic::error(
                     "invalid-source",
-                    format!("`sources` の要素がパスでない: {}", item.display()),
+                    format!("element of `sources` is not a path: {}", item.display()),
                 );
                 if let Some(s) = item.prov.nearest_site() {
-                    d = d.at(s.file, s.span, "パスが必要");
+                    d = d.at(s.file, s.span, "expected a path");
                 }
                 diags.push(d);
             }
@@ -358,7 +378,7 @@ fn collect_includes(
                     None => {
                         diags.push(Diagnostic::error(
                             "unresolved-path",
-                            format!("`{}` の基準点を決められない", p.rel),
+                            format!("cannot determine the base of `{}`", p.rel),
                         ));
                         continue;
                     }
@@ -367,8 +387,11 @@ fn collect_includes(
             PathBase::BuildDir => build_dir.to_path_buf(),
             PathBase::Sysroot => {
                 diags.push(
-                    Diagnostic::error("unimplemented-path-base", "sysroot 基準のパスは未実装")
-                        .note("ツールチェーン記述は Phase 5（docs/90-roadmap.md）"),
+                    Diagnostic::error(
+                        "unimplemented-path-base",
+                        "sysroot-relative paths are not implemented",
+                    )
+                    .note("toolchain descriptions are Phase 5 (docs/90-roadmap.md)"),
                 );
                 continue;
             }

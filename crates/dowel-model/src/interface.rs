@@ -63,6 +63,16 @@ pub fn compute(sess: &Session, graph: &Graph, cfg: &Config) -> (Interfaces, Vec<
                 continue;
             }
             let merged = schema::merge_values(&def, &reached, &sess.sm, &mut diags);
+            // 併合は「どの値が到達したか」を見ないと結果を説明できない。
+            // `dowel why` は1つの値を掘るが、こちらは全体を並べて見せる。
+            log_trace!(
+                "  merge {}.{} ({}): {} reached -> {}",
+                sess.label(tid),
+                def.name,
+                def.merge.name(),
+                reached.len(),
+                merged.display()
+            );
             props.insert(def.name.to_string(), merged);
         }
         log_trace!(
@@ -105,7 +115,16 @@ pub fn compile_env(
         if reached.is_empty() {
             continue;
         }
-        props.insert(def.name.to_string(), schema::merge_values(&def, &reached, &sess.sm, diags));
+        let merged = schema::merge_values(&def, &reached, &sess.sm, diags);
+        log_trace!(
+            "  compile_env {}.{} ({}): {} reached -> {}",
+            sess.label(tid),
+            def.name,
+            def.merge.name(),
+            reached.len(),
+            merged.display()
+        );
+        props.insert(def.name.to_string(), merged);
     }
     props
 }

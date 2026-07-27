@@ -12,48 +12,48 @@ use dowel_support::diag::closest;
 use dowel_support::log::{Format, Level};
 use std::path::PathBuf;
 
-pub const USAGE: &str = r#"dowel — C/C++ 向けビルドシステム（開発中）
+pub const USAGE: &str = r#"dowel - a build system for C/C++ (in development)
 
-使い方:
-    dowel <コマンド> [オプション]
+Usage:
+    dowel <command> [options]
 
-コマンド:
-    check              マニフェストを評価して診断する。ビルドしない
-    build [ターゲット] ビルドする。ターゲット省略時は全ての bin と test
-    why <ターゲット> <プロパティ>
-                       値がそこへ来た経路を表示する
-    graph              依存グラフまたはアクショングラフを書き出す
-    schema dump        スキーマと構成語彙を機械可読な形で出力する
+Commands:
+    check              Evaluate the manifests and report diagnostics. Does not build.
+    build [target]     Build. With no target, builds every bin and test.
+    why <target> <property>
+                       Show how a value reached a target.
+    graph              Dump the dependency graph or the action graph.
+    schema dump        Print the schema and configuration vocabulary in machine-readable form.
 
-共通オプション:
-    -C, --directory <パス>   このディレクトリのパッケージを対象にする（既定: .）
-        --config <名前>      debug | release（既定: debug）
-        --target <トリプル>  ターゲットトリプル（既定: ホスト）
-        --features <名前,…>  有効にする機能フラグ
+Common options:
+    -C, --directory <path>   Operate on the package in this directory (default: .)
+        --config <name>      debug | release (default: debug)
+        --target <triple>    Target triple (default: host)
+        --features <a,b>     Feature flags to enable
         --no-default-features
-                             [features] の default を取り込まない
-        --message-format <形式>
-                             human | json（既定: human）
-    -v, --verbose            ログを詳しくする。重ねると更に詳しくなる
-        --log-level <水準>   off|error|warn|info|debug|trace（環境変数 DOWEL_LOG も可）
-        --log-format <形式>  text | json
-        --color <いつ>       auto | always | never
-    -h, --help               この説明
-    -V, --version            版
+                             Do not pull in `default` from [features]
+        --message-format <fmt>
+                             human | json (default: human)
+    -v, --verbose            More logging. Repeat for more.
+        --log-level <level>  off|error|warn|info|debug|trace (or the DOWEL_LOG variable)
+        --log-format <fmt>   text | json
+        --color <when>       auto | always | never
+    -h, --help               Show this help
+    -V, --version            Show the version
 
-build のオプション:
-        --executor <実行器>  ninja | direct（既定: ninja があれば ninja）
-    -j, --jobs <数>          並列度（ninja に渡す）
-        --no-compdb          compile_commands.json を書かない
+build options:
+        --executor <name>    ninja | direct (default: ninja when available)
+    -j, --jobs <n>           Parallelism, passed to ninja
+        --no-compdb          Do not write compile_commands.json
 
-graph のオプション:
-        --kind <種類>        target | action（既定: target）
-        --format <形式>      text | dot | json（既定: text）
+graph options:
+        --kind <kind>        target | action (default: target)
+        --format <fmt>       text | dot | json (default: text)
 
-why のオプション:
-        --format <形式>      text | json（既定: text）
+why options:
+        --format <fmt>       text | json (default: text)
 
-例:
+Examples:
     dowel check --message-format=json
     dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
     dowel why app:app includes
@@ -172,7 +172,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                 None => {
                     let v = args.get(i).cloned();
                     i += 1;
-                    v.ok_or_else(|| format!("`{flag}` に値がない"))
+                    v.ok_or_else(|| format!("`{flag}` requires a value"))
                 }
             }
         };
@@ -192,35 +192,43 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "human" => MessageFormat::Human,
                     "json" => MessageFormat::Json,
                     other => {
-                        return Err(format!("`--message-format` は human か json（`{other}`）"))
+                        return Err(format!(
+                            "`--message-format` must be human or json (got `{other}`)"
+                        ))
                     }
                 }
             }
             "--log-level" => {
                 let v = take("--log-level")?;
                 opts.log_level = Some(
-                    Level::parse(&v).ok_or_else(|| format!("`--log-level` の値が不正: `{v}`"))?,
+                    Level::parse(&v)
+                        .ok_or_else(|| format!("invalid value for `--log-level`: `{v}`"))?,
                 );
             }
             "--log-format" => {
                 opts.log_format = match take("--log-format")?.as_str() {
                     "text" => Format::Text,
                     "json" => Format::Json,
-                    other => return Err(format!("`--log-format` は text か json（`{other}`）")),
+                    other => {
+                        return Err(format!("`--log-format` must be text or json (got `{other}`)"))
+                    }
                 }
             }
             "--color" => color_mode = take("--color")?,
             "--executor" => opts.executor = Some(take("--executor")?),
             "-j" | "--jobs" => {
                 let v = take("--jobs")?;
-                opts.jobs = Some(v.parse().map_err(|_| format!("`--jobs` は数値（`{v}`）"))?);
+                opts.jobs =
+                    Some(v.parse().map_err(|_| format!("`--jobs` must be a number (got `{v}`)"))?);
             }
             "--no-compdb" => opts.compdb = false,
             "--kind" => {
                 opts.graph_kind = match take("--kind")?.as_str() {
                     "target" => GraphKind::Target,
                     "action" => GraphKind::Action,
-                    other => return Err(format!("`--kind` は target か action（`{other}`）")),
+                    other => {
+                        return Err(format!("`--kind` must be target or action (got `{other}`)"))
+                    }
                 }
             }
             "--format" => {
@@ -228,7 +236,9 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "text" => OutFormat::Text,
                     "dot" => OutFormat::Dot,
                     "json" => OutFormat::Json,
-                    other => return Err(format!("`--format` は text / dot / json（`{other}`）")),
+                    other => {
+                        return Err(format!("`--format` must be text, dot or json (got `{other}`)"))
+                    }
                 }
             }
             other if other.starts_with('-') => {
@@ -251,9 +261,9 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--help",
                     "--version",
                 ];
-                let mut msg = format!("未知のオプション `{other}`");
+                let mut msg = format!("unknown option `{other}`");
                 if let Some(c) = closest(other, known) {
-                    msg.push_str(&format!("。`{c}` の誤りではないか"));
+                    msg.push_str(&format!(". did you mean `{c}`?"));
                 }
                 return Err(msg);
             }
@@ -285,19 +295,21 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
         "graph" => Command::Graph,
         "why" => {
             if positional.len() != 2 {
-                return Err("`why` は <ターゲット> <プロパティ> の2つを取る".into());
+                return Err("`why` takes two arguments: <target> <property>".into());
             }
             Command::Why { target: positional[0].clone(), property: positional[1].clone() }
         }
         "schema" => match positional.first().map(|s| s.as_str()) {
             Some("dump") => Command::SchemaDump,
-            Some(other) => return Err(format!("`schema` の下位コマンドは dump（`{other}`）")),
-            None => return Err("`schema dump` と書く".into()),
+            Some(other) => {
+                return Err(format!("the only `schema` subcommand is dump (got `{other}`)"))
+            }
+            None => return Err("write `schema dump`".into()),
         },
         other => {
-            let mut msg = format!("未知のコマンド `{other}`");
+            let mut msg = format!("unknown command `{other}`");
             if let Some(c) = closest(other, COMMANDS.iter().copied()) {
-                msg.push_str(&format!("。`{c}` の誤りではないか"));
+                msg.push_str(&format!(". did you mean `{c}`?"));
             }
             return Err(msg);
         }
@@ -319,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn 等号と空白の双方を受ける() {
+    fn accepts_both_equals_and_space() {
         let a = run(&["check", "--config=release"]).unwrap();
         let b = run(&["check", "--config", "release"]).unwrap();
         assert_eq!(a.config, "release");
@@ -327,38 +339,38 @@ mod tests {
     }
 
     #[test]
-    fn 機能フラグをカンマで分ける() {
+    fn splits_feature_flags_on_commas() {
         let o = run(&["check", "--features", "zlib, png"]).unwrap();
         assert_eq!(o.features, vec!["zlib", "png"]);
     }
 
     #[test]
-    fn 位置引数がコマンドとターゲットに割り当てられる() {
+    fn positional_arguments_map_to_command_and_targets() {
         let o = run(&["build", "app", "libfoo:foo"]).unwrap();
         assert_eq!(o.command, Command::Build { targets: vec!["app".into(), "libfoo:foo".into()] });
     }
 
     #[test]
-    fn why_は2つの位置引数を要求する() {
+    fn why_requires_two_positional_arguments() {
         assert!(run(&["why", "app"]).is_err());
         let o = run(&["why", "app", "includes"]).unwrap();
         assert_eq!(o.command, Command::Why { target: "app".into(), property: "includes".into() });
     }
 
     #[test]
-    fn 未知のオプションに候補を出す() {
+    fn suggests_a_candidate_for_an_unknown_option() {
         let e = run(&["check", "--confg=release"]).unwrap_err();
         assert!(e.contains("--config"), "{e}");
     }
 
     #[test]
-    fn 未知のコマンドに候補を出す() {
+    fn suggests_a_candidate_for_an_unknown_command() {
         let e = run(&["chek"]).unwrap_err();
         assert!(e.contains("check"), "{e}");
     }
 
     #[test]
-    fn verbose_を重ねると水準が上がる() {
+    fn repeating_verbose_raises_the_level() {
         assert_eq!(run(&["check", "-v"]).unwrap().log_level, Some(Level::Info));
         assert_eq!(run(&["check", "-v", "-v"]).unwrap().log_level, Some(Level::Debug));
         // 明示的な指定が優先する。
@@ -369,12 +381,12 @@ mod tests {
     }
 
     #[test]
-    fn 引数なしは説明を出す() {
+    fn no_arguments_prints_help() {
         assert!(matches!(parse(Vec::<String>::new()).unwrap(), Parsed::Help));
     }
 
     #[test]
-    fn 値のないオプションは誤り() {
+    fn an_option_without_a_value_is_an_error() {
         assert!(run(&["check", "--config"]).is_err());
     }
 }

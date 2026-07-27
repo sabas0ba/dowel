@@ -121,6 +121,13 @@ dotfiles の README が規約の所在である。本プロジェクト固有の
 
 - 実装言語は Rust（[ADR-0007](adr/0007-implementation-language.md)）。
   コアは標準ライブラリのみに依存する。外部 crate の追加は都度合意する
+- **プログラムが扱う言語は英語**とする。識別子（テスト名を含む）、文字列リテラル、
+  診断・ログ・CLI の出力、生成物（`build.ninja` 等）、メタデータ
+  （`Cargo.toml` の `description`、ワークフローの step 名）が対象。
+  例外は、非 ASCII の扱いそのものを検査するテストデータのみ。
+  **コメントと doc コメント、および `docs/` は日本語**とする。
+  「コメントは実装内容ではなく、その選択の理由を記述する」という規約は、
+  母語で書いたほうが密度が上がる
 - 整形は `make fmt`（`cargo fmt`）、静的解析は `make lint`（`cargo clippy -D warnings`）
 - 提出前に `make check`（整形検査 + 静的解析 + テスト）を通す
 - 設計上の決定は `docs/adr/` に ADR として記録する。

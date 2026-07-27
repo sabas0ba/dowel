@@ -5,6 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "スパン、ソースマップ、診断、構造化ログ、JSON 出力。標準ライブラリのみに依存する。"
+description = "Spans, source maps, diagnostics, structured logging, and JSON output. Depends only on the standard library."
 
 [dependencies]

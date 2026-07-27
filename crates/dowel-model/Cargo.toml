@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "パッケージ読み込み、ターゲットと依存グラフ、インタフェース併合、来歴の表示。"
+description = "Package loading, targets and the dependency graph, interface merging, provenance reporting."
 
 [dependencies]
 dowel-support.workspace = true

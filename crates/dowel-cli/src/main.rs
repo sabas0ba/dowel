@@ -36,13 +36,13 @@ fn main() -> ExitCode {
         Ok(Parsed::Run(o)) => *o,
         Err(e) => {
             eprintln!("error: {e}");
-            eprintln!("`dowel --help` で使い方を表示する");
+            eprintln!("run `dowel --help` for usage");
             return ExitCode::from(EXIT_USAGE);
         }
     };
 
     log::init(opts.log_level, opts.log_format, opts.color);
-    log_debug!("dowel {} を起動", env!("CARGO_PKG_VERSION"));
+    log_debug!("starting dowel {}", env!("CARGO_PKG_VERSION"));
 
     match run(&opts) {
         Ok(code) => code,
@@ -62,7 +62,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
     let mut sess = Session::load(&opts.directory);
     let cfg = configure(&sess, opts)?;
-    log_debug!("構成 {}", cfg.id());
+    log_debug!("configuration {}", cfg.id());
 
     // グラフとインタフェースの診断も検査の一部。ここまでは常に走らせる。
     let (g, gdiags) = graph::build(&sess, &cfg);
@@ -71,7 +71,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     sess.diagnostics.extend(idiags);
 
     match &opts.command {
-        Command::SchemaDump => unreachable!("上で処理済み"),
+        Command::SchemaDump => unreachable!("handled above"),
 
         Command::Check => {
             // 併合の診断（衝突・ABI 不一致）は compile_env を求めて初めて出る。
@@ -83,7 +83,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             let failed = report(&sess, opts);
             if !failed {
                 eprintln!(
-                    "検査完了: パッケージ {} 件、ターゲット {} 件",
+                    "check passed: {} packages, {} targets",
                     sess.packages.len(),
                     sess.targets.len()
                 );
@@ -145,15 +145,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 match compdb::write(&p, &root) {
                     Ok(paths) => {
                         for path in paths {
-                            log_info!("{} を書き出した", path.display());
+                            log_info!("wrote {}", path.display());
                         }
                     }
-                    Err(e) => eprintln!("warning: compile_commands.json を書けない: {e}"),
+                    Err(e) => eprintln!("warning: cannot write compile_commands.json: {e}"),
                 }
             }
 
             let executor = choose_executor(opts)?;
-            log_debug!("実行器 {executor:?}");
+            log_debug!("executor {executor:?}");
             if let Err(f) = exec::run(&p, executor, opts.jobs) {
                 eprint!("error: {f}");
                 return Ok(ExitCode::FAILURE);
@@ -161,7 +161,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
             for t in &requested {
                 if let Some(path) = p.artifacts.get(t) {
-                    eprintln!("できた: {}", path.display());
+                    eprintln!("built: {}", path.display());
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -173,7 +173,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 fn configure(sess: &Session, opts: &Options) -> Result<Config, String> {
     let mut cfg = Config::host_default();
     cfg.opt = Opt::parse(&opts.config)
-        .ok_or_else(|| format!("`--config` は debug か release（`{}`）", opts.config))?;
+        .ok_or_else(|| format!("`--config` must be debug or release (got `{}`)", opts.config))?;
     if let Some(t) = &opts.target {
         cfg.target = t.clone();
     }
@@ -211,11 +211,11 @@ fn default_targets(
 fn choose_executor(opts: &Options) -> Result<exec::Executor, String> {
     match &opts.executor {
         Some(s) => exec::Executor::parse(s)
-            .ok_or_else(|| format!("`--executor` は ninja か direct（`{s}`）")),
+            .ok_or_else(|| format!("`--executor` must be ninja or direct (got `{s}`)")),
         None => Ok(if exec::ninja_available() {
             exec::Executor::Ninja
         } else {
-            log_debug!("ninja が見つからないため直接実行に切り替える");
+            log_debug!("ninja not found; falling back to the direct executor");
             exec::Executor::Direct
         }),
     }
@@ -239,7 +239,7 @@ fn report(sess: &Session, opts: &Options) -> bool {
                 eprint!("{}", diag::render(d, &sess.sm, opts.color));
             }
             if errors > 0 || warnings > 0 {
-                eprintln!("誤り {errors} 件、警告 {warnings} 件");
+                eprintln!("{errors} errors, {warnings} warnings");
             }
         }
     }
@@ -297,11 +297,11 @@ fn schema_dump() -> String {
 
     w.key("functions").begin_array();
     for (name, sig, doc) in [
-        ("glob", "(Str) -> List<Path>", "パターンに一致するファイル。展開は plan 時"),
-        ("dir", "(Str) -> Path", "パッケージルートからのディレクトリ"),
-        ("file", "(Str) -> Path", "パッケージルートからのファイル"),
-        ("dep", "(Str) -> DepRef", "dowel.toml で宣言した依存への参照"),
-        ("target", "(Str) -> TargetRef", "同一パッケージ内のターゲットへの参照"),
+        ("glob", "(Str) -> List<Path>", "files matching the pattern; expanded at plan time"),
+        ("dir", "(Str) -> Path", "a directory relative to the package root"),
+        ("file", "(Str) -> Path", "a file relative to the package root"),
+        ("dep", "(Str) -> DepRef", "a reference to a dependency declared in dowel.toml"),
+        ("target", "(Str) -> TargetRef", "a reference to a target in the same package"),
     ] {
         w.begin_object();
         w.field_str("name", name);
@@ -312,7 +312,7 @@ fn schema_dump() -> String {
     w.end_array();
 
     w.key("cfg").begin_object();
-    w.field_str("status", "暫定。docs/99-open-questions.md Q1 で検討中");
+    w.field_str("status", "provisional; under discussion as Q1 in docs/99-open-questions.md");
     w.key("keys").begin_array();
     for (ns, name, domain, doc) in VOCABULARY {
         w.begin_object();

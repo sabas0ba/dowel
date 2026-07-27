@@ -24,7 +24,7 @@ pub fn text(sess: &Session, graph: &Graph) -> String {
         }
     }
     if graph.order.is_empty() {
-        out.push_str("（ターゲットがない）\n");
+        out.push_str("(no targets)\n");
     }
     out
 }

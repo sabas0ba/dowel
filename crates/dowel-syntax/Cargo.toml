@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "dowel.build / dowel.toml の字句解析とロスレス CST。誤り耐性を持つ。"
+description = "Lexer and lossless CST for dowel.build / dowel.toml, with error recovery."
 
 [dependencies]
 dowel-support.workspace = true

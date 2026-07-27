@@ -12,6 +12,7 @@
 //! | `**` | `/` を含む任意の並び |
 //! | `?` | `/` を除く1文字 |
 
+use dowel_support::{log_debug, log_trace};
 use std::path::{Path, PathBuf};
 
 /// パターンと相対パスの照合。
@@ -67,11 +68,24 @@ fn match_from(p: &[char], mut pi: usize, s: &[char], mut si: usize) -> bool {
 pub fn expand(root: &Path, pattern: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     walk(root, root, &mut found);
+    let scanned = found.len();
     let mut out: Vec<PathBuf> = found
         .into_iter()
-        .filter(|rel| matches(pattern, &rel.to_string_lossy().replace('\\', "/")))
+        .filter(|rel| {
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            let hit = matches(pattern, &rel);
+            // 一致しなかったものまで出す。「なぜ拾われないのか」を追うとき、
+            // 走査に載ったかどうかが最初に知りたいことになる。
+            log_trace!("  glob {} {rel}", if hit { "match " } else { "skip  " });
+            hit
+        })
         .collect();
     out.sort();
+    log_debug!(
+        "glob({pattern:?}) under {}: {} of {scanned} files matched",
+        root.display(),
+        out.len()
+    );
     out
 }
 
@@ -85,6 +99,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
         // 生成物と隠しディレクトリは走査しない。自分の出力を入力に取り込むと
         // ビルドのたびに結果が変わる。
         if name.starts_with('.') || name == "target" {
+            log_trace!("  glob prune {}", e.path().display());
             continue;
         }
         let path = e.path();
@@ -105,35 +120,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 単一の星は区切りを跨がない() {
+    fn a_single_star_does_not_cross_separators() {
         assert!(matches("src/*.c", "src/a.c"));
         assert!(!matches("src/*.c", "src/sub/a.c"));
         assert!(!matches("src/*.c", "src/a.h"));
     }
 
     #[test]
-    fn 二重の星は区切りを跨ぐ() {
+    fn a_double_star_crosses_separators() {
         assert!(matches("src/**.c", "src/a.c"));
         assert!(matches("src/**.c", "src/sub/deep/a.c"));
         assert!(!matches("src/**.c", "other/a.c"));
     }
 
     #[test]
-    fn 疑問符は1文字() {
+    fn a_question_mark_matches_one_character() {
         assert!(matches("a?.c", "ab.c"));
         assert!(!matches("a?.c", "abc.c"));
         assert!(!matches("a?.c", "a/.c"));
     }
 
     #[test]
-    fn 星のみは全てに一致する() {
+    fn a_bare_star_pattern() {
         assert!(matches("**", "a/b/c.c"));
         assert!(matches("*", "a.c"));
         assert!(!matches("*", "a/b.c"));
     }
 
     #[test]
-    fn 一致しない末尾を正しく落とす() {
+    fn rejects_a_non_matching_suffix() {
         assert!(!matches("src/*.c", "src/a.cpp"));
         assert!(!matches("*.c", ""));
     }

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "アクショングラフ、ninja 生成、compile_commands.json、実行。"
+description = "Action graph, ninja generation, compile_commands.json, and execution."
 
 [dependencies]
 dowel-support.workspace = true

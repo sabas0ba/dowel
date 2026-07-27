@@ -31,8 +31,8 @@ impl JsonWriter {
     }
 
     pub fn finish(self) -> String {
-        debug_assert!(self.stack.is_empty(), "閉じられていない JSON の入れ子がある");
-        debug_assert!(!self.pending_key, "値の書かれていないキーがある");
+        debug_assert!(self.stack.is_empty(), "unclosed JSON nesting");
+        debug_assert!(!self.pending_key, "key written without a value");
         self.buf
     }
 
@@ -187,7 +187,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 入れ子と区切りが正しく出る() {
+    fn nesting_and_separators() {
         let mut w = JsonWriter::new();
         w.begin_object();
         w.field_str("name", "foo");
@@ -203,14 +203,14 @@ mod tests {
     }
 
     #[test]
-    fn 制御文字と引用符をエスケープする() {
+    fn escapes_control_characters_and_quotes() {
         let mut w = JsonWriter::new();
         w.str("a\"b\\c\nd\u{1}e");
         assert_eq!(w.finish(), r#""a\"b\\c\nd\u0001e""#);
     }
 
     #[test]
-    fn 空の配列とオブジェクト() {
+    fn empty_array_and_object() {
         let mut w = JsonWriter::new();
         w.begin_object();
         w.key("a").begin_array();
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn pretty_は改行と字下げを入れる() {
+    fn pretty_inserts_newlines_and_indentation() {
         let mut w = JsonWriter::pretty();
         w.begin_object();
         w.field_str("k", "v");

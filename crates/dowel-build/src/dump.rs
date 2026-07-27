@@ -12,19 +12,19 @@ use std::path::Path;
 
 pub fn text(sess: &Session, plan: &Plan) -> String {
     let mut out = String::new();
-    out.push_str(&format!("ビルドディレクトリ: {}\n\n", plan.build_dir.display()));
+    out.push_str(&format!("build directory: {}\n\n", plan.build_dir.display()));
     for a in &plan.actions {
         out.push_str(&format!("[{}] {} ({})\n", a.id.0, a.description, sess.label(a.target)));
         for i in &a.inputs {
-            out.push_str(&format!("  入力 {}\n", rel(&plan.build_dir, i)));
+            out.push_str(&format!("  in  {}\n", rel(&plan.build_dir, i)));
         }
         for o in &a.outputs {
-            out.push_str(&format!("  出力 {}\n", rel(&plan.build_dir, o)));
+            out.push_str(&format!("  out {}\n", rel(&plan.build_dir, o)));
         }
         out.push_str(&format!("  $ {}\n\n", a.command_line()));
     }
     if plan.actions.is_empty() {
-        out.push_str("（アクションがない）\n");
+        out.push_str("(no actions)\n");
     }
     out
 }

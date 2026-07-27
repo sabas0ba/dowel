@@ -6,6 +6,7 @@
 
 use crate::config::{CfgValue, Config};
 use crate::value::{Data, Origin, Pattern, Pred, Value};
+use dowel_support::log_trace;
 
 /// 構成を与えて条件を解決する。
 ///
@@ -14,6 +15,7 @@ pub fn specialize(value: &Value, cfg: &Config) -> Option<Value> {
     match &value.data {
         Data::When { pred, inner } => {
             if !eval_pred(pred, cfg) {
+                log_trace!("  when {} is false, dropping {}", pred.display(), inner.display());
                 return None;
             }
             let inner = specialize(inner, cfg)?;
@@ -30,6 +32,11 @@ pub fn specialize(value: &Value, cfg: &Config) -> Option<Value> {
                 .iter()
                 .find(|a| matches!(&a.pattern, Pattern::Value(v) if *v == actual))
                 .or_else(|| arms.iter().find(|a| a.pattern == Pattern::Wildcard))?;
+            log_trace!(
+                "  match {} == {actual:?} -> arm {}",
+                scrutinee.display(),
+                arm.pattern.display()
+            );
             let chosen = specialize(&arm.value, cfg)?;
             Some(Value {
                 ty: chosen.ty.clone(),
@@ -80,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn match_は構成でアームを選ぶ() {
+    fn match_selects_an_arm_from_the_configuration() {
         let v = Value {
             ty: Type::Cfg(Box::new(Type::Str)),
             data: Data::Match {
@@ -110,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn 成立しない_when_は列から消える() {
+    fn a_false_when_drops_the_element() {
         let cond = Value {
             ty: Type::Cfg(Box::new(Type::Str)),
             data: Data::When {
@@ -132,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn 具体化した値は条件を含まない() {
+    fn specialized_values_carry_no_conditions() {
         let cond = Value {
             ty: Type::Cfg(Box::new(Type::Str)),
             data: Data::When {

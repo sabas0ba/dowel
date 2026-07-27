@@ -21,7 +21,7 @@ impl Scratch {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = workspace_target().join("test-scratch").join(format!("{name}-{n}"));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("一時ディレクトリを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the scratch directory");
         Scratch { root }
     }
 
@@ -29,9 +29,9 @@ impl Scratch {
     pub fn write(&self, rel: &str, contents: &str) -> PathBuf {
         let path = self.root.join(rel);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("親ディレクトリを作れない");
+            std::fs::create_dir_all(parent).expect("cannot create the parent directory");
         }
-        std::fs::write(&path, contents).expect("書き込めない");
+        std::fs::write(&path, contents).expect("cannot write the file");
         path
     }
 
