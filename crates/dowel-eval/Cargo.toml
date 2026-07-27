@@ -1,0 +1,12 @@
+[package]
+name = "dowel-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "型つき値と来歴、式評価、スキーマと併合意味論、構成による具体化。"
+
+[dependencies]
+dowel-support.workspace = true
+dowel-syntax.workspace = true

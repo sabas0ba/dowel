@@ -91,6 +91,18 @@ impl<'a> Parser<'a> {
         self.nth(n) == TokenKind::Ident && self.nth_text(n) == kw
     }
 
+    /// 次の些末部でないトークンまでの間に改行があるか。
+    ///
+    /// 後置 `when` の判定に要る。改行を跨いで拾うと、次の行のキーが
+    /// たまたま `when` だった場合（`dowel.toml` の条件付き依存がまさにそれ）に
+    /// 前の行の値へ吸い込まれる。
+    fn newline_before_next(&self) -> bool {
+        self.tokens[self.pos..]
+            .iter()
+            .take_while(|t| t.kind.is_trivia())
+            .any(|t| t.kind == TokenKind::Newline)
+    }
+
     /// 些末部を木へ積みながら読み飛ばす。改行を跨いだ場合に `true`。
     fn skip_trivia(&mut self) -> bool {
         let mut saw_newline = false;
@@ -277,7 +289,7 @@ impl<'a> Parser<'a> {
         self.skip_trivia();
         let cp = self.builder.checkpoint();
         self.expr();
-        if self.at_keyword(0, "when") {
+        if !self.newline_before_next() && self.at_keyword(0, "when") {
             self.builder.start_node_at(cp, NodeKind::WhenExpr);
             self.when_clause();
             self.builder.finish_node();
@@ -584,6 +596,18 @@ mod tests {
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         let kv = parsed.root.child(NodeKind::KeyValue).unwrap();
         assert!(kv.child(NodeKind::WhenExpr).is_some(), "{}", parsed.root.debug_tree(src));
+        assert_lossless(src);
+    }
+
+    #[test]
+    fn 後置の_when_は改行を跨がない() {
+        // 次の行のキーが `when` である場合（dowel.toml の条件付き依存）に、
+        // 前の行の値へ吸い込まれてはならない。
+        let src = "version = \"0.2\"\nwhen    = { os = \"windows\" }\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_eq!(parsed.root.children_of(NodeKind::KeyValue).count(), 2);
+        assert!(parsed.root.child(NodeKind::WhenExpr).is_none());
         assert_lossless(src);
     }
 

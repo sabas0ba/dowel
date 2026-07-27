@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/dowel-support", "crates/dowel-syntax"]
+members = ["crates/dowel-support", "crates/dowel-syntax", "crates/dowel-eval"]
 
 [workspace.package]
 version = "0.0.1"
