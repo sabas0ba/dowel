@@ -31,6 +31,12 @@ dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
 DOWEL_LOG=trace dowel build   # 依存グラフと各アクションのコマンドをログに出す
 ```
 
+検証はひとつの入口にまとめてある。ローカルでも CI でも同じものが走る。
+
+```sh
+make verify      # 全段階を実行し、結果を .work/verify/ に残す
+```
+
 実装状況と計測結果は
 [docs/91-implementation-status.md](docs/91-implementation-status.md) を参照。
 

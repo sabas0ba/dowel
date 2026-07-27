@@ -1,0 +1,74 @@
+# 検証。ローカルと同じ入口（scripts/verify.sh）をそのまま実行する。
+#
+# docs/50-development.md 3節は「CI は dotfiles から構築した --network none の
+# コンテナ内で検査を実行する」としている。本ワークフローはその形になっていない。
+# dotfiles 側の flake をこのリポジトリの CI から評価する経路が未整備であるため、
+# 当面は GitHub の実行機で同じ入口を叩く形にしてある。
+#
+# 検査の内容そのものは scripts/verify.sh に一本化してあるので、
+# 実行環境をコンテナへ移す際にこのファイルの中身は入れ替わるだけで済む。
+#
+# 外部アクションはコミットへ固定する（docs/50-development.md 5節、
+# 「タグやブランチ名のみによる参照は固定とみなさない」）。
+
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# 同じ枝に新しい押し込みが来たら、走っている実行を止める。
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: ツールチェーンの確認
+        run: |
+          rustup component add rustfmt clippy
+          rustc --version
+          cargo --version
+          cc --version | head -1
+
+      - name: ninja の導入
+        # e2e は ninja が無ければ direct 実行器へ落ちる。
+        # 既定の経路（ninja）を実際に通すために入れる。
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ninja-build
+          ninja --version
+
+      - name: 検証
+        run: make verify
+
+      - name: 要約
+        if: always()
+        run: |
+          if [ -f .work/verify/summary.md ]; then
+            cat .work/verify/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '検証の要約が生成されなかった。ログを参照する。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 結果の保存
+        # 失敗した実行の結果こそ残す価値がある。
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verify-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .work/verify/
+          retention-days: 30
+          if-no-files-found: warn

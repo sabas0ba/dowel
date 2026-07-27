@@ -115,15 +115,43 @@ dowel check --log-format=json    # 1行1オブジェクト
   `match` のアーム、CLI のオプションとコマンド）
 - 段階ごとの所要時間、依存グラフの辺、アクションのコマンド列をログに出す
 
+## 検証
+
+入口は1つ。ローカルでも CI でも同じものを実行する。
+
+```sh
+make verify      # 全段階を実行し、結果を .work/verify/ に残す
+```
+
+途中で失敗しても止まらず、最後まで進んでから落ちる。結果は
+`summary.md`（人間と GitHub の要約向け）、`results.json`（機械可読）、
+`logs/<段階>.log` に残る。CI（`.github/workflows/verify.yml`）はこれを
+成果物として保存し、要約をジョブのサマリに出す。詳細は
+[50-development.md](50-development.md) 3.1 節。
+
+現在の内訳（テスト 140 件）。
+
+| 段階 | 内容 | 件数 |
+|---|---|---|
+| `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
+| `unit-*` | クレートごとの単体テスト | 106 |
+| `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
+| `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
+| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 17 |
+| `example` | `examples/hello` の現物をビルド | 2 |
+| `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
+
 ## 計測
 
 起動時間の予算は無操作時 10ms 以下（docs/20-architecture.md 5.4）。
 リリースビルド、2パッケージ・2ターゲットの構成、20回の最小値／中央値。
+`make measure` で単独に取れる。
 
 | 実行 | 最小 | 中央 |
 |---|---|---|
-| `dowel --version` | 1.2ms | 1.4ms |
-| `dowel check` | 1.5ms | 1.7ms |
+| `dowel --version` | 1.2ms | 1.5ms |
+| `dowel check` | 1.4ms | 1.6ms |
+| `dowel graph --format=json` | 1.4ms | 1.6ms |
 
 バイナリ 1.0MB、動的リンクは libc 等 4 件。現時点では予算内にある。
 増分エンジンと永続化ストアを入れた後に再測する。
@@ -151,3 +179,4 @@ dowel check --log-format=json    # 1行1オブジェクト
 | [10-manifest.md](10-manifest.md) 3節 | `includes` は「トポロジカル順」 | 自分が先、依存が後 | インクルード探索でもリンク順でも依存元が先に来るのが期待される挙動。トポロジカル順の向きを実装で確定させた |
 | 型 | `defines : Map<Ident, Val>` | `Val` を型として実装 | 文書の記法をそのまま型にした |
 | `abi` | ABI ラベルは算出される | 現状は文字列で手書き | 算出は Phase 6。`must_equal` の経路だけ先に通してある |
+| [50-development.md](50-development.md) 3節 | CI は dotfiles から構築した `--network none` のコンテナ内 | GitHub Actions の実行機 | dotfiles の flake を本リポジトリの CI から評価する経路が未整備。検査の定義は `scripts/verify.sh` に一本化してあるため、実行環境を移す際にワークフローの中身が入れ替わるだけで済む |
