@@ -1,0 +1,12 @@
+[package]
+name = "dowel-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Typed values with provenance, expression evaluation, schema and merge semantics, configuration specialization."
+
+[dependencies]
+dowel-support.workspace = true
+dowel-syntax.workspace = true

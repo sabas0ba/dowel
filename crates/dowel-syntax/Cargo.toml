@@ -1,0 +1,11 @@
+[package]
+name = "dowel-syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lexer and lossless CST for dowel.build / dowel.toml, with error recovery."
+
+[dependencies]
+dowel-support.workspace = true

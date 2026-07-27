@@ -1,0 +1,13 @@
+# 一時ファイル置き場
+.work/
+
+# direnv
+.direnv/
+.envrc.local
+
+# Rust
+/target/
+
+# 本システム自身が生成するもの
+.dowel/
+compile_commands.json

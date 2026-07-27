@@ -1,0 +1,14 @@
+# 静的ライブラリ。公開ヘッダと非公開ヘッダを分けてある。
+
+[lib.greet]
+sources = glob("src/**.c")
+
+[lib.greet.public]
+# 依存元へ伝播する。app のコンパイルにも効く
+includes = [dir("include")]
+defines  = { GREET_API = 1 }
+
+[lib.greet.private]
+# 自分のコンパイルにのみ効く。app からは見えない
+includes = [dir("src")]
+flags    = ["-Wall", "-Wextra"]
