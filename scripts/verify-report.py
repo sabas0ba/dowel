@@ -13,9 +13,6 @@ import json
 import os
 import sys
 
-STATE_MARK = {"ok": "✅", "failed": "❌", "warn": "⚠️", "skipped": "—"}
-
-
 def read_records(path):
     rows = []
     with open(path, encoding="utf-8") as f:
@@ -62,16 +59,16 @@ def render_markdown(rows, startup, ok):
         )
     )
     out.append("")
-    out.append("| | Step | Result | Passed | Failed | Time |")
-    out.append("|---|---|---|---:|---:|---:|")
+    out.append("| Step | Result | Passed | Failed | Time |")
+    out.append("|---|---|---:|---:|---:|")
     for r in rows:
         note = "" if r["gating"] else " (advisory)"
+        # 状態は `Result` 列の語がそのまま示す。記号の列は情報を増やさない。
         out.append(
-            "| {} | `{}`{} | {} | {} | {} | {}ms |".format(
-                STATE_MARK.get(r["state"], "?"),
+            "| `{}`{} | {} | {} | {} | {}ms |".format(
                 r["name"],
                 note,
-                r["state"],
+                r["state"].upper() if r["state"] == "failed" else r["state"],
                 r["passed"],
                 r["failed"],
                 r["duration_ms"],
