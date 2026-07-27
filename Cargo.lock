@@ -11,6 +11,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dowel-model"
+version = "0.0.1"
+dependencies = [
+ "dowel-eval",
+ "dowel-support",
+ "dowel-syntax",
+]
+
+[[package]]
 name = "dowel-support"
 version = "0.0.1"
 

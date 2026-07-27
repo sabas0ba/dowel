@@ -23,8 +23,12 @@ pub enum Type {
     DepRef,
     /// `target("foo")` — 同一パッケージ内のターゲットへの参照
     TargetRef,
-    /// ABI ラベル。`must_equal` で検証される
+    /// ABI ラベル。`must_equal` で検証される。
+    /// 現時点では文字列で書く。算出は Phase 6（docs/90-roadmap.md）
     AbiLabel,
+    /// スカラ値（`Str` / `Int` / `Bool` のいずれか）。
+    /// `defines` のように「値の種類を問わない」プロパティのための型
+    Val,
     List(Box<Type>),
     Set(Box<Type>),
     Map(Box<Type>),
@@ -46,6 +50,7 @@ impl Type {
             Type::DepRef => "DepRef".into(),
             Type::TargetRef => "TargetRef".into(),
             Type::AbiLabel => "AbiLabel".into(),
+            Type::Val => "Val".into(),
             Type::List(t) => format!("List<{}>", t.display()),
             Type::Set(t) => format!("Set<{}>", t.display()),
             Type::Map(t) => format!("Map<Ident, {}>", t.display()),
@@ -77,6 +82,10 @@ impl Type {
         }
         match (self, other) {
             (Type::Cfg(a), b) => a.accepts(b),
+            // ABI ラベルは現状スカラ文字列として書く。
+            (Type::AbiLabel, Type::Str) => true,
+            // Val はスカラを受ける。
+            (Type::Val, Type::Str | Type::Int | Type::Bool | Type::Val) => true,
             (a, Type::Cfg(b)) => a.accepts(b),
             (Type::List(a), Type::List(b)) | (Type::Set(a), Type::Set(b)) => a.accepts(b),
             (Type::Set(a), Type::List(b)) | (Type::List(a), Type::Set(b)) => a.accepts(b),
@@ -476,6 +485,8 @@ mod tests {
         assert!(Type::List(Box::new(Type::Path)).accepts(&Type::List(Box::new(Type::Path))));
         assert!(Type::Set(Box::new(Type::Path)).accepts(&Type::List(Box::new(Type::Path))));
         assert!(!Type::Path.accepts(&Type::Str), "パスは文字列から作らない");
+        assert!(Type::Map(Box::new(Type::Val)).accepts(&Type::Map(Box::new(Type::Int))));
+        assert!(Type::AbiLabel.accepts(&Type::Str));
         assert!(Type::Path.accepts(&Type::Unknown), "誤りは伝播させない");
         assert!(Type::List(Box::new(Type::Str))
             .accepts(&Type::Cfg(Box::new(Type::List(Box::new(Type::Str))))));

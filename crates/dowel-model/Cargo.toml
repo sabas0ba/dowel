@@ -1,0 +1,13 @@
+[package]
+name = "dowel-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "パッケージ読み込み、ターゲットと依存グラフ、インタフェース併合、来歴の表示。"
+
+[dependencies]
+dowel-support.workspace = true
+dowel-syntax.workspace = true
+dowel-eval.workspace = true

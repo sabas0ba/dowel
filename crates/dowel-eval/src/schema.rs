@@ -164,7 +164,7 @@ pub fn block_props() -> Vec<PropDef> {
         },
         PropDef {
             name: "defines",
-            ty: Type::Map(Box::new(Type::Str)),
+            ty: Type::Map(Box::new(Type::Val)),
             merge: Merge::ErrorOnConflict,
             doc: "プリプロセッサ定義。異なる値が到達したら失敗する",
         },
@@ -380,7 +380,7 @@ mod tests {
                 },
             );
         }
-        Value { ty: Type::Map(Box::new(Type::Str)), data: Data::Map(m), prov: Prov::none() }
+        Value { ty: Type::Map(Box::new(Type::Val)), data: Data::Map(m), prov: Prov::none() }
     }
 
     #[test]
