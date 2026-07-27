@@ -96,6 +96,11 @@ fn run_ninja(plan: &Plan, jobs: Option<usize>) -> Result<(), Failure> {
     })?;
 
     let mut cmd = Command::new("ninja");
+    // ninja をビルドディレクトリで起動する。`.ninja_log` と `.ninja_deps` は
+    // ninja の作業ディレクトリに書かれるため、ここを指定しないと利用者の
+    // プロジェクトルートに散らかる。ninja ファイル内のパスは全て絶対であり、
+    // 作業ディレクトリを変えても解決結果は変わらない。
+    cmd.current_dir(&plan.build_dir);
     cmd.arg("-f").arg(&file);
     if let Some(j) = jobs {
         cmd.arg("-j").arg(j.to_string());

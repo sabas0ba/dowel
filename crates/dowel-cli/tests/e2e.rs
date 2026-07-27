@@ -179,6 +179,32 @@ fn writes_compile_commands() {
 }
 
 #[test]
+fn the_build_leaves_no_stray_files_in_the_project() {
+    let p = two_package_project("no-stray-files");
+    p.run("app", &["build"]).success();
+
+    // ninja の作業ファイルはビルドディレクトリに閉じ込める。
+    // 利用者のプロジェクトへ勝手に物を置かない。
+    for stray in [".ninja_log", ".ninja_deps", "build.ninja"] {
+        assert!(!p.path("app").join(stray).exists(), "`{stray}` was left in the project root");
+        assert!(!p.path("libfoo").join(stray).exists(), "`{stray}` was left in libfoo");
+    }
+    // ビルドディレクトリの側にはある。
+    let bd = build_dir(&p.path("app"), "debug");
+    assert!(bd.join("build.ninja").exists());
+    assert!(bd.join(".ninja_log").exists(), "ninja did not write its log into the build dir");
+
+    // 意図して置くのは compile_commands.json だけ（clangd がここしか見ないため）。
+    let entries: Vec<String> = std::fs::read_dir(p.path("app"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != "src" && n != "dowel.toml" && n != "dowel.build" && n != ".dowel")
+        .collect();
+    assert_eq!(entries, vec!["compile_commands.json".to_string()], "unexpected files: {entries:?}");
+}
+
+#[test]
 fn feature_flags_switch_dependencies_and_defines() {
     let p = Project::new("features");
     p.write("libz/dowel.toml", "[package]\nname = \"libz\"\nversion = \"0\"\n");
