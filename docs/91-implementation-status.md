@@ -179,4 +179,4 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | [10-manifest.md](10-manifest.md) 3節 | `includes` は「トポロジカル順」 | 自分が先、依存が後 | インクルード探索でもリンク順でも依存元が先に来るのが期待される挙動。トポロジカル順の向きを実装で確定させた |
 | 型 | `defines : Map<Ident, Val>` | `Val` を型として実装 | 文書の記法をそのまま型にした |
 | `abi` | ABI ラベルは算出される | 現状は文字列で手書き | 算出は Phase 6。`must_equal` の経路だけ先に通してある |
-| [50-development.md](50-development.md) 3節 | CI は dotfiles から構築した `--network none` のコンテナ内 | GitHub Actions の実行機 | dotfiles の flake を本リポジトリの CI から評価する経路が未整備。検査の定義は `scripts/verify.sh` に一本化してあるため、実行環境を移す際にワークフローの中身が入れ替わるだけで済む |
+| [50-development.md](50-development.md) 3節 | CI は dotfiles から構築した `--network none` のコンテナ内 | GitHub Actions の実行機（当面はこのままとする） | dotfiles の flake を本リポジトリの CI から評価する経路が未整備であり、現時点で手を入れる必要はないと判断した。検査の定義は `scripts/verify.sh` に一本化してあるため、移行が要るようになった際はワークフローの中身が入れ替わるだけで済む |
