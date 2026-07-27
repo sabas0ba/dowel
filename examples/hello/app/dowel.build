@@ -1,0 +1,9 @@
+[bin.app]
+sources = glob("src/*.c")
+
+[bin.app.private]
+deps  = [dep("libgreet")]
+flags = match cfg.opt {
+    debug   => ["-DAPP_OPT=0"],
+    release => ["-DAPP_OPT=1"],
+}

@@ -3,6 +3,10 @@
 //! リポジトリ外（`/tmp` 等）には作らない（docs/50-development.md 5節）。
 //! `target/` 配下は git ignore 済みであり、`cargo clean` で消える。
 
+#![allow(dead_code)]
+// テストバイナリごとに別々にコンパイルされるため、
+// 一部のバイナリからしか使わない補助は未使用に見える。
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

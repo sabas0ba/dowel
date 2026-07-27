@@ -47,6 +47,10 @@ dowel check --log-format=json    # 1行1オブジェクト
 **stderr は進行とログ**。したがって `dowel graph --format=dot | dot -Tsvg` は
 ログ水準に関わらず動く。
 
+動く例は [`examples/hello`](../examples/hello) にある。
+`crates/dowel-cli/tests/example.rs` が現物をビルドして検査しているため、
+構文や意味論を変えた際の更新漏れは検出される。
+
 ## クレート構成
 
 | クレート | 責務 |

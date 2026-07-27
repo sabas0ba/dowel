@@ -1,5 +1,9 @@
 //! e2e テスト用の一時プロジェクトと `dowel` の起動。
 
+#![allow(dead_code)]
+// テストバイナリごとに別々にコンパイルされるため、
+// 一部のバイナリからしか使わない補助は未使用に見える。
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
