@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/dowel-support",
     "crates/dowel-syntax",
+    "crates/dowel-query",
     "crates/dowel-eval",
     "crates/dowel-model",
     "crates/dowel-build",
@@ -19,6 +20,7 @@ repository = "https://github.com/sabas0ba/dowel"
 [workspace.dependencies]
 dowel-support = { path = "crates/dowel-support" }
 dowel-syntax = { path = "crates/dowel-syntax" }
+dowel-query = { path = "crates/dowel-query" }
 dowel-eval = { path = "crates/dowel-eval" }
 dowel-model = { path = "crates/dowel-model" }
 dowel-build = { path = "crates/dowel-build" }

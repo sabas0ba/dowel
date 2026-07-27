@@ -1,0 +1,11 @@
+[package]
+name = "dowel-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Memoized query engine with dependency tracking, early cutoff, durability tiers and cancellation."
+
+[dependencies]
+dowel-support.workspace = true
