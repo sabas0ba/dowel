@@ -1,0 +1,11 @@
+[package]
+name = "dowel-syntax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "dowel.build / dowel.toml の字句解析とロスレス CST。誤り耐性を持つ。"
+
+[dependencies]
+dowel-support.workspace = true
