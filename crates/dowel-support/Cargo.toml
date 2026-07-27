@@ -1,0 +1,10 @@
+[package]
+name = "dowel-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "スパン、ソースマップ、診断、構造化ログ、JSON 出力。標準ライブラリのみに依存する。"
+
+[dependencies]

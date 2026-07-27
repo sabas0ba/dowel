@@ -1,0 +1,4 @@
+# 整形は手作業ではなく `make fmt` で行う（docs/50-development.md 5節）。
+max_width = 100
+use_small_heuristics = "Max"
+newline_style = "Unix"

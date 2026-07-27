@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["crates/dowel-support"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/sabas0ba/dowel"
+
+[workspace.dependencies]
+dowel-support = { path = "crates/dowel-support" }
+dowel-syntax = { path = "crates/dowel-syntax" }
+dowel-eval = { path = "crates/dowel-eval" }
+dowel-model = { path = "crates/dowel-model" }
+dowel-build = { path = "crates/dowel-build" }
+
+# 起動時間の予算（無操作時 10ms 以下、docs/20-architecture.md 5.4）は
+# リリースビルドの構成に依存する。動的リンクを増やさないため LTO を有効にする。
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
