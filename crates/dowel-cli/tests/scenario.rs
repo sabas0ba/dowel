@@ -1,0 +1,288 @@
+//! シナリオ。**時間をまたぐ操作列**に対する振る舞い。
+//!
+//! e2e が「1回の実行が正しいか」を見るのに対し、ここは
+//! 「編集して、また実行して、また編集して」という実際の使われ方を見る。
+//! ビルドシステムの価値の大半は2回目以降の実行にあり、そこは
+//! 単発の実行をいくら並べても検査できない。
+//!
+//! 観測は `--executor=direct --log-level=debug` の判定理由による。
+//! 成果物の更新時刻を見る方法もあるが、時刻の分解能に依存し、
+//! 「なぜ再実行したか」が残らない。
+//!
+//! 設計は [`docs/51-testing.md`](../../../docs/51-testing.md) にある。
+
+mod common;
+
+use common::{build_dir, run_artifact, Project};
+
+/// ライブラリ1つと、それを使う実行ファイル1つ。
+///
+/// シナリオは操作列そのものが検査対象なので、プロジェクトは最小にする。
+/// 形の複雑さは実物フィクスチャ（`tests/projects/`）の担当である。
+fn project(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("libfoo/dowel.toml", "[package]\nname    = \"libfoo\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "libfoo/dowel.build",
+        r#"
+[lib.foo]
+sources = glob("src/*.c")
+
+[lib.foo.public]
+includes = [dir("include")]
+
+[lib.foo.private]
+flags = ["-Wall"]
+
+[test.foo_test]
+sources = glob("tests/*.c")
+
+[test.foo_test.private]
+deps = [target("foo")]
+"#,
+    );
+    p.write("libfoo/include/foo.h", "#pragma once\nint foo_one(void);\nint foo_two(void);\n");
+    p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return 1; }\n");
+    p.write("libfoo/src/two.c", "#include \"foo.h\"\nint foo_two(void) { return 2; }\n");
+    p.write(
+        "libfoo/tests/foo_test.c",
+        "#include \"foo.h\"\nint main(void) { return foo_one() + foo_two() == 3 ? 0 : 1; }\n",
+    );
+
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n\
+         [[dependencies]]\nname = \"libfoo\"\npath = \"../libfoo\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"libfoo\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"foo.h\"\n\
+         int main(void) { printf(\"%d\\n\", foo_one() + foo_two()); return 0; }\n",
+    );
+    p
+}
+
+/// ビルドして、走ったコンパイル動作の記述を集める。
+fn rebuild(p: &Project) -> Vec<String> {
+    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
+    r.success();
+    r.stderr
+        .lines()
+        .filter(|l| l.contains("CC ") || l.contains("AR ") || l.contains("LINK "))
+        .filter(|l| !l.contains("up to date"))
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+fn ran_nothing(p: &Project) {
+    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
+    r.success().stderr_contains("ran 0 actions");
+}
+
+#[test]
+fn editing_one_source_recompiles_only_that_object() {
+    let p = project("scenario-edit-one");
+    p.run("app", &["build", "--executor=direct"]).success();
+    ran_nothing(&p);
+
+    p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return 10; }\n");
+    let ran = rebuild(&p);
+
+    let recompiled: Vec<&String> = ran.iter().filter(|l| l.contains("CC ")).collect();
+    assert_eq!(recompiled.len(), 1, "expected exactly one recompile, got {ran:?}");
+    assert!(recompiled[0].contains("one.c"), "{ran:?}");
+    // 下流は作り直される。ライブラリと、それを使う実行ファイルの双方。
+    assert!(ran.iter().any(|l| l.contains("AR ")), "the archive was not rebuilt: {ran:?}");
+    assert!(ran.iter().any(|l| l.contains("LINK ")), "the binary was not relinked: {ran:?}");
+
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "12\n");
+}
+
+#[test]
+fn touching_a_public_header_recompiles_everything_that_includes_it() {
+    let p = project("scenario-header");
+    p.run("app", &["build", "--executor=direct"]).success();
+
+    // 中身を変える。depfile を読めていなければ何も起きない。
+    p.write(
+        "libfoo/include/foo.h",
+        "#pragma once\n/* touched */\nint foo_one(void);\nint foo_two(void);\n",
+    );
+    let ran = rebuild(&p);
+
+    // ライブラリの2つのソースと、app の main.c。テストも含む。
+    for source in ["one.c", "two.c", "main.c"] {
+        assert!(
+            ran.iter().any(|l| l.contains(source)),
+            "`{source}` includes the header but was not recompiled: {ran:?}"
+        );
+    }
+}
+
+#[test]
+fn adding_a_source_file_is_picked_up_without_touching_the_manifest() {
+    // `glob` の展開は評価ではなく plan で行う。ここが逆だと、
+    // 「ファイルを足したのにビルドに入らない」という最も苛立たしい失敗になる。
+    let p = project("scenario-add-source");
+    p.run("app", &["build", "--executor=direct"]).success();
+
+    p.write(
+        "libfoo/include/foo.h",
+        "#pragma once\nint foo_one(void);\nint foo_two(void);\nint foo_three(void);\n",
+    );
+    p.write("libfoo/src/three.c", "#include \"foo.h\"\nint foo_three(void) { return 3; }\n");
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"foo.h\"\n\
+         int main(void) { printf(\"%d\\n\", foo_one() + foo_two() + foo_three()); return 0; }\n",
+    );
+
+    let ran = rebuild(&p);
+    assert!(ran.iter().any(|l| l.contains("three.c")), "the new source was not built: {ran:?}");
+
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "6\n");
+}
+
+#[test]
+fn removing_a_source_file_drops_it_from_the_build() {
+    let p = project("scenario-remove-source");
+    p.run("app", &["build", "--executor=direct"]).success();
+
+    std::fs::remove_file(p.path("libfoo/src/two.c")).expect("cannot remove the source");
+    p.write("libfoo/include/foo.h", "#pragma once\nint foo_one(void);\n");
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"foo.h\"\n\
+         int main(void) { printf(\"%d\\n\", foo_one()); return 0; }\n",
+    );
+
+    p.run("app", &["build", "--executor=direct"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "1\n");
+
+    // 消えたソースは計画から外れる。
+    let r = p.run("app", &["graph", "--kind=action"]);
+    r.success();
+    assert!(!r.stdout.contains("two.c"), "the removed source is still in the action graph");
+}
+
+#[test]
+fn changing_a_flag_in_the_manifest_recompiles_the_target() {
+    let p = project("scenario-flag");
+    p.run("app", &["build", "--executor=direct"]).success();
+
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.private]\ndeps  = [dep(\"libfoo\")]\nflags = [\"-DEXTRA=1\"]\n",
+    );
+    let ran = rebuild(&p);
+    assert!(ran.iter().any(|l| l.contains("main.c")), "the flag change did not rebuild: {ran:?}");
+}
+
+#[test]
+fn switching_configuration_leaves_the_other_one_intact() {
+    let p = project("scenario-config");
+    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--executor=direct", "--config=release"]).success();
+
+    // 構成ごとにビルドディレクトリが分かれているため、
+    // 往復しても互いを作り直さない。
+    p.run("app", &["build", "--executor=direct", "--log-level=debug"])
+        .success()
+        .stderr_contains("ran 0 actions");
+    p.run("app", &["build", "--executor=direct", "--config=release", "--log-level=debug"])
+        .success()
+        .stderr_contains("ran 0 actions");
+
+    for opt in ["debug", "release"] {
+        let bin = build_dir(&p.path("app"), opt).join("bin/app");
+        assert_eq!(run_artifact(&bin), "3\n", "the {opt} artifact is wrong");
+    }
+}
+
+#[test]
+fn a_broken_edit_fails_and_the_fix_restores_the_build() {
+    // 直したあとに「前回の失敗が残っていて通らない」という状態にならないこと。
+    let p = project("scenario-break-and-fix");
+    p.run("app", &["build", "--executor=direct"]).success();
+
+    p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return nope; }\n");
+    p.run("app", &["build", "--executor=direct"]).failure().stderr_contains("nope");
+
+    p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return 1; }\n");
+    p.run("app", &["build", "--executor=direct"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "3\n");
+}
+
+#[test]
+fn a_syntax_error_in_the_manifest_does_not_destroy_the_previous_build() {
+    let p = project("scenario-broken-manifest");
+    p.run("app", &["build", "--executor=direct"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "3\n");
+
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\"\n");
+    p.run("app", &["build"]).failure();
+    // 前回の成果物は残っている。壊れた編集が既にあるものを壊さないこと。
+    assert_eq!(run_artifact(&bin), "3\n");
+}
+
+#[test]
+fn the_failed_test_workflow_narrows_and_then_clears() {
+    // 「落ちる → `--failed` で絞る → 直す → 判定が消える」という一連の流れ。
+    let p = project("scenario-failed");
+    p.write("libfoo/tests/foo_test.c", "int main(void) { return 1; }\n");
+
+    let r = p.run("libfoo", &["test"]);
+    r.failure().stderr_contains("test libfoo:foo_test ... FAILED");
+
+    // 直す前は `--failed` が拾う。
+    let r = p.run("libfoo", &["test", "--failed"]);
+    r.failure().stderr_contains("test libfoo:foo_test ... FAILED");
+
+    p.write("libfoo/tests/foo_test.c", "int main(void) { return 0; }\n");
+    p.run("libfoo", &["test"]).success();
+
+    // 通ったので、もう `--failed` の対象ではない。
+    let r = p.run("libfoo", &["test", "--failed"]);
+    r.success();
+    assert!(
+        !r.stderr.contains("foo_test ... FAILED"),
+        "a fixed test is still listed as failed\n{r}"
+    );
+}
+
+#[test]
+fn a_second_run_of_check_reports_the_same_diagnostics() {
+    // 増分のメモが効いても診断は消えない。プロセスを跨いだ再実行でも同じ。
+    let p = project("scenario-repeat-check");
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\nnosuchprop = 1\n");
+
+    let first = p.run("app", &["check", "--message-format=json"]);
+    first.failure();
+    let second = p.run("app", &["check", "--message-format=json"]);
+    second.failure();
+    assert_eq!(first.stdout, second.stdout, "diagnostics differ between two identical runs");
+}
+
+#[test]
+fn the_generated_ninja_file_is_stable_across_runs() {
+    // 生成が決定的であること。差分が出るとビルドが不必要に走り、
+    // 内容を版管理に入れる利用者の環境で無関係な差分が出る。
+    let p = project("scenario-deterministic");
+    p.run("app", &["build"]).success();
+    let path = build_dir(&p.path("app"), "debug").join("build.ninja");
+    let first = std::fs::read_to_string(&path).expect("cannot read build.ninja");
+
+    p.run("app", &["build"]).success();
+    let second = std::fs::read_to_string(&path).expect("cannot read build.ninja");
+    assert_eq!(first, second, "the generated ninja file is not deterministic");
+}

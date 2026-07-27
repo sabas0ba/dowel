@@ -80,10 +80,97 @@ pub fn write_ninja_file(plan: &Plan) -> std::io::Result<PathBuf> {
 
 pub fn run(plan: &Plan, executor: Executor, jobs: Option<usize>) -> Result<(), Failure> {
     let _phase = dowel_support::log::Phase::start("execute");
-    match executor {
+    let result = match executor {
         Executor::Ninja => run_ninja(plan, jobs),
         Executor::Direct => run_direct(plan),
+    };
+    if result.is_ok() {
+        // 成功した実行の全アクションを記録する。実行器を跨いでも
+        // 「今ある成果物はどのコマンドで作られたか」が一貫する。
+        // 途中で失敗した場合は書かない。作り直せたものまで最新扱いされると、
+        // 次の実行が古い成果物を残したまま通ってしまう。
+        CommandLog::of(plan).save(&plan.build_dir);
     }
+    result
+}
+
+/// 直前の実行で各出力を作ったコマンド。
+///
+/// 更新時刻の比較だけでは、フラグを変えただけの再ビルドを取りこぼす。
+/// ソースもヘッダも変わっておらず、時刻も動かないためである。結果は
+/// 「古いフラグで作られた成果物」であり、しかも成功として報告される。
+/// ninja は同じ問題を `.ninja_log` のコマンドハッシュで解いており、
+/// direct 実行器にも同じものが要る。
+///
+/// 記録するのはコマンド列の指紋であって本文ではない。本文は引用や区切り記号を
+/// 含み、行指向の記録に載せると escape の仕様を持つことになる。
+/// 「変わったかどうか」しか要らないため、指紋で足りる。
+#[derive(Default)]
+struct CommandLog {
+    by_output: std::collections::BTreeMap<PathBuf, u64>,
+}
+
+const COMMAND_LOG: &str = "direct-log.tsv";
+
+impl CommandLog {
+    /// 計画が指示するコマンド。「こうなるべき」の側。
+    fn of(plan: &Plan) -> CommandLog {
+        let mut log = CommandLog::default();
+        for id in plan.order() {
+            let action = plan.action(id);
+            if let Some(out) = action.outputs.first() {
+                log.by_output.insert(out.clone(), fingerprint(&action.command_line()));
+            }
+        }
+        log
+    }
+
+    /// 前回の記録。無ければ空。空は「全て作り直す」という保守的な側に倒れる。
+    fn load(build_dir: &Path) -> CommandLog {
+        let mut log = CommandLog::default();
+        let Ok(text) = std::fs::read_to_string(build_dir.join(COMMAND_LOG)) else {
+            log_trace!("no command log yet; every action counts as changed");
+            return log;
+        };
+        for line in text.lines() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            if let Some((fp, out)) = line.split_once('\t') {
+                if let Ok(fp) = fp.parse::<u64>() {
+                    log.by_output.insert(PathBuf::from(out), fp);
+                }
+            }
+        }
+        log_debug!("loaded {} recorded commands", log.by_output.len());
+        log
+    }
+
+    /// このアクションを前回と同じコマンドで作ったか。
+    fn matches(&self, action: &Action) -> bool {
+        let Some(out) = action.outputs.first() else { return false };
+        self.by_output.get(out) == Some(&fingerprint(&action.command_line()))
+    }
+
+    fn save(&self, build_dir: &Path) {
+        if std::fs::create_dir_all(build_dir).is_err() {
+            return;
+        }
+        let mut text = String::from("# dowel direct executor. <command fingerprint>\\t<output>\n");
+        for (out, fp) in &self.by_output {
+            text.push_str(&format!("{fp}\t{}\n", out.display()));
+        }
+        // 書けなくても実行そのものは成功している。次回が全て作り直すだけであり、
+        // ここで失敗を報告すると誤解を招く。
+        let _ = std::fs::write(build_dir.join(COMMAND_LOG), text);
+    }
+}
+
+fn fingerprint(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 fn run_ninja(plan: &Plan, jobs: Option<usize>) -> Result<(), Failure> {
@@ -134,43 +221,52 @@ fn run_ninja(plan: &Plan, jobs: Option<usize>) -> Result<(), Failure> {
 fn run_direct(plan: &Plan) -> Result<(), Failure> {
     let mut ran = 0usize;
     let mut skipped = 0usize;
+    let previous = CommandLog::load(&plan.build_dir);
     for id in plan.order() {
         let action = plan.action(id);
-        if is_up_to_date(action) {
+        // コマンドが変わっていれば、時刻を見るまでもなく作り直す。
+        if !previous.matches(action) {
+            log_trace!("  stale: the command changed since the last run");
+        } else if is_up_to_date(action) {
             log_trace!("up to date: {}", action.description);
             skipped += 1;
             continue;
         }
-        for out in &action.outputs {
-            if let Some(parent) = out.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-        }
-        log_info!("{}", action.description);
-        log_debug!("  {}", action.command_line());
-
-        let mut cmd = Command::new(&action.program);
-        cmd.args(&action.args);
-        cmd.current_dir(&plan.build_dir);
-        let out = cmd.output().map_err(|e| Failure {
-            description: action.description.clone(),
-            command: action.command_line(),
-            status: None,
-            stdout: String::new(),
-            stderr: format!("{e} (cannot start `{}`)", action.program),
-        })?;
-        if !out.status.success() {
-            return Err(Failure {
-                description: action.description.clone(),
-                command: action.command_line(),
-                status: out.status.code(),
-                stdout: String::from_utf8_lossy(&out.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&out.stderr).to_string(),
-            });
-        }
+        run_action(plan, action)?;
         ran += 1;
     }
     log_debug!("ran {ran} actions, skipped {skipped} already up to date");
+    Ok(())
+}
+
+fn run_action(plan: &Plan, action: &Action) -> Result<(), Failure> {
+    for out in &action.outputs {
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    log_info!("{}", action.description);
+    log_debug!("  {}", action.command_line());
+
+    let mut cmd = Command::new(&action.program);
+    cmd.args(&action.args);
+    cmd.current_dir(&plan.build_dir);
+    let out = cmd.output().map_err(|e| Failure {
+        description: action.description.clone(),
+        command: action.command_line(),
+        status: None,
+        stdout: String::new(),
+        stderr: format!("{e} (cannot start `{}`)", action.program),
+    })?;
+    if !out.status.success() {
+        return Err(Failure {
+            description: action.description.clone(),
+            command: action.command_line(),
+            status: out.status.code(),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        });
+    }
     Ok(())
 }
 

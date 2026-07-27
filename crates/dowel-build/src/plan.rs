@@ -332,7 +332,38 @@ fn collect_sources(
                 out.extend(hits.into_iter().map(|rel| pkg_root.join(rel)));
             }
             Data::Path(p) if p.base == PathBase::Package => {
-                out.push(pkg_root.join(&p.rel));
+                // 明示されたソースは、ここで実在を確かめる。
+                // 通さなければ、無いファイルはビルドツールの「no known rule」に、
+                // ディレクトリはリンカの「input file unused」になる。
+                // どちらもマニフェストのどの行が原因かを示さない。
+                let path = pkg_root.join(&p.rel);
+                let site = item.prov.nearest_site();
+                match std::fs::metadata(&path) {
+                    Ok(m) if m.is_dir() => {
+                        let mut d = Diagnostic::error(
+                            "invalid-source",
+                            format!("`{}` is a directory, not a source file", p.rel),
+                        );
+                        if let Some(s) = site {
+                            d = d.at(s.file, s.span, "a directory cannot be compiled");
+                        }
+                        diags.push(d.note(format!(
+                            "use `glob(\"{}/*.c\")` to take the files inside it",
+                            p.rel
+                        )));
+                    }
+                    Ok(_) => out.push(path),
+                    Err(e) => {
+                        let mut d = Diagnostic::error(
+                            "unresolved-path",
+                            format!("cannot read `{}`: {e}", p.rel),
+                        );
+                        if let Some(s) = site {
+                            d = d.at(s.file, s.span, "declared here");
+                        }
+                        diags.push(d.note(format!("looked in {}", pkg_root.display())));
+                    }
+                }
             }
             Data::Error => {}
             _ => {

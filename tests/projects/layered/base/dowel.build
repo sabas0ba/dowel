@@ -1,0 +1,21 @@
+# 最下層その1。`codec` と `net` の双方が **公開で** 依存するため、
+# `app` へは2経路で届く。同じ値が2経路で来ても `defines` の
+# `error_on_conflict` が誤って発火しないことを、この形が固定する。
+
+[lib.base]
+sources = glob("src/**.c")
+
+[lib.base.public]
+includes = [dir("include")]
+defines  = { BASE_API = 1 }
+
+[lib.base.private]
+# 非公開ヘッダ。依存元からは見えない
+includes = [dir("src")]
+flags    = ["-Wall", "-Wextra", "-Werror"]
+
+[test.base_test]
+sources = glob("tests/*.c")
+
+[test.base_test.private]
+deps = [target("base")]

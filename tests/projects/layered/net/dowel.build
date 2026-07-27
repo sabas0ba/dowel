@@ -1,0 +1,22 @@
+# 中間層その2。base へは公開、util へは **非公開** で依存する。
+# したがって net を使う側は base を見られるが、util は見られない。
+# 「非公開の依存は自分のコンパイルには効くが依存元へは伝播しない」の実地検査。
+
+[lib.net]
+sources = glob("src/**.c")
+
+[lib.net.public]
+deps     = [dep("base")]
+includes = [dir("include")]
+defines  = { NET_API = 1 }
+
+[lib.net.private]
+deps    = [dep("util")]
+defines = { NET_INTERNAL = 1 }
+flags   = ["-Wall", "-Wextra", "-Werror"]
+
+[test.net_test]
+sources = glob("tests/*.c")
+
+[test.net_test.private]
+deps = [target("net")]

@@ -1,0 +1,12 @@
+[package]
+name    = "app"
+version = "0.1.0"
+edition = "2026"
+
+[[dependencies]]
+name = "codec"
+path = "../codec"
+
+[[dependencies]]
+name = "net"
+path = "../net"

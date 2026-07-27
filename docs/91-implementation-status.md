@@ -68,6 +68,8 @@ dowel check --log-format=json    # 1行1オブジェクト
 | `dowel-build` | glob 展開、アクショングラフ、ninja 生成、`compile_commands.json`、実行 |
 | `dowel-cli` | `dowel` バイナリ |
 
+検証用の現物は `tests/projects/`（実物フィクスチャ）と `examples/`（文書の例）に置く。
+
 ## 実装済み
 
 ### 構文（`dowel-syntax`）
@@ -168,7 +170,8 @@ dowel check --log-format=json    # 1行1オブジェクト
 
 ## 検証
 
-入口は1つ。ローカルでも CI でも同じものを実行する。
+入口は1つ。ローカルでも CI でも同じものを実行する。層ごとの責務と、
+テストを足すときの判断は [51-testing.md](51-testing.md) にある。
 
 ```sh
 make verify      # 全段階を実行し、結果を .work/verify/ に残す
@@ -180,18 +183,31 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 186 件）。
+現在の内訳（テスト 211 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 130 |
+| `unit-*` | クレートごとの単体テスト | 131 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 8 |
 | `e2e` | 実際に C をコンパイルして実行し出力を検査 | 30 |
+| `scenario` | 時間をまたぐ操作列（編集して再ビルド、構成の切り替え） | 11 |
+| `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 8 |
+| `diagnostics` | 診断が CLI まで届くこと（34 事例）と網羅の追跡 | 5 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
+
+`scenario` / `fixture` / `diagnostics` の3層は後から足した。足した最初の実行で
+以下の4件が出ており、いずれも既存の層では原理的に現れないものだった。
+
+| 欠陥 | なぜ既存の層で出なかったか |
+|---|---|
+| 併合が相対パスだけで重複を判定し、依存が2段を超えると別パッケージの `include/` が消える | 合成プロジェクトは依存が1段しかない |
+| direct 実行器がコマンド列を最新性判定に入れず、フラグ変更を取りこぼす | 単発の実行では2回目が見えない |
+| `sources` にディレクトリを書くとリンカの `input file unused` になる | `invalid-source` は一度も到達していなかった |
+| 存在しないソースを書くと ninja の `no known rule` になる | `unresolved-path` は一度も到達していなかった |
 
 ## 計測
 

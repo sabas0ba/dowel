@@ -227,7 +227,7 @@ pub fn merge_values(
             for v in values {
                 for item in flatten(v) {
                     // 同値の重複を落とす。来歴は最初に到達したものを残す。
-                    if !out.iter().any(|e| e.data == item.data) {
+                    if !out.iter().any(|e| same_item(e, &item)) {
                         out.push(item);
                     }
                 }
@@ -290,6 +290,27 @@ pub fn merge_values(
 }
 
 /// 列の値なら要素を、そうでなければ自身を1要素として返す。
+/// 併合での同値判定。
+///
+/// パスは「パッケージルートからの相対」で表され、**基点は値ではなく宣言位置が持つ**
+/// （docs/10-manifest.md 3節）。したがって同じ `dir("include")` でも、
+/// 宣言したファイルが違えば指す先は別のディレクトリである。
+///
+/// データだけで比べると、依存が2段を超えた途端に別パッケージの
+/// インクルードディレクトリが「重複」と見なされて消える。慣習として
+/// どのパッケージも公開ヘッダを `include/` に置くため、これは例外ではなく既定の形になる。
+fn same_item(a: &Value, b: &Value) -> bool {
+    if a.data != b.data {
+        return false;
+    }
+    // 基点を持つ値だけ、宣言位置まで含めて比べる。
+    if matches!(a.data, Data::Path(_) | Data::Glob(_)) {
+        let site = |v: &Value| v.prov.nearest_site().map(|s| s.file);
+        return site(a) == site(b);
+    }
+    true
+}
+
 fn flatten(v: &Value) -> Vec<Value> {
     match &v.data {
         Data::List(items) => items.clone(),
@@ -366,13 +387,18 @@ mod tests {
     }
 
     fn path(rel: &str, at: u32) -> Value {
+        path_in(FileId(0), rel, at)
+    }
+
+    /// 別ファイル（＝別パッケージ）で宣言されたパス。
+    fn path_in(file: FileId, rel: &str, at: u32) -> Value {
         Value {
             ty: Type::Path,
             data: Data::Path(crate::value::PathValue {
                 base: crate::value::PathBase::Package,
                 rel: rel.into(),
             }),
-            prov: Prov::at(Origin::Call("dir".into()), site(at)),
+            prov: Prov::at(Origin::Call("dir".into()), Site::new(file, Span::new(at, at + 3))),
         }
     }
 
@@ -404,6 +430,23 @@ mod tests {
         assert_eq!(items[0].display(), "include");
         assert_eq!(items[1].display(), "src");
         assert_eq!(items[2].display(), "gen");
+    }
+
+    #[test]
+    fn union_keeps_the_same_relative_path_from_different_packages() {
+        // パスの基点は値ではなく宣言位置が持つ。どのパッケージも公開ヘッダを
+        // `include/` に置くのが慣習であるため、データだけで重複を判定すると
+        // 依存が2段を超えた途端に別パッケージの include が消える。
+        let def = lookup(Block::Public, "includes").unwrap();
+        let a = Value::list(Type::Path, vec![path_in(FileId(1), "include", 0)], Prov::none());
+        let b = Value::list(Type::Path, vec![path_in(FileId(2), "include", 0)], Prov::none());
+        // 同じファイル内の重複は今までどおり落ちる。
+        let c = Value::list(Type::Path, vec![path_in(FileId(2), "include", 40)], Prov::none());
+        let mut diags = Vec::new();
+        let merged = merge_values(&def, &[a, b, c], &SourceMap::new(), &mut diags);
+        assert!(diags.is_empty());
+        let items = merged.as_list().unwrap();
+        assert_eq!(items.len(), 2, "{:?}", items.iter().map(|i| i.display()).collect::<Vec<_>>());
     }
 
     #[test]

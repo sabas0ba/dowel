@@ -108,6 +108,12 @@ run model-incremental gating -- cargo test -p dowel-model --test incremental
 
 # --- e2e（実際に C をコンパイルして実行する）---------------------------
 run e2e gating -- cargo test -p dowel-cli --test e2e
+# 時間をまたぐ操作列（編集して再ビルド、構成の切り替え、テストの再実行）。
+run scenario gating -- cargo test -p dowel-cli --test scenario
+# 現実の形をしたプロジェクトを丸ごと通す。
+run fixture gating -- cargo test -p dowel-cli --test fixture
+# 診断が利用者まで届くこと、および網羅の追跡。
+run diagnostics gating -- cargo test -p dowel-cli --test diagnostics
 run example gating -- cargo test -p dowel-cli --test example
 
 # --- 計測 ---------------------------------------------------------------
