@@ -50,6 +50,9 @@ build options:
 test options:
         --no-run             Build the test targets but do not run them
         --nocapture          Let test output through instead of capturing it
+        --fail-fast          Stop at the first failing test
+        --failed             Rerun only the tests that failed last time
+        --test-jobs <n>      Run this many tests at once (default: 1)
 
 graph options:
         --kind <kind>        target | action (default: target)
@@ -63,6 +66,7 @@ Examples:
     dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
     dowel why app:app includes
     dowel test --nocapture
+    dowel test --failed --fail-fast
     DOWEL_LOG=debug dowel build
 "#;
 
@@ -112,6 +116,9 @@ pub struct Options {
     pub compdb: bool,
     pub no_run: bool,
     pub nocapture: bool,
+    pub fail_fast: bool,
+    pub only_failed: bool,
+    pub test_jobs: Option<usize>,
     pub graph_kind: GraphKind,
     pub out_format: OutFormat,
 }
@@ -134,6 +141,9 @@ impl Default for Options {
             compdb: true,
             no_run: false,
             nocapture: false,
+            fail_fast: false,
+            only_failed: false,
+            test_jobs: None,
             graph_kind: GraphKind::Target,
             out_format: OutFormat::Text,
         }
@@ -235,6 +245,14 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             "--no-compdb" => opts.compdb = false,
             "--no-run" => opts.no_run = true,
             "--nocapture" => opts.nocapture = true,
+            "--fail-fast" => opts.fail_fast = true,
+            "--failed" => opts.only_failed = true,
+            "--test-jobs" => {
+                let v = take("--test-jobs")?;
+                opts.test_jobs = Some(
+                    v.parse().map_err(|_| format!("`--test-jobs` must be a number (got `{v}`)"))?,
+                );
+            }
             "--kind" => {
                 opts.graph_kind = match take("--kind")?.as_str() {
                     "target" => GraphKind::Target,
@@ -270,6 +288,9 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--no-compdb",
                     "--no-run",
                     "--nocapture",
+                    "--fail-fast",
+                    "--failed",
+                    "--test-jobs",
                     "--kind",
                     "--format",
                     "--verbose",
@@ -408,6 +429,15 @@ mod tests {
         assert!(o.no_run);
         assert!(!o.nocapture);
         assert!(run(&["test", "--nocapture"]).unwrap().nocapture);
+    }
+
+    #[test]
+    fn test_execution_flags_parse() {
+        let o = run(&["test", "--fail-fast", "--failed", "--test-jobs=4"]).unwrap();
+        assert!(o.fail_fast);
+        assert!(o.only_failed);
+        assert_eq!(o.test_jobs, Some(4));
+        assert!(run(&["test", "--test-jobs", "x"]).is_err());
     }
 
     #[test]

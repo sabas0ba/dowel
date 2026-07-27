@@ -146,7 +146,30 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         }
 
         Command::Test { targets } => {
-            let requested = test_targets(&sess, targets)?;
+            let mut requested = test_targets(&sess, targets)?;
+            let build_dir = build_plan::build_dir(
+                &sess.root_package().map(|p| p.root.clone()).unwrap_or_default(),
+                &cfg,
+            );
+            let mut state = testing::State::load(&build_dir);
+
+            if opts.only_failed {
+                // 前回の判定はラベルで持つ。今あるターゲットとの突き合わせに失敗した
+                // ものは黙って落とす（マニフェストから消えた場合）。
+                let failed = state.failed();
+                requested.retain(|t| failed.contains(&sess.label(*t).as_str()));
+                if requested.is_empty() {
+                    if report(&sess, opts) {
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    eprintln!(
+                        "nothing to rerun. no failing tests were recorded in {}",
+                        build_dir.display()
+                    );
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
+
             if requested.is_empty() {
                 if report(&sess, opts) {
                     return Ok(ExitCode::FAILURE);
@@ -167,8 +190,14 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             }
 
             let launcher = testing::Launcher::for_config(&cfg);
-            let outcomes = testing::run(&sess, &p, &launcher, &requested, !opts.nocapture);
-            Ok(report_tests(&outcomes, opts))
+            let run_opts = test_run_options(opts);
+            let outcomes = testing::run(&sess, &p, &launcher, &requested, &run_opts);
+
+            state.update(&outcomes);
+            if let Err(e) = state.save(&p.build_dir) {
+                eprintln!("warning: cannot record the test results: {e}");
+            }
+            Ok(report_tests(&outcomes, requested.len(), opts))
         }
     }
 }
@@ -211,13 +240,26 @@ fn build(
     Ok(Some(p))
 }
 
+/// 実行のしかたを組み立てる。
+fn test_run_options(opts: &Options) -> testing::RunOptions {
+    let capture = !opts.nocapture;
+    let mut jobs = opts.test_jobs.unwrap_or(1).max(1);
+    if !capture && jobs > 1 {
+        // 素通しでの並列は出力が混ざり、読めるものにならない。
+        eprintln!("note: `--nocapture` forces one test at a time");
+        jobs = 1;
+    }
+    testing::RunOptions { capture, fail_fast: opts.fail_fast, jobs }
+}
+
 /// テストの結果を報告する。誤りが1件でもあれば非零で終わる。
 ///
 /// 出力の分担は他のコマンドと同じ。機械可読な結果は stdout、
 /// 進行と要約は stderr。
-fn report_tests(outcomes: &[testing::Outcome], opts: &Options) -> ExitCode {
+fn report_tests(outcomes: &[testing::Outcome], requested: usize, opts: &Options) -> ExitCode {
     let passed = outcomes.iter().filter(|o| o.passed).count();
     let failed = outcomes.len() - passed;
+    let not_run = requested.saturating_sub(outcomes.len());
 
     if opts.message_format == MessageFormat::Json {
         let stdout = std::io::stdout();
@@ -227,7 +269,7 @@ fn report_tests(outcomes: &[testing::Outcome], opts: &Options) -> ExitCode {
         }
     }
 
-    eprintln!("running {} test{}", outcomes.len(), if outcomes.len() == 1 { "" } else { "s" });
+    eprintln!("running {} test{}", requested, if requested == 1 { "" } else { "s" });
     for o in outcomes {
         eprintln!("{}", o.summary_line());
     }
@@ -249,8 +291,10 @@ fn report_tests(outcomes: &[testing::Outcome], opts: &Options) -> ExitCode {
         }
     }
 
+    // 打ち切った場合、走らせていない分を隠さない。
+    let tail = if not_run > 0 { format!("; {not_run} not run") } else { String::new() };
     eprintln!(
-        "\ntest result: {}. {passed} passed; {failed} failed",
+        "\ntest result: {}. {passed} passed; {failed} failed{tail}",
         if failed == 0 { "ok" } else { "FAILED" }
     );
     exit_code(failed > 0)

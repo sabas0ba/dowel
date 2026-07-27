@@ -31,6 +31,8 @@ dowel build                      # 実際にビルドする
 dowel build --config=release
 dowel test                       # test ターゲットをビルドして走らせる
 dowel test --nocapture           # テストの出力を素通しする
+dowel test --failed --fail-fast  # 前回落ちた分だけ、最初の失敗で打ち切る
+dowel test --test-jobs=4         # 同時に4本走らせる
 dowel why app:app includes       # 値がそこへ来た経路
 dowel graph --format=dot         # 依存グラフ
 dowel graph --kind=action        # アクショングラフ
@@ -110,8 +112,15 @@ dowel check --log-format=json    # 1行1オブジェクト
 - 構成ごとに分けたビルドディレクトリ
 - `dowel test` — test ターゲットを起動して終了状態で合否を判定する。
   テストハーネスは持たず、「終了状態 0 なら成功」という C の慣習に従う。
-  作業ディレクトリはパッケージルート。失敗したものだけ出力を見せる。
-  `--no-run` / `--nocapture`、`--message-format=json` で1件1行の結果
+  作業ディレクトリはパッケージルート。失敗したものだけ出力を見せる
+  - `--fail-fast` で最初の失敗で打ち切る。既定は打ち切らない（全体像が要るため）。
+    打ち切った場合は「走らせなかった件数」を要約に出す
+  - `--failed` で前回落ちた分だけ再実行する。判定はビルドディレクトリに残す。
+    走らせなかったターゲットの判定は消えない
+  - `--test-jobs=<n>` で並列実行。**既定は逐次**。C のテストは共有資源
+    （同じ作業ディレクトリ、固定のポート、書き出し先）を触りやすく、
+    並列を既定にすると「たまたま壊れる」体験になるため。表示は常に要求順
+  - `--no-run` / `--nocapture`、`--message-format=json` で1件1行の結果
 
 ### 診断とログ
 
@@ -148,15 +157,15 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 153 件）。
+現在の内訳（テスト 165 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 111 |
+| `unit-*` | クレートごとの単体テスト | 117 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
-| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 24 |
+| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 30 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
 

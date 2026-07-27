@@ -391,6 +391,102 @@ fn test_says_so_when_there_is_nothing_to_run() {
     r.stderr_contains("no test targets");
 }
 
+/// 最初に落ちるテストを置いた構成。`--fail-fast` の検査に使う。
+fn project_with_a_failing_test_first(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"seq\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        r#"
+[test.a_fails]
+sources = glob("tests/a.c")
+
+[test.b_passes]
+sources = glob("tests/b.c")
+
+[test.c_passes]
+sources = glob("tests/c.c")
+"#,
+    );
+    p.write("tests/a.c", "int main(void) { return 1; }\n");
+    p.write("tests/b.c", "int main(void) { return 0; }\n");
+    p.write("tests/c.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn fail_fast_stops_at_the_first_failure_and_says_what_was_skipped() {
+    let p = project_with_a_failing_test_first("test-fail-fast");
+    let r = p.run(".", &["test", "--fail-fast"]);
+    r.failure();
+    r.stderr_contains("test seq:a_fails ... FAILED");
+    // 走らせなかった分を隠さない。
+    r.stderr_contains("test result: FAILED. 0 passed; 1 failed; 2 not run");
+    assert!(!r.stderr.contains("seq:b_passes ..."), "a later test was started\n{r}");
+
+    // 既定は打ち切らない。全体像が要るため。
+    let all = p.run(".", &["test"]);
+    all.failure();
+    all.stderr_contains("test seq:b_passes ... ok");
+    all.stderr_contains("test result: FAILED. 2 passed; 1 failed");
+    assert!(!all.stderr.contains("not run"), "{all}");
+}
+
+#[test]
+fn failed_reruns_only_what_failed_last_time() {
+    let p = project_with_tests("test-rerun");
+    p.run(".", &["test"]).failure();
+
+    let r = p.run(".", &["test", "--failed"]);
+    r.failure();
+    r.stderr_contains("running 1 test");
+    r.stderr_contains("test calc:broken ... FAILED");
+    assert!(!r.stderr.contains("calc:unit"), "a passing test was rerun\n{r}");
+
+    // 直せば次の --failed には残らない。走らせていない calc:unit の判定も消えない。
+    p.write(
+        "tests/broken.c",
+        "#include \"calc.h\"\nint main(void) { return add(2, 3) == 5 ? 0 : 1; }\n",
+    );
+    p.run(".", &["test", "--failed"]).success();
+    let again = p.run(".", &["test", "--failed"]);
+    again.success();
+    again.stderr_contains("nothing to rerun");
+}
+
+#[test]
+fn failed_says_so_when_there_is_no_record() {
+    let p = project_with_tests("test-rerun-empty");
+    let r = p.run(".", &["test", "--failed"]);
+    r.success();
+    r.stderr_contains("nothing to rerun");
+}
+
+#[test]
+fn test_jobs_runs_several_at_once_and_keeps_the_requested_order() {
+    let p = project_with_a_failing_test_first("test-jobs");
+    let r = p.run(".", &["test", "--test-jobs=3"]);
+    r.failure();
+    // 並列でも表示は要求順。走った順に混ざらない。
+    let order: Vec<&str> = r
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("test seq:"))
+        .map(|l| l.split_whitespace().nth(1).unwrap())
+        .collect();
+    assert_eq!(order, vec!["seq:a_fails", "seq:b_passes", "seq:c_passes"], "{r}");
+    r.stderr_contains("test result: FAILED. 2 passed; 1 failed");
+}
+
+#[test]
+fn nocapture_forces_one_test_at_a_time() {
+    let p = project_with_tests("test-nocapture-jobs");
+    // 素通しでの並列は出力が混ざるため、黙って直さず断りを入れて逐次にする。
+    let r = p.run(".", &["test", "calc:unit", "--nocapture", "--test-jobs=4"]);
+    r.success();
+    r.stderr_contains("`--nocapture` forces one test at a time");
+}
+
 #[test]
 fn diagnostics_carry_a_location_and_a_suggestion() {
     let p = Project::new("diagnostics");

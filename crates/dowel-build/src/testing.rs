@@ -7,12 +7,18 @@
 //! 実行の直前に1箇所だけ噛ませてある [`Launcher`] が、ランナー抽象
 //! （qemu / SSH / 実機、docs/30-devexp.md 1節）の差し込み口になる。
 //! クロス実行では成果物を直接起動できないため、そこだけが変わる。
+//!
+//! 前回の結果は [`State`] としてビルドディレクトリに残す。`--failed` が読む。
+//! 形式を JSON にしないのは、読む側を自前で持つ必要が生じるためである。
+//! 利用者に見せる出力ではなく内部の状態であり、行指向で足りる。
 
 use crate::plan::Plan;
 use dowel_model::{Session, TargetId};
 use dowel_support::{log_debug, log_trace};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 /// 成果物を起動するコマンドを組み立てる。
@@ -31,6 +37,26 @@ impl Launcher {
     /// `binary` を起動するためのプログラムと引数。
     pub fn command(&self, binary: &Path) -> (String, Vec<String>) {
         (binary.display().to_string(), Vec::new())
+    }
+}
+
+/// 実行のしかた。
+#[derive(Clone, Copy, Debug)]
+pub struct RunOptions {
+    /// 子プロセスの出力を捕まえる。偽なら素通しする
+    pub capture: bool,
+    /// 最初の失敗で打ち切る
+    pub fail_fast: bool,
+    /// 同時に走らせる本数
+    pub jobs: usize,
+}
+
+impl Default for RunOptions {
+    fn default() -> RunOptions {
+        // 既定を逐次にするのは、C のテストが共有資源（同じ作業ディレクトリ、
+        // 固定のポート、書き出し先のファイル）を触りやすいためである。
+        // 並列を既定にすると「たまたま壊れる」体験になる。速さは明示的に選ばせる。
+        RunOptions { capture: true, fail_fast: false, jobs: 1 }
     }
 }
 
@@ -70,85 +96,182 @@ impl Outcome {
     }
 }
 
-/// 与えられたテストターゲットを順に起動する。
+/// 与えられたテストターゲットを起動する。
 ///
-/// `capture` が偽のときは子プロセスの出力をそのまま素通しする。
+/// 戻り値は要求順。`fail_fast` で打ち切った場合、起動しなかったものは含まれない。
+/// 呼び出し側は要求数との差で「走らせなかった件数」を知る。
 pub fn run(
     sess: &Session,
     plan: &Plan,
     launcher: &Launcher,
     targets: &[TargetId],
-    capture: bool,
+    opts: &RunOptions,
 ) -> Vec<Outcome> {
     let _phase = dowel_support::log::Phase::start("test");
-    let mut out = Vec::new();
-    for &tid in targets {
-        let label = sess.label(tid);
-        let Some(binary) = plan.artifacts.get(&tid).cloned() else {
-            out.push(Outcome {
-                target: tid,
-                label: label.clone(),
-                binary: PathBuf::new(),
-                status: None,
-                passed: false,
-                duration_ms: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                launch_error: Some("no artifact was planned for this target".into()),
-            });
-            continue;
-        };
+    let jobs = opts.jobs.max(1).min(targets.len().max(1));
+    log_debug!("running {} tests with {jobs} job(s)", targets.len());
 
-        // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
-        // マニフェストに書いたものと同じ基準で解決されるようにする。
-        let cwd = sess.package(sess.target(tid).package).root.clone();
-        let (program, args) = launcher.command(&binary);
-        log_debug!("running {label}");
-        log_trace!("  {} (cwd {})", program, cwd.display());
-
-        let mut cmd = Command::new(&program);
-        cmd.args(&args).current_dir(&cwd);
-        let start = Instant::now();
-        let result = if capture {
-            cmd.output().map(|o| {
-                (
-                    o.status,
-                    String::from_utf8_lossy(&o.stdout).to_string(),
-                    String::from_utf8_lossy(&o.stderr).to_string(),
-                )
-            })
-        } else {
-            cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-            cmd.status().map(|s| (s, String::new(), String::new()))
-        };
-        let duration_ms = start.elapsed().as_millis();
-
-        out.push(match result {
-            Ok((status, stdout, stderr)) => Outcome {
-                target: tid,
-                label,
-                binary,
-                status: status.code(),
-                passed: status.success(),
-                duration_ms,
-                stdout,
-                stderr,
-                launch_error: None,
-            },
-            Err(e) => Outcome {
-                target: tid,
-                label,
-                binary,
-                status: None,
-                passed: false,
-                duration_ms,
-                stdout: String::new(),
-                stderr: String::new(),
-                launch_error: Some(e.to_string()),
-            },
-        });
+    if jobs == 1 {
+        let mut out = Vec::new();
+        for &tid in targets {
+            let outcome = run_one(sess, plan, launcher, tid, opts.capture);
+            let failed = !outcome.passed;
+            out.push(outcome);
+            if failed && opts.fail_fast {
+                log_debug!("stopping early: fail-fast");
+                break;
+            }
+        }
+        return out;
     }
-    out
+
+    // 並列。要求順を保つため添字ごと集めて最後に並べ替える。
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let collected: Mutex<Vec<(usize, Outcome)>> = Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..jobs {
+            scope.spawn(|| loop {
+                if opts.fail_fast && stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&tid) = targets.get(i) else { break };
+                let outcome = run_one(sess, plan, launcher, tid, opts.capture);
+                if !outcome.passed {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                collected.lock().expect("the results mutex is poisoned").push((i, outcome));
+            });
+        }
+    });
+    let mut collected = collected.into_inner().expect("the results mutex is poisoned");
+    collected.sort_by_key(|(i, _)| *i);
+    collected.into_iter().map(|(_, o)| o).collect()
+}
+
+fn run_one(
+    sess: &Session,
+    plan: &Plan,
+    launcher: &Launcher,
+    tid: TargetId,
+    capture: bool,
+) -> Outcome {
+    let label = sess.label(tid);
+    let Some(binary) = plan.artifacts.get(&tid).cloned() else {
+        return Outcome {
+            target: tid,
+            label,
+            binary: PathBuf::new(),
+            status: None,
+            passed: false,
+            duration_ms: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            launch_error: Some("no artifact was planned for this target".into()),
+        };
+    };
+
+    // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
+    // マニフェストに書いたものと同じ基準で解決されるようにする。
+    let cwd = sess.package(sess.target(tid).package).root.clone();
+    let (program, args) = launcher.command(&binary);
+    log_debug!("running {label}");
+    log_trace!("  {} (cwd {})", program, cwd.display());
+
+    let mut cmd = Command::new(&program);
+    cmd.args(&args).current_dir(&cwd);
+    let start = Instant::now();
+    let result = if capture {
+        cmd.output().map(|o| {
+            (
+                o.status,
+                String::from_utf8_lossy(&o.stdout).to_string(),
+                String::from_utf8_lossy(&o.stderr).to_string(),
+            )
+        })
+    } else {
+        cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        cmd.status().map(|s| (s, String::new(), String::new()))
+    };
+    let duration_ms = start.elapsed().as_millis();
+
+    match result {
+        Ok((status, stdout, stderr)) => Outcome {
+            target: tid,
+            label,
+            binary,
+            status: status.code(),
+            passed: status.success(),
+            duration_ms,
+            stdout,
+            stderr,
+            launch_error: None,
+        },
+        Err(e) => Outcome {
+            target: tid,
+            label,
+            binary,
+            status: None,
+            passed: false,
+            duration_ms,
+            stdout: String::new(),
+            stderr: String::new(),
+            launch_error: Some(e.to_string()),
+        },
+    }
+}
+
+/// 前回の結果。`--failed` が読む。
+///
+/// ビルドディレクトリに置き、構成ごとに分ける。
+/// 形式は行指向にしてある。JSON にすると読む側を自前で持つ必要が生じるが、
+/// これは利用者に見せる出力ではなく内部の状態であり、それに見合わない。
+pub struct State {
+    /// ターゲットのラベル → 前回通ったか
+    pub results: std::collections::BTreeMap<String, bool>,
+}
+
+const STATE_FILE: &str = "test-state.tsv";
+
+impl State {
+    pub fn load(build_dir: &Path) -> State {
+        let mut results = std::collections::BTreeMap::new();
+        if let Ok(text) = std::fs::read_to_string(build_dir.join(STATE_FILE)) {
+            for line in text.lines() {
+                if line.starts_with('#') || line.trim().is_empty() {
+                    continue;
+                }
+                if let Some((verdict, label)) = line.split_once('\t') {
+                    results.insert(label.to_string(), verdict == "ok");
+                }
+            }
+        }
+        log_debug!("loaded {} previous test results", results.len());
+        State { results }
+    }
+
+    /// 今回走らせた分で上書きする。走らせなかったものは前回の判定を残す。
+    pub fn update(&mut self, outcomes: &[Outcome]) {
+        for o in outcomes {
+            self.results.insert(o.label.clone(), o.passed);
+        }
+    }
+
+    pub fn failed(&self) -> Vec<&str> {
+        self.results.iter().filter(|(_, ok)| !**ok).map(|(l, _)| l.as_str()).collect()
+    }
+
+    pub fn save(&self, build_dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(build_dir)?;
+        let mut text = String::from("# dowel test state. <ok|failed>\\t<target>\n");
+        for (label, ok) in &self.results {
+            text.push_str(if *ok { "ok\t" } else { "failed\t" });
+            text.push_str(label);
+            text.push('\n');
+        }
+        std::fs::write(build_dir.join(STATE_FILE), text)
+    }
 }
 
 /// 機械可読な結果。1件1行の JSON とし、逐次消費できるようにする。
@@ -220,6 +343,68 @@ mod tests {
         assert!(json.contains(r#""exit_status":2"#), "{json}");
         assert!(json.contains(r#""stdout":"hello\n""#), "{json}");
         assert!(json.contains(r#""launch_error":null"#), "{json}");
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn state_round_trips_through_the_build_directory() {
+        let dir = scratch("test-state");
+        let mut st = State { results: Default::default() };
+        st.update(&[outcome(true, Some(0), None)]);
+        st.save(&dir).unwrap();
+
+        let loaded = State::load(&dir);
+        assert_eq!(loaded.results.get("pkg:unit"), Some(&true));
+        assert!(loaded.failed().is_empty());
+    }
+
+    #[test]
+    fn state_keeps_targets_that_were_not_rerun() {
+        let dir = scratch("test-state-merge");
+        let mut st = State { results: Default::default() };
+        st.results.insert("pkg:a".into(), false);
+        st.results.insert("pkg:b".into(), true);
+        st.save(&dir).unwrap();
+
+        // `pkg:a` だけ走らせ直して通った場合、`pkg:b` の判定は残る。
+        let mut st = State::load(&dir);
+        let mut rerun = outcome(true, Some(0), None);
+        rerun.label = "pkg:a".into();
+        st.update(&[rerun]);
+        assert_eq!(st.results.get("pkg:a"), Some(&true));
+        assert_eq!(st.results.get("pkg:b"), Some(&true));
+        assert!(st.failed().is_empty());
+    }
+
+    #[test]
+    fn failed_lists_only_the_failures() {
+        let mut st = State { results: Default::default() };
+        st.results.insert("pkg:a".into(), false);
+        st.results.insert("pkg:b".into(), true);
+        st.results.insert("pkg:c".into(), false);
+        assert_eq!(st.failed(), vec!["pkg:a", "pkg:c"]);
+    }
+
+    #[test]
+    fn a_missing_state_file_reads_as_empty() {
+        let dir = scratch("test-state-missing");
+        assert!(State::load(&dir).results.is_empty());
+    }
+
+    #[test]
+    fn the_default_run_is_sequential_and_captures() {
+        // 既定を逐次にする理由は RunOptions のコメントにある。
+        let o = RunOptions::default();
+        assert_eq!(o.jobs, 1);
+        assert!(o.capture);
+        assert!(!o.fail_fast);
     }
 
     #[test]
