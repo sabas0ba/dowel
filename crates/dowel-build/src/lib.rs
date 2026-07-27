@@ -7,7 +7,9 @@ pub mod exec;
 pub mod glob;
 pub mod ninja;
 pub mod plan;
+pub mod testing;
 
 pub use action::{Action, ActionId, ActionKind};
 pub use exec::Executor;
 pub use plan::{build_dir, plan, CompileCommand, Plan};
+pub use testing::{Launcher, Outcome};

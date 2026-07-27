@@ -55,10 +55,14 @@ run() {
     end=$(now_ms)
 
     # libtest の "test result: ok. N passed; M failed;" を数え上げる。
+    # 要約行だけを対象にする。本文中に同じ語が出ても数に混ぜないため。
     # 集計に awk を使うのは、`bc` が入っていない実行環境があるため。
-    local passed failed
-    passed=$(grep -oE '[0-9]+ passed' "$log" | awk '{s += $1} END {print s + 0}')
-    failed=$(grep -oE '[0-9]+ failed' "$log" | awk '{s += $1} END {print s + 0}')
+    local summaries passed failed
+    summaries=$(grep -E '^test result:' "$log" || true)
+    passed=$(printf '%s\n' "$summaries" | grep -oE '[0-9]+ passed' |
+        awk '{s += $1} END {print s + 0}')
+    failed=$(printf '%s\n' "$summaries" | grep -oE '[0-9]+ failed' |
+        awk '{s += $1} END {print s + 0}')
 
     local state
     if [ $status -eq 0 ]; then

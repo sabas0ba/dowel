@@ -10,7 +10,7 @@
 mod args;
 
 use args::{Command, GraphKind, MessageFormat, Options, OutFormat, Parsed};
-use dowel_build::{compdb, exec, plan as build_plan};
+use dowel_build::{compdb, exec, plan as build_plan, testing};
 use dowel_eval::schema::{self, Block};
 use dowel_eval::{Config, Opt};
 use dowel_model::{graph, interface, package, Session};
@@ -134,31 +134,9 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
         Command::Build { targets } => {
             let requested = default_targets(&sess, targets)?;
-            let (p, pdiags) = build_plan::plan(&sess, &g, &ifaces, &cfg, &requested);
-            sess.diagnostics.extend(pdiags);
-            if report(&sess, opts) {
+            let Some(p) = build(&mut sess, &g, &ifaces, &cfg, opts, &requested)? else {
                 return Ok(ExitCode::FAILURE);
-            }
-
-            if opts.compdb {
-                let root = sess.root_package().map(|p| p.root.clone()).unwrap_or_default();
-                match compdb::write(&p, &root) {
-                    Ok(paths) => {
-                        for path in paths {
-                            log_info!("wrote {}", path.display());
-                        }
-                    }
-                    Err(e) => eprintln!("warning: cannot write compile_commands.json: {e}"),
-                }
-            }
-
-            let executor = choose_executor(opts)?;
-            log_debug!("executor {executor:?}");
-            if let Err(f) = exec::run(&p, executor, opts.jobs) {
-                eprint!("error: {f}");
-                return Ok(ExitCode::FAILURE);
-            }
-
+            };
             for t in &requested {
                 if let Some(path) = p.artifacts.get(t) {
                     eprintln!("built: {}", path.display());
@@ -166,7 +144,160 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             }
             Ok(ExitCode::SUCCESS)
         }
+
+        Command::Test { targets } => {
+            let mut requested = test_targets(&sess, targets)?;
+            let build_dir = build_plan::build_dir(
+                &sess.root_package().map(|p| p.root.clone()).unwrap_or_default(),
+                &cfg,
+            );
+            let mut state = testing::State::load(&build_dir);
+
+            if opts.only_failed {
+                // 前回の判定はラベルで持つ。今あるターゲットとの突き合わせに失敗した
+                // ものは黙って落とす（マニフェストから消えた場合）。
+                let failed = state.failed();
+                requested.retain(|t| failed.contains(&sess.label(*t).as_str()));
+                if requested.is_empty() {
+                    if report(&sess, opts) {
+                        return Ok(ExitCode::FAILURE);
+                    }
+                    eprintln!(
+                        "nothing to rerun. no failing tests were recorded in {}",
+                        build_dir.display()
+                    );
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
+
+            if requested.is_empty() {
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+                eprintln!("no test targets. declare one with `[test.<name>]` in dowel.build");
+                return Ok(ExitCode::SUCCESS);
+            }
+            let Some(p) = build(&mut sess, &g, &ifaces, &cfg, opts, &requested)? else {
+                return Ok(ExitCode::FAILURE);
+            };
+            if opts.no_run {
+                for t in &requested {
+                    if let Some(path) = p.artifacts.get(t) {
+                        eprintln!("built: {}", path.display());
+                    }
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            let launcher = testing::Launcher::for_config(&cfg);
+            let run_opts = test_run_options(opts);
+            let outcomes = testing::run(&sess, &p, &launcher, &requested, &run_opts);
+
+            state.update(&outcomes);
+            if let Err(e) = state.save(&p.build_dir) {
+                eprintln!("warning: cannot record the test results: {e}");
+            }
+            Ok(report_tests(&outcomes, requested.len(), opts))
+        }
     }
+}
+
+/// 計画してビルドする。`build` と `test` で共通の経路。
+///
+/// 診断か実行で失敗した場合は報告済みの `None` を返す。
+fn build(
+    sess: &mut Session,
+    g: &dowel_model::Graph,
+    ifaces: &dowel_model::Interfaces,
+    cfg: &Config,
+    opts: &Options,
+    requested: &[dowel_model::TargetId],
+) -> Result<Option<build_plan::Plan>, String> {
+    let (p, pdiags) = build_plan::plan(sess, g, ifaces, cfg, requested);
+    sess.diagnostics.extend(pdiags);
+    if report(sess, opts) {
+        return Ok(None);
+    }
+
+    if opts.compdb {
+        let root = sess.root_package().map(|p| p.root.clone()).unwrap_or_default();
+        match compdb::write(&p, &root) {
+            Ok(paths) => {
+                for path in paths {
+                    log_info!("wrote {}", path.display());
+                }
+            }
+            Err(e) => eprintln!("warning: cannot write compile_commands.json: {e}"),
+        }
+    }
+
+    let executor = choose_executor(opts)?;
+    log_debug!("executor {executor:?}");
+    if let Err(f) = exec::run(&p, executor, opts.jobs) {
+        eprint!("error: {f}");
+        return Ok(None);
+    }
+    Ok(Some(p))
+}
+
+/// 実行のしかたを組み立てる。
+fn test_run_options(opts: &Options) -> testing::RunOptions {
+    let capture = !opts.nocapture;
+    let mut jobs = opts.test_jobs.unwrap_or(1).max(1);
+    if !capture && jobs > 1 {
+        // 素通しでの並列は出力が混ざり、読めるものにならない。
+        eprintln!("note: `--nocapture` forces one test at a time");
+        jobs = 1;
+    }
+    testing::RunOptions { capture, fail_fast: opts.fail_fast, jobs }
+}
+
+/// テストの結果を報告する。誤りが1件でもあれば非零で終わる。
+///
+/// 出力の分担は他のコマンドと同じ。機械可読な結果は stdout、
+/// 進行と要約は stderr。
+fn report_tests(outcomes: &[testing::Outcome], requested: usize, opts: &Options) -> ExitCode {
+    let passed = outcomes.iter().filter(|o| o.passed).count();
+    let failed = outcomes.len() - passed;
+    let not_run = requested.saturating_sub(outcomes.len());
+
+    if opts.message_format == MessageFormat::Json {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        for o in outcomes {
+            let _ = writeln!(out, "{}", testing::render_json(o));
+        }
+    }
+
+    eprintln!("running {} test{}", requested, if requested == 1 { "" } else { "s" });
+    for o in outcomes {
+        eprintln!("{}", o.summary_line());
+    }
+
+    if failed > 0 {
+        eprintln!("\nfailures:");
+        for o in outcomes.iter().filter(|o| !o.passed) {
+            eprintln!("\n---- {} ----", o.label);
+            if let Some(reason) = o.failure_reason() {
+                eprintln!("{reason}");
+            }
+            // 出力は失敗したものだけ見せる。通ったテストの出力は雑音になる。
+            if !o.stdout.trim().is_empty() {
+                eprintln!("--- stdout ---\n{}", o.stdout.trim_end());
+            }
+            if !o.stderr.trim().is_empty() {
+                eprintln!("--- stderr ---\n{}", o.stderr.trim_end());
+            }
+        }
+    }
+
+    // 打ち切った場合、走らせていない分を隠さない。
+    let tail = if not_run > 0 { format!("; {not_run} not run") } else { String::new() };
+    eprintln!(
+        "\ntest result: {}. {passed} passed; {failed} failed{tail}",
+        if failed == 0 { "ok" } else { "FAILED" }
+    );
+    exit_code(failed > 0)
 }
 
 /// 構成を組み立てる。機能フラグは根のパッケージの `[features]` から解決する。
@@ -206,6 +337,31 @@ fn default_targets(
         return Ok(sess.targets.iter().map(|t| t.id).collect());
     }
     Ok(out)
+}
+
+/// `test` の対象。指定がなければ全ての test ターゲット。
+fn test_targets(
+    sess: &Session,
+    requested: &[String],
+) -> Result<Vec<dowel_model::TargetId>, String> {
+    use dowel_eval::schema::TableKind;
+    if !requested.is_empty() {
+        let ids: Vec<_> =
+            requested.iter().map(|s| sess.find_target(s)).collect::<Result<_, _>>()?;
+        // 明示指定が test 以外なら、黙って走らせずに断る。
+        for id in &ids {
+            let t = sess.target(*id);
+            if t.kind != TableKind::Test {
+                return Err(format!(
+                    "`{}` is a {} target, not a test",
+                    sess.label(*id),
+                    t.kind.name()
+                ));
+            }
+        }
+        return Ok(ids);
+    }
+    Ok(sess.targets.iter().filter(|t| t.kind == TableKind::Test).map(|t| t.id).collect())
 }
 
 fn choose_executor(opts: &Options) -> Result<exec::Executor, String> {

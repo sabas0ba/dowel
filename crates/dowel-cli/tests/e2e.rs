@@ -179,6 +179,32 @@ fn writes_compile_commands() {
 }
 
 #[test]
+fn the_build_leaves_no_stray_files_in_the_project() {
+    let p = two_package_project("no-stray-files");
+    p.run("app", &["build"]).success();
+
+    // ninja の作業ファイルはビルドディレクトリに閉じ込める。
+    // 利用者のプロジェクトへ勝手に物を置かない。
+    for stray in [".ninja_log", ".ninja_deps", "build.ninja"] {
+        assert!(!p.path("app").join(stray).exists(), "`{stray}` was left in the project root");
+        assert!(!p.path("libfoo").join(stray).exists(), "`{stray}` was left in libfoo");
+    }
+    // ビルドディレクトリの側にはある。
+    let bd = build_dir(&p.path("app"), "debug");
+    assert!(bd.join("build.ninja").exists());
+    assert!(bd.join(".ninja_log").exists(), "ninja did not write its log into the build dir");
+
+    // 意図して置くのは compile_commands.json だけ（clangd がここしか見ないため）。
+    let entries: Vec<String> = std::fs::read_dir(p.path("app"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n != "src" && n != "dowel.toml" && n != "dowel.build" && n != ".dowel")
+        .collect();
+    assert_eq!(entries, vec!["compile_commands.json".to_string()], "unexpected files: {entries:?}");
+}
+
+#[test]
 fn feature_flags_switch_dependencies_and_defines() {
     let p = Project::new("features");
     p.write("libz/dowel.toml", "[package]\nname = \"libz\"\nversion = \"0\"\n");
@@ -239,6 +265,226 @@ int main(void) {
     p.run(".", &["build", "--features=zlib"]).success();
     let bin = build_dir(&p.root, "zlib").join("bin/app");
     assert_eq!(run_artifact(&bin), "z=7\n");
+}
+
+/// テスト対象のライブラリと、通るテスト／落ちるテストの2本。
+///
+/// テストハーネスは持たない。終了状態 0 が成功という C の慣習に従う。
+fn project_with_tests(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"calc\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        r#"
+[lib.calc]
+sources = glob("src/*.c")
+
+[lib.calc.public]
+includes = [dir("src")]
+
+[test.unit]
+sources = glob("tests/unit.c")
+[test.unit.private]
+deps = [target("calc")]
+
+[test.broken]
+sources = glob("tests/broken.c")
+[test.broken.private]
+deps = [target("calc")]
+"#,
+    );
+    p.write("src/calc.h", "#pragma once\nint add(int a, int b);\n");
+    p.write("src/calc.c", "#include \"calc.h\"\nint add(int a, int b) { return a + b; }\n");
+    p.write(
+        "tests/unit.c",
+        "#include <stdio.h>\n#include \"calc.h\"\nint main(void) { printf(\"sum=%d\\n\", add(2, 3)); return add(2, 3) == 5 ? 0 : 1; }\n",
+    );
+    p.write(
+        "tests/broken.c",
+        "#include <stdio.h>\n#include \"calc.h\"\nint main(void) { fprintf(stderr, \"expected 6, got %d\\n\", add(2, 3)); return 1; }\n",
+    );
+    p
+}
+
+#[test]
+fn test_runs_the_test_targets_and_reports_each() {
+    let p = project_with_tests("test-run");
+    let r = p.run(".", &["test", "calc:unit"]);
+    r.success();
+    r.stderr_contains("test calc:unit ... ok");
+    r.stderr_contains("test result: ok. 1 passed; 0 failed");
+}
+
+#[test]
+fn a_failing_test_exits_nonzero_and_shows_its_output() {
+    let p = project_with_tests("test-fail");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    // 通ったものと落ちたものが区別できる。
+    r.stderr_contains("test calc:unit ... ok");
+    r.stderr_contains("test calc:broken ... FAILED");
+    // 失敗の理由と、そのテストの出力が見える。
+    r.stderr_contains("exited with status 1");
+    r.stderr_contains("expected 6, got 5");
+    r.stderr_contains("test result: FAILED. 1 passed; 1 failed");
+    // 通ったテストの出力は雑音なので出さない。
+    assert!(!r.stderr.contains("sum=5"), "output of a passing test leaked\n{r}");
+}
+
+#[test]
+fn no_run_builds_the_tests_without_starting_them() {
+    let p = project_with_tests("test-no-run");
+    let r = p.run(".", &["test", "--no-run"]);
+    // 落ちるテストがあっても、走らせなければ成功で終わる。
+    r.success();
+    r.stderr_contains("built:");
+    assert!(!r.stderr.contains("test result:"), "the tests were run\n{r}");
+    assert!(build_dir(&p.root, "debug").join("bin/unit").exists());
+}
+
+#[test]
+fn nocapture_lets_test_output_through() {
+    let p = project_with_tests("test-nocapture");
+    let r = p.run(".", &["test", "calc:unit", "--nocapture"]);
+    r.success();
+    // 素通しなので、通ったテストの出力も見える。
+    r.stdout_contains("sum=5");
+}
+
+#[test]
+fn test_results_are_available_as_json() {
+    let p = project_with_tests("test-json");
+    let r = p.run(".", &["test", "--message-format=json"]);
+    r.failure();
+    let lines: Vec<&str> = r.stdout.lines().filter(|l| l.contains("test-result")).collect();
+    assert_eq!(lines.len(), 2, "expected one JSON object per test\n{r}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""target":"calc:unit""#) && l.contains(r#""passed":true"#)),
+        "{r}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains(r#""target":"calc:broken""#)
+            && l.contains(r#""passed":false"#)
+            && l.contains(r#""exit_status":1"#)),
+        "{r}"
+    );
+}
+
+#[test]
+fn test_refuses_a_target_that_is_not_a_test() {
+    let p = project_with_tests("test-wrong-kind");
+    let r = p.run(".", &["test", "calc:calc"]);
+    r.failure();
+    r.stderr_contains("is a lib target, not a test");
+}
+
+#[test]
+fn test_says_so_when_there_is_nothing_to_run() {
+    let p = Project::new("test-none");
+    p.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[lib.a]\nsources = glob(\"*.c\")\n");
+    p.write("a.c", "int a(void) { return 1; }\n");
+    let r = p.run(".", &["test"]);
+    r.success();
+    r.stderr_contains("no test targets");
+}
+
+/// 最初に落ちるテストを置いた構成。`--fail-fast` の検査に使う。
+fn project_with_a_failing_test_first(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"seq\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        r#"
+[test.a_fails]
+sources = glob("tests/a.c")
+
+[test.b_passes]
+sources = glob("tests/b.c")
+
+[test.c_passes]
+sources = glob("tests/c.c")
+"#,
+    );
+    p.write("tests/a.c", "int main(void) { return 1; }\n");
+    p.write("tests/b.c", "int main(void) { return 0; }\n");
+    p.write("tests/c.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn fail_fast_stops_at_the_first_failure_and_says_what_was_skipped() {
+    let p = project_with_a_failing_test_first("test-fail-fast");
+    let r = p.run(".", &["test", "--fail-fast"]);
+    r.failure();
+    r.stderr_contains("test seq:a_fails ... FAILED");
+    // 走らせなかった分を隠さない。
+    r.stderr_contains("test result: FAILED. 0 passed; 1 failed; 2 not run");
+    assert!(!r.stderr.contains("seq:b_passes ..."), "a later test was started\n{r}");
+
+    // 既定は打ち切らない。全体像が要るため。
+    let all = p.run(".", &["test"]);
+    all.failure();
+    all.stderr_contains("test seq:b_passes ... ok");
+    all.stderr_contains("test result: FAILED. 2 passed; 1 failed");
+    assert!(!all.stderr.contains("not run"), "{all}");
+}
+
+#[test]
+fn failed_reruns_only_what_failed_last_time() {
+    let p = project_with_tests("test-rerun");
+    p.run(".", &["test"]).failure();
+
+    let r = p.run(".", &["test", "--failed"]);
+    r.failure();
+    r.stderr_contains("running 1 test");
+    r.stderr_contains("test calc:broken ... FAILED");
+    assert!(!r.stderr.contains("calc:unit"), "a passing test was rerun\n{r}");
+
+    // 直せば次の --failed には残らない。走らせていない calc:unit の判定も消えない。
+    p.write(
+        "tests/broken.c",
+        "#include \"calc.h\"\nint main(void) { return add(2, 3) == 5 ? 0 : 1; }\n",
+    );
+    p.run(".", &["test", "--failed"]).success();
+    let again = p.run(".", &["test", "--failed"]);
+    again.success();
+    again.stderr_contains("nothing to rerun");
+}
+
+#[test]
+fn failed_says_so_when_there_is_no_record() {
+    let p = project_with_tests("test-rerun-empty");
+    let r = p.run(".", &["test", "--failed"]);
+    r.success();
+    r.stderr_contains("nothing to rerun");
+}
+
+#[test]
+fn test_jobs_runs_several_at_once_and_keeps_the_requested_order() {
+    let p = project_with_a_failing_test_first("test-jobs");
+    let r = p.run(".", &["test", "--test-jobs=3"]);
+    r.failure();
+    // 並列でも表示は要求順。走った順に混ざらない。
+    let order: Vec<&str> = r
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("test seq:"))
+        .map(|l| l.split_whitespace().nth(1).unwrap())
+        .collect();
+    assert_eq!(order, vec!["seq:a_fails", "seq:b_passes", "seq:c_passes"], "{r}");
+    r.stderr_contains("test result: FAILED. 2 passed; 1 failed");
+}
+
+#[test]
+fn nocapture_forces_one_test_at_a_time() {
+    let p = project_with_tests("test-nocapture-jobs");
+    // 素通しでの並列は出力が混ざるため、黙って直さず断りを入れて逐次にする。
+    let r = p.run(".", &["test", "calc:unit", "--nocapture", "--test-jobs=4"]);
+    r.success();
+    r.stderr_contains("`--nocapture` forces one test at a time");
 }
 
 #[test]

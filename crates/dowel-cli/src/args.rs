@@ -20,6 +20,7 @@ Usage:
 Commands:
     check              Evaluate the manifests and report diagnostics. Does not build.
     build [target]     Build. With no target, builds every bin and test.
+    test [target]      Build and run test targets. With no target, runs every test.
     why <target> <property>
                        Show how a value reached a target.
     graph              Dump the dependency graph or the action graph.
@@ -46,6 +47,13 @@ build options:
     -j, --jobs <n>           Parallelism, passed to ninja
         --no-compdb          Do not write compile_commands.json
 
+test options:
+        --no-run             Build the test targets but do not run them
+        --nocapture          Let test output through instead of capturing it
+        --fail-fast          Stop at the first failing test
+        --failed             Rerun only the tests that failed last time
+        --test-jobs <n>      Run this many tests at once (default: 1)
+
 graph options:
         --kind <kind>        target | action (default: target)
         --format <fmt>       text | dot | json (default: text)
@@ -57,6 +65,8 @@ Examples:
     dowel check --message-format=json
     dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
     dowel why app:app includes
+    dowel test --nocapture
+    dowel test --failed --fail-fast
     DOWEL_LOG=debug dowel build
 "#;
 
@@ -64,6 +74,7 @@ Examples:
 pub enum Command {
     Check,
     Build { targets: Vec<String> },
+    Test { targets: Vec<String> },
     Why { target: String, property: String },
     Graph,
     SchemaDump,
@@ -103,6 +114,11 @@ pub struct Options {
     pub executor: Option<String>,
     pub jobs: Option<usize>,
     pub compdb: bool,
+    pub no_run: bool,
+    pub nocapture: bool,
+    pub fail_fast: bool,
+    pub only_failed: bool,
+    pub test_jobs: Option<usize>,
     pub graph_kind: GraphKind,
     pub out_format: OutFormat,
 }
@@ -123,6 +139,11 @@ impl Default for Options {
             executor: None,
             jobs: None,
             compdb: true,
+            no_run: false,
+            nocapture: false,
+            fail_fast: false,
+            only_failed: false,
+            test_jobs: None,
             graph_kind: GraphKind::Target,
             out_format: OutFormat::Text,
         }
@@ -135,7 +156,7 @@ pub enum Parsed {
     Version,
 }
 
-const COMMANDS: &[&str] = &["check", "build", "why", "graph", "schema"];
+const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema"];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -222,6 +243,16 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     Some(v.parse().map_err(|_| format!("`--jobs` must be a number (got `{v}`)"))?);
             }
             "--no-compdb" => opts.compdb = false,
+            "--no-run" => opts.no_run = true,
+            "--nocapture" => opts.nocapture = true,
+            "--fail-fast" => opts.fail_fast = true,
+            "--failed" => opts.only_failed = true,
+            "--test-jobs" => {
+                let v = take("--test-jobs")?;
+                opts.test_jobs = Some(
+                    v.parse().map_err(|_| format!("`--test-jobs` must be a number (got `{v}`)"))?,
+                );
+            }
             "--kind" => {
                 opts.graph_kind = match take("--kind")?.as_str() {
                     "target" => GraphKind::Target,
@@ -255,6 +286,11 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--executor",
                     "--jobs",
                     "--no-compdb",
+                    "--no-run",
+                    "--nocapture",
+                    "--fail-fast",
+                    "--failed",
+                    "--test-jobs",
                     "--kind",
                     "--format",
                     "--verbose",
@@ -292,6 +328,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
     opts.command = match cmd.as_str() {
         "check" => Command::Check,
         "build" => Command::Build { targets: positional },
+        "test" => Command::Test { targets: positional },
         "graph" => Command::Graph,
         "why" => {
             if positional.len() != 2 {
@@ -383,6 +420,24 @@ mod tests {
     #[test]
     fn no_arguments_prints_help() {
         assert!(matches!(parse(Vec::<String>::new()).unwrap(), Parsed::Help));
+    }
+
+    #[test]
+    fn test_command_takes_targets_and_flags() {
+        let o = run(&["test", "app:unit", "--no-run"]).unwrap();
+        assert_eq!(o.command, Command::Test { targets: vec!["app:unit".into()] });
+        assert!(o.no_run);
+        assert!(!o.nocapture);
+        assert!(run(&["test", "--nocapture"]).unwrap().nocapture);
+    }
+
+    #[test]
+    fn test_execution_flags_parse() {
+        let o = run(&["test", "--fail-fast", "--failed", "--test-jobs=4"]).unwrap();
+        assert!(o.fail_fast);
+        assert!(o.only_failed);
+        assert_eq!(o.test_jobs, Some(4));
+        assert!(run(&["test", "--test-jobs", "x"]).is_err());
     }
 
     #[test]
