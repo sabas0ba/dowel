@@ -3,6 +3,27 @@
 version = 4
 
 [[package]]
+name = "dowel-build"
+version = "0.0.1"
+dependencies = [
+ "dowel-eval",
+ "dowel-model",
+ "dowel-support",
+ "dowel-syntax",
+]
+
+[[package]]
+name = "dowel-cli"
+version = "0.0.1"
+dependencies = [
+ "dowel-build",
+ "dowel-eval",
+ "dowel-model",
+ "dowel-support",
+ "dowel-syntax",
+]
+
+[[package]]
 name = "dowel-eval"
 version = "0.0.1"
 dependencies = [

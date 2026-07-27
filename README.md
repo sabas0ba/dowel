@@ -16,7 +16,23 @@ C/C++ を主対象とするビルドシステム。CMake / Bazel / Meson に対�
 永続化ストアを完成させる前に、パーサから実際の C のコンパイルまでを
 一度通し、そのうえで各層を厚くする。
 
-実装状況は [docs/91-implementation-status.md](docs/91-implementation-status.md) を参照。
+現時点で `dowel check` / `dowel build` / `dowel why` / `dowel graph` /
+`dowel schema dump` が動く。複数パッケージの C を実際にコンパイルし、
+静的ライブラリを作り、リンクして実行できる。
+
+```sh
+cargo build --release
+
+dowel check            # 評価と診断のみ。ビルドしない
+dowel build            # ninja を生成して実行する
+dowel why app:app includes
+dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
+
+DOWEL_LOG=trace dowel build   # 依存グラフと各アクションのコマンドをログに出す
+```
+
+実装状況と計測結果は
+[docs/91-implementation-status.md](docs/91-implementation-status.md) を参照。
 
 ## 文書構成
 
@@ -29,6 +45,7 @@ C/C++ を主対象とするビルドシステム。CMake / Bazel / Meson に対�
 | [docs/40-migration.md](docs/40-migration.md) | 既存ビルドシステムからの移行 |
 | [docs/50-development.md](docs/50-development.md) | 開発環境（Nix / コンテナ）と規約 |
 | [docs/90-roadmap.md](docs/90-roadmap.md) | 実装順序と検証計画 |
+| [docs/91-implementation-status.md](docs/91-implementation-status.md) | 実装状況、計測、設計文書との差異 |
 | [docs/99-open-questions.md](docs/99-open-questions.md) | 未決事項 |
 | [docs/adr/](docs/adr/) | 決定事項とその根拠 |
 

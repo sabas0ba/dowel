@@ -334,6 +334,17 @@ impl Session {
         &self.packages[id.0]
     }
 
+    /// ソースファイルの属するパッケージ。
+    ///
+    /// 伝播した `Path` の基準点を決めるために要る。値は「パッケージルートからの
+    /// 相対」で表されるが、どのパッケージかは値自身ではなく**宣言された位置**が持つ。
+    pub fn package_of_file(&self, file: FileId) -> Option<PackageId> {
+        self.packages
+            .iter()
+            .find(|p| p.manifest_file == file || p.build_file == Some(file))
+            .map(|p| p.id)
+    }
+
     /// 依存名から読み込み済みパッケージを引く。
     /// 取得を要する供給形態（レジストリ / git）は未実装のため `None` になる。
     pub fn dep_package(&self, from: PackageId, dep_name: &str) -> Option<PackageId> {

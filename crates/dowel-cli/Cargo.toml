@@ -1,0 +1,19 @@
+[package]
+name = "dowel-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "dowel コマンドライン。"
+
+[[bin]]
+name = "dowel"
+path = "src/main.rs"
+
+[dependencies]
+dowel-support.workspace = true
+dowel-syntax.workspace = true
+dowel-eval.workspace = true
+dowel-model.workspace = true
+dowel-build.workspace = true

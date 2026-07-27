@@ -5,6 +5,8 @@ members = [
     "crates/dowel-syntax",
     "crates/dowel-eval",
     "crates/dowel-model",
+    "crates/dowel-build",
+    "crates/dowel-cli",
 ]
 
 [workspace.package]

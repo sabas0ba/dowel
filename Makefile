@@ -23,7 +23,7 @@ test:
 
 # 実際に C をコンパイルして実行する検証。時間がかかるため分けてある。
 e2e:
-	cargo test --workspace --test e2e -- --nocapture
+	cargo test -p dowel-cli --test e2e -- --nocapture
 
 build:
 	cargo build --release

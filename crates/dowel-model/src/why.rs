@@ -61,8 +61,8 @@ pub fn explain(
     };
 
     let mut items = Vec::new();
-    for v in elements(value) {
-        items.push(Item { value: v.display(), ty: v.ty.display(), steps: steps_of(sess, &v) });
+    for (rendered, v) in elements(value) {
+        items.push(Item { value: rendered, ty: v.ty.display(), steps: steps_of(sess, &v) });
     }
 
     Ok(Explanation {
@@ -74,14 +74,15 @@ pub fn explain(
     })
 }
 
-fn elements(value: &Value) -> Vec<Value> {
+/// 併合結果を1要素ずつに分ける。表示文字列は要素の形に応じて作る。
+/// 写像の要素は `キー = 値` として見せる。来歴は値側に付いている。
+fn elements(value: &Value) -> Vec<(String, Value)> {
     match &value.data {
-        Data::List(items) => items.clone(),
-        Data::Map(m) => m
-            .iter()
-            .map(|(k, v)| Value { data: Data::Str(format!("{k} = {}", v.display())), ..v.clone() })
-            .collect(),
-        _ => vec![value.clone()],
+        Data::List(items) => items.iter().map(|v| (v.display(), v.clone())).collect(),
+        Data::Map(m) => {
+            m.iter().map(|(k, v)| (format!("{k} = {}", v.display()), v.clone())).collect()
+        }
+        _ => vec![(value.display(), value.clone())],
     }
 }
 
