@@ -1,0 +1,5 @@
+# ninja log v5
+0	20	1785161889370096700	/home/user/dowel/examples/hello/libgreet/.dowel/build/x86_64-unknown-linux-gnu-debug/obj/libgreet/greet/src_greet.c.o	afbba5cd018f619b
+0	24	1785161889374096700	/home/user/dowel/examples/hello/libgreet/.dowel/build/x86_64-unknown-linux-gnu-debug/obj/libgreet/greet_test/tests_greet_test.c.o	9ceebb9f6f983bdf
+20	40	1785161889386096700	/home/user/dowel/examples/hello/libgreet/.dowel/build/x86_64-unknown-linux-gnu-debug/lib/libgreet.a	433fdc5a5fca48c
+40	63	1785161889414919289	/home/user/dowel/examples/hello/libgreet/.dowel/build/x86_64-unknown-linux-gnu-debug/bin/greet_test	8e97b7fd87af1436

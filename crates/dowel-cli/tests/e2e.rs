@@ -241,6 +241,130 @@ int main(void) {
     assert_eq!(run_artifact(&bin), "z=7\n");
 }
 
+/// テスト対象のライブラリと、通るテスト／落ちるテストの2本。
+///
+/// テストハーネスは持たない。終了状態 0 が成功という C の慣習に従う。
+fn project_with_tests(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"calc\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        r#"
+[lib.calc]
+sources = glob("src/*.c")
+
+[lib.calc.public]
+includes = [dir("src")]
+
+[test.unit]
+sources = glob("tests/unit.c")
+[test.unit.private]
+deps = [target("calc")]
+
+[test.broken]
+sources = glob("tests/broken.c")
+[test.broken.private]
+deps = [target("calc")]
+"#,
+    );
+    p.write("src/calc.h", "#pragma once\nint add(int a, int b);\n");
+    p.write("src/calc.c", "#include \"calc.h\"\nint add(int a, int b) { return a + b; }\n");
+    p.write(
+        "tests/unit.c",
+        "#include <stdio.h>\n#include \"calc.h\"\nint main(void) { printf(\"sum=%d\\n\", add(2, 3)); return add(2, 3) == 5 ? 0 : 1; }\n",
+    );
+    p.write(
+        "tests/broken.c",
+        "#include <stdio.h>\n#include \"calc.h\"\nint main(void) { fprintf(stderr, \"expected 6, got %d\\n\", add(2, 3)); return 1; }\n",
+    );
+    p
+}
+
+#[test]
+fn test_runs_the_test_targets_and_reports_each() {
+    let p = project_with_tests("test-run");
+    let r = p.run(".", &["test", "calc:unit"]);
+    r.success();
+    r.stderr_contains("test calc:unit ... ok");
+    r.stderr_contains("test result: ok. 1 passed; 0 failed");
+}
+
+#[test]
+fn a_failing_test_exits_nonzero_and_shows_its_output() {
+    let p = project_with_tests("test-fail");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    // 通ったものと落ちたものが区別できる。
+    r.stderr_contains("test calc:unit ... ok");
+    r.stderr_contains("test calc:broken ... FAILED");
+    // 失敗の理由と、そのテストの出力が見える。
+    r.stderr_contains("exited with status 1");
+    r.stderr_contains("expected 6, got 5");
+    r.stderr_contains("test result: FAILED. 1 passed; 1 failed");
+    // 通ったテストの出力は雑音なので出さない。
+    assert!(!r.stderr.contains("sum=5"), "output of a passing test leaked\n{r}");
+}
+
+#[test]
+fn no_run_builds_the_tests_without_starting_them() {
+    let p = project_with_tests("test-no-run");
+    let r = p.run(".", &["test", "--no-run"]);
+    // 落ちるテストがあっても、走らせなければ成功で終わる。
+    r.success();
+    r.stderr_contains("built:");
+    assert!(!r.stderr.contains("test result:"), "the tests were run\n{r}");
+    assert!(build_dir(&p.root, "debug").join("bin/unit").exists());
+}
+
+#[test]
+fn nocapture_lets_test_output_through() {
+    let p = project_with_tests("test-nocapture");
+    let r = p.run(".", &["test", "calc:unit", "--nocapture"]);
+    r.success();
+    // 素通しなので、通ったテストの出力も見える。
+    r.stdout_contains("sum=5");
+}
+
+#[test]
+fn test_results_are_available_as_json() {
+    let p = project_with_tests("test-json");
+    let r = p.run(".", &["test", "--message-format=json"]);
+    r.failure();
+    let lines: Vec<&str> = r.stdout.lines().filter(|l| l.contains("test-result")).collect();
+    assert_eq!(lines.len(), 2, "expected one JSON object per test\n{r}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""target":"calc:unit""#) && l.contains(r#""passed":true"#)),
+        "{r}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains(r#""target":"calc:broken""#)
+            && l.contains(r#""passed":false"#)
+            && l.contains(r#""exit_status":1"#)),
+        "{r}"
+    );
+}
+
+#[test]
+fn test_refuses_a_target_that_is_not_a_test() {
+    let p = project_with_tests("test-wrong-kind");
+    let r = p.run(".", &["test", "calc:calc"]);
+    r.failure();
+    r.stderr_contains("is a lib target, not a test");
+}
+
+#[test]
+fn test_says_so_when_there_is_nothing_to_run() {
+    let p = Project::new("test-none");
+    p.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[lib.a]\nsources = glob(\"*.c\")\n");
+    p.write("a.c", "int a(void) { return 1; }\n");
+    let r = p.run(".", &["test"]);
+    r.success();
+    r.stderr_contains("no test targets");
+}
+
 #[test]
 fn diagnostics_carry_a_location_and_a_suggestion() {
     let p = Project::new("diagnostics");

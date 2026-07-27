@@ -50,6 +50,15 @@ fn the_example_builds_and_runs() {
 }
 
 #[test]
+fn the_example_tests_pass() {
+    let p = staged_example();
+    let r = p.run("libgreet", &["test"]);
+    r.success();
+    r.stderr_contains("test libgreet:greet_test ... ok");
+    r.stderr_contains("test result: ok. 1 passed; 0 failed");
+}
+
+#[test]
 fn the_commands_in_the_example_readme_work() {
     let p = staged_example();
     p.run("app", &["why", "app:app", "includes"])

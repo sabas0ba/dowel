@@ -12,3 +12,11 @@ defines  = { GREET_API = 1 }
 # 自分のコンパイルにのみ効く。app からは見えない
 includes = [dir("src")]
 flags    = ["-Wall", "-Wextra"]
+
+# テスト。ビルドすると実行ファイルになり、`dowel test` が起動する。
+# 公開ヘッダしか使わないことも、これで併せて確かめられる。
+[test.greet_test]
+sources = glob("tests/*.c")
+
+[test.greet_test.private]
+deps = [target("greet")]

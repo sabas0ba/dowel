@@ -8,6 +8,9 @@ cd app
 dowel check
 dowel build
 ./.dowel/build/*/bin/app
+
+cd ../libgreet
+dowel test        # test.greet_test をビルドして走らせる
 ```
 
 見どころ:
@@ -17,6 +20,8 @@ dowel build
 - `public.defines` の `GREET_API` は `app` のコンパイルにも効く
 - `flags` は `match cfg.opt` で構成ごとに切り替わる。
   `dowel build --config=release` で確かめられる
+- `libgreet` の `[test.greet_test]` は公開ヘッダしか使わない。
+  `dowel test` が終了状態で合否を判定する
 
 伝播の経路は `dowel why` で辿れる。
 
