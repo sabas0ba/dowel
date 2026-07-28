@@ -115,6 +115,8 @@ run fixture gating -- cargo test -p dowel-cli --test fixture
 # 診断が利用者まで届くこと、および網羅の追跡。
 run diagnostics gating -- cargo test -p dowel-cli --test diagnostics
 run example gating -- cargo test -p dowel-cli --test example
+# 文書のリンクと索引。腐っても誰も落ちないため、落ちる機構を置く。
+run docs gating -- cargo test -p dowel-cli --test docs
 
 # --- 計測 ---------------------------------------------------------------
 # 起動時間の予算（無操作時 10ms 以下、docs/20-architecture.md 5.4）の追跡。

@@ -18,7 +18,7 @@ struct Case {
     code: &'static str,
     /// なぜこの入力でその診断が出るのか。読み手が入力を復元できるようにする
     why: &'static str,
-    /// 既定の骨格に上書きするファイル
+    /// 基準プロジェクトに上書きするファイル
     files: &'static [(&'static str, &'static str)],
     /// `app` ディレクトリで起動する引数
     args: &'static [&'static str],
@@ -27,7 +27,7 @@ struct Case {
 const CHECK: &[&str] = &["check", "--message-format=json"];
 const BUILD: &[&str] = &["build", "--message-format=json"];
 
-/// 通る最小のプロジェクト。各事例はこの上に必要なファイルだけを重ねる。
+/// 診断を出さない最小のプロジェクト。各事例はこの上に必要なファイルのみを上書きする。
 fn base(p: &Project) {
     p.write("app/dowel.toml", "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n");
     p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
@@ -360,9 +360,9 @@ fn every_case_produces_the_diagnostic_it_claims() {
 
 #[test]
 fn the_case_table_has_no_duplicates() {
-    // 同じコードに複数の事例があってよい。別の経路から出る診断は、
-    // 経路ごとに固定する値打ちがある（`missing-field` はパッケージにも
-    // ランナーにも出る）。重複として弾くのは「同じ主張が2つある」場合に限る。
+    // 同一コードに対する複数の事例は許容する。発生経路が異なる診断は
+    // 経路ごとに検査する必要がある（`missing-field` はパッケージとランナーの
+    // 双方から出る）。重複とみなすのは主張が同一の場合に限る。
     let mut seen = BTreeSet::new();
     for case in CASES {
         assert!(
