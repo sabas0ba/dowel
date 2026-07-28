@@ -1,5 +1,6 @@
 //! 評価層。CST を型つき値に落とし、構成で具体化する。
 
+pub mod codec;
 pub mod config;
 pub mod eval;
 pub mod schema;
