@@ -15,7 +15,7 @@ use dowel_eval::schema::{self, Block};
 use dowel_eval::{Config, Opt};
 use dowel_model::{graph, interface, package, Session};
 use dowel_support::json::JsonWriter;
-use dowel_support::{diag, log, log_debug, log_info, Severity};
+use dowel_support::{diag, log, log_debug, log_info, log_trace, Severity};
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -72,6 +72,12 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     }
 
     let mut sess = Session::load(&opts.directory);
+    // 入力の記録は読み込み直後に書く。以降の段階が失敗しても、
+    // 何を読んだかは次回の実行にとって有効な情報である。
+    sess.save_inputs();
+    for (path, change) in sess.input_changes() {
+        log_trace!("input {}: {change:?}", path.display());
+    }
     let cfg = configure(&sess, opts)?;
     log_debug!("configuration {}", cfg.id());
 

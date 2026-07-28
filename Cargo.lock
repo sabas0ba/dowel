@@ -38,6 +38,7 @@ version = "0.0.1"
 dependencies = [
  "dowel-eval",
  "dowel-query",
+ "dowel-store",
  "dowel-support",
  "dowel-syntax",
 ]
