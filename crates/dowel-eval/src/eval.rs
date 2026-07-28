@@ -24,6 +24,12 @@ pub struct Document {
 pub struct Table {
     /// `[lib.foo.public]` なら `["lib", "foo", "public"]`
     pub path: Vec<String>,
+    /// `path` の各要素が書かれた位置。要素数は `path` と等しい。
+    ///
+    /// 修正提案は誤った段だけを置き換える。見出し全体を範囲にすると、
+    /// 置換文字列が1つの識別子である限り、適用した結果は構文として
+    /// 成立しない（#12）。
+    pub path_spans: Vec<Span>,
     /// `[[dependencies]]` 形式か
     pub array: bool,
     pub site: Site,
@@ -33,6 +39,8 @@ pub struct Table {
 pub struct Entry {
     /// ドット付きキーを許すため列で持つ
     pub key: Vec<String>,
+    /// `key` の各要素が書かれた位置。要素数は `key` と等しい。
+    pub key_spans: Vec<Span>,
     pub site: Site,
     pub value: Value,
 }
@@ -64,6 +72,7 @@ pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>)
     // 見出しの前に現れた key-value は根のテーブルに属する。
     tables.push(Table {
         path: Vec::new(),
+        path_spans: Vec::new(),
         array: false,
         site: Site::new(file, Span::EMPTY),
         entries: Vec::new(),
@@ -73,7 +82,7 @@ pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>)
         match node.kind {
             NodeKind::TableHeader | NodeKind::ArrayTableHeader => {
                 let array = node.kind == NodeKind::ArrayTableHeader;
-                let path = ev.key_path(node);
+                let (path, path_spans) = ev.key_path(node);
                 let site = Site::new(file, node.span);
                 if !array {
                     if let Some(prev) = tables.iter().find(|t| t.path == path && !t.array) {
@@ -93,7 +102,7 @@ pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>)
                         );
                     }
                 }
-                tables.push(Table { path, array, site, entries: Vec::new() });
+                tables.push(Table { path, path_spans, array, site, entries: Vec::new() });
             }
             NodeKind::KeyValue => {
                 let entry = ev.key_value(node);
@@ -145,34 +154,42 @@ impl<'a> Evaluator<'a> {
         self.diags.push(Diagnostic::error(code, msg).at(self.file, span, label));
     }
 
-    /// `[lib.foo.public]` の見出しからキー列を取り出す。
-    fn key_path(&mut self, header: &Node) -> Vec<String> {
-        let Some(kp) = header.child(NodeKind::KeyPath) else { return Vec::new() };
+    /// `[lib.foo.public]` の見出しからキー列と、各段の位置を取り出す。
+    fn key_path(&mut self, header: &Node) -> (Vec<String>, Vec<Span>) {
+        let Some(kp) = header.child(NodeKind::KeyPath) else {
+            return (Vec::new(), Vec::new());
+        };
         self.segments(kp)
     }
 
-    fn segments(&mut self, key_path: &Node) -> Vec<String> {
-        let mut out = Vec::new();
+    /// 段ごとの名前と、その名前が書かれた範囲。範囲は引用符を含む。
+    fn segments(&mut self, key_path: &Node) -> (Vec<String>, Vec<Span>) {
+        let mut names = Vec::new();
+        let mut spans = Vec::new();
         for t in key_path.tokens() {
             match t.kind {
-                TokenKind::Ident => out.push(self.text(t.span).to_string()),
+                TokenKind::Ident => {
+                    names.push(self.text(t.span).to_string());
+                    spans.push(t.span);
+                }
                 TokenKind::Str => {
-                    let s = self.string_literal(t.span);
-                    out.push(s);
+                    names.push(self.string_literal(t.span));
+                    spans.push(t.span);
                 }
                 _ => {}
             }
         }
-        out
+        (names, spans)
     }
 
     fn key_value(&mut self, node: &Node) -> Entry {
-        let key = node.child(NodeKind::KeyPath).map(|kp| self.segments(kp)).unwrap_or_default();
+        let (key, key_spans) =
+            node.child(NodeKind::KeyPath).map(|kp| self.segments(kp)).unwrap_or_default();
         let value = match node.nodes().find(|n| n.kind != NodeKind::KeyPath) {
             Some(v) => self.expr(v),
             None => Value::error(Prov::at(Origin::Literal, self.site(node.span))),
         };
-        Entry { key, site: self.site(node.span), value }
+        Entry { key, key_spans, site: self.site(node.span), value }
     }
 
     fn expr(&mut self, node: &Node) -> Value {
