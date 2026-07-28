@@ -204,19 +204,41 @@ pub fn render(d: &Diagnostic, sm: &SourceMap, color: bool) -> String {
         return out;
     };
 
-    let lc = sm.line_col(primary.file, primary.span.start);
-    let gutter = lc.line.to_string().len().max(1);
+    // 行番号の桁は全ラベルの最大に揃える。ファイルごとに変えると縦線の
+    // 位置がずれる。
+    let gutter = d
+        .labels
+        .iter()
+        .map(|l| sm.line_col(l.file, l.span.start).line.to_string().len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let pad = " ".repeat(gutter);
 
-    out.push_str(&format!(
-        "{pad}{blue}-->{reset} {}:{}:{}\n",
-        sm.path(primary.file).display(),
-        lc.line,
-        lc.col
-    ));
+    // 主ラベルのファイルを先頭に、残りをラベルの順に並べる。
+    // 併合の衝突は2つの値が別のパッケージから来るため、片方だけを出すと
+    // 衝突の相手が分からない（docs/10-manifest.md 3節）。
+    let mut files: Vec<FileId> = vec![primary.file];
+    for l in &d.labels {
+        if !files.contains(&l.file) {
+            files.push(l.file);
+        }
+    }
 
-    for label in d.labels.iter().filter(|l| l.file == primary.file) {
-        render_label(&mut out, label, sm, gutter, color);
+    for (i, &file) in files.iter().enumerate() {
+        let first = d.labels.iter().find(|l| l.file == file).unwrap_or(primary);
+        let lc = sm.line_col(file, first.span.start);
+        // 主ラベルのファイルは `-->`、それ以外は `:::`。rustc の書式に倣う。
+        let arrow = if i == 0 { "-->" } else { ":::" };
+        out.push_str(&format!(
+            "{pad}{blue}{arrow}{reset} {}:{}:{}\n",
+            sm.path(file).display(),
+            lc.line,
+            lc.col
+        ));
+        for label in d.labels.iter().filter(|l| l.file == file) {
+            render_label(&mut out, label, sm, gutter, color);
+        }
     }
 
     for n in &d.notes {
@@ -364,6 +386,42 @@ mod tests {
         assert!(out.contains("--> libfoo/dowel.build:2:3"), "{out}");
         assert!(out.contains("^^^^^^^"), "{out}");
         assert!(out.contains("= help:"), "{out}");
+    }
+
+    #[test]
+    fn labels_in_another_file_are_rendered_too() {
+        // 併合の衝突は必ず2つのファイルにまたがる。片側だけを出すと
+        // 利用者は衝突の相手を探すことになる。
+        let mut sm = SourceMap::new();
+        let lib = sm.add("lib/dowel.build", "[lib.a.public]\ndefines = { N = 64 }\n".to_string());
+        let app = sm.add("app/dowel.build", "[bin.b.private]\ndefines = { N = 128 }\n".to_string());
+        let d = Diagnostic::error("merge-conflict", "conflicting values reached `N`")
+            .at(lib, Span::new(29, 31), "this one is 64")
+            .with_label(Label::secondary(app, Span::new(30, 33), "the value that arrived first"));
+
+        let out = render(&d, &sm, false);
+        assert!(out.contains("--> lib/dowel.build:2:15"), "{out}");
+        assert!(out.contains("::: app/dowel.build:2:15"), "{out}");
+        assert!(out.contains("this one is 64"), "{out}");
+        assert!(out.contains("the value that arrived first"), "{out}");
+    }
+
+    #[test]
+    fn the_gutter_is_wide_enough_for_every_label() {
+        // 桁を主ラベルだけで決めると、行番号の桁が増える別ファイルで縦線がずれる。
+        let mut sm = SourceMap::new();
+        let a = sm.add("a.build", "x = 1\n".to_string());
+        let b = sm.add("b.build", "\n".repeat(11) + "y = 2\n");
+        let d = Diagnostic::error("e", "m")
+            .at(a, Span::new(0, 1), "here")
+            .with_label(Label::secondary(b, Span::new(11, 12), "and here"));
+
+        let out = render(&d, &sm, false);
+        // 2桁の行番号があるため、1桁側も2桁分の幅で揃える。
+        assert!(out.contains("  --> a.build:1:1"), "{out}");
+        assert!(out.contains("  ::: b.build:12:1"), "{out}");
+        assert!(out.contains(" 1 | x = 1"), "{out}");
+        assert!(out.contains("12 | y = 2"), "{out}");
     }
 
     #[test]
