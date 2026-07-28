@@ -16,15 +16,18 @@ C/C++ を主対象とするビルドシステム。CMake / Bazel / Meson に対�
 永続化ストアを完成させる前に、パーサから実際の C のコンパイルまでを
 一度通し、そのうえで各層を厚くする。
 
-現時点で `dowel check` / `dowel build` / `dowel why` / `dowel graph` /
-`dowel schema dump` が動く。複数パッケージの C を実際にコンパイルし、
-静的ライブラリを作り、リンクして実行できる。
+現時点で `dowel check` / `dowel build` / `dowel test` / `dowel why` /
+`dowel graph` / `dowel schema dump` が動く。複数パッケージの C を実際に
+コンパイルし、静的ライブラリを作り、リンクして実行できる。
+マニフェスト評価は増分クエリエンジンを通っており、クロス実行のための
+ランナー（`[runner.<triple>]`）も宣言できる。
 
 ```sh
 cargo build --release
 
 dowel check            # 評価と診断のみ。ビルドしない
 dowel build            # ninja を生成して実行する
+dowel test             # test ターゲットをビルドして走らせる
 dowel why app:app includes
 dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
 
@@ -40,20 +43,14 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 実装状況と計測結果は
 [docs/91-implementation-status.md](docs/91-implementation-status.md) を参照。
 
-## 文書構成
+## 文書
 
-| 文書 | 内容 |
-|---|---|
-| [docs/00-overview.md](docs/00-overview.md) | 目標・非目標、既存システムに対する位置づけ |
-| [docs/10-manifest.md](docs/10-manifest.md) | マニフェスト仕様（`dowel.toml` / `dowel.build`） |
-| [docs/20-architecture.md](docs/20-architecture.md) | クエリエンジン、永続化ストア、言語サーバ |
-| [docs/30-devexp.md](docs/30-devexp.md) | ランナー、デバッガ連携、エディタ連携 |
-| [docs/40-migration.md](docs/40-migration.md) | 既存ビルドシステムからの移行 |
-| [docs/50-development.md](docs/50-development.md) | 開発環境（Nix / コンテナ）と規約 |
-| [docs/90-roadmap.md](docs/90-roadmap.md) | 実装順序と検証計画 |
-| [docs/91-implementation-status.md](docs/91-implementation-status.md) | 実装状況、計測、設計文書との差異 |
-| [docs/99-open-questions.md](docs/99-open-questions.md) | 未決事項 |
-| [docs/adr/](docs/adr/) | 決定事項とその根拠 |
+[docs/README.md](docs/README.md) に地図がある。要点だけ挙げると:
+
+- **何をするものか** — [docs/00-overview.md](docs/00-overview.md)
+- **何が動くか** — [docs/91-implementation-status.md](docs/91-implementation-status.md)
+- **コマンド** — [docs/60-cli.md](docs/60-cli.md)
+- **決定と根拠** — [docs/adr/](docs/adr/README.md)
 
 ## 開発
 

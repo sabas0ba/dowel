@@ -3,6 +3,8 @@
 [90-roadmap.md](90-roadmap.md) はフェーズ単位の計画である。本文書は
 **現に動くもの**を記録する。両者が食い違う場合、本文書が現況を示す。
 
+コマンドの使い方は [60-cli.md](60-cli.md) にある。
+
 ## 方針: 縦に薄く貫通させる
 
 ロードマップは Phase 1（コア）を完成させてから Phase 2（生成）へ進む順序を
@@ -21,40 +23,6 @@
 貫通後、増分クエリエンジンと永続化ストアを差し込む。差し込み先は
 `dowel_model::session::Session` に閉じてある。増分クエリエンジンは
 差し込み済みであり（下記）、永続化ストアが残っている。
-
-## 使い方
-
-```sh
-cargo build --release            # target/release/dowel
-
-dowel check                      # 評価と診断のみ。ビルドしない
-dowel build                      # 実際にビルドする
-dowel build --config=release
-dowel test                       # test ターゲットをビルドして走らせる
-dowel test --nocapture           # テストの出力を素通しする
-dowel test --failed --fail-fast  # 前回落ちた分だけ、最初の失敗で打ち切る
-dowel test --test-jobs=4         # 同時に4本走らせる
-dowel why app:app includes       # 値がそこへ来た経路
-dowel graph --format=dot         # 依存グラフ
-dowel graph --kind=action        # アクショングラフ
-dowel schema dump                # スキーマと構成語彙（機械可読）
-```
-
-デバッグ時の観測は環境変数か `--log-level` で行う。
-
-```sh
-DOWEL_LOG=debug dowel build      # 段階ごとの所要時間、グラフの規模
-DOWEL_LOG=trace dowel build      # 依存グラフの辺、各アクションのコマンド
-dowel check --log-format=json    # 1行1オブジェクト
-```
-
-出力先は分けてある。**stdout は成果物**（JSON 診断、グラフ、スキーマ、`why`）、
-**stderr は進行とログ**。したがって `dowel graph --format=dot | dot -Tsvg` は
-ログ水準に関わらず動く。
-
-動く例は [`examples/hello`](../examples/hello) にある。
-`crates/dowel-cli/tests/example.rs` が現物をビルドして検査しているため、
-構文や意味論を変えた際の更新漏れは検出される。
 
 ## クレート構成
 
@@ -189,7 +157,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 216 件）。
+現在の内訳（テスト 220 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
@@ -203,6 +171,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 8 |
 | `diagnostics` | 診断が CLI まで届くこと（36 事例）と網羅の追跡 | 5 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
+| `docs` | 文書のリンクと索引の整合 | 4 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
 
 `scenario` / `fixture` / `diagnostics` の3層は後から足した。足した最初の実行で
