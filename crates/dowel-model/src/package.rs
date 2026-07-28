@@ -31,7 +31,14 @@ pub struct Dependency {
     pub name: String,
     pub kind: DepKind,
     pub optional: bool,
+    /// `[[dependencies]]` の見出し
     pub site: Site,
+    /// 供給元を書いた行（`path` / `git` / `version`）。無ければ見出しと同じ。
+    ///
+    /// 依存が多段になると、読めなかったパスだけでは「どの `dowel.toml` に
+    /// 書かれた宣言か」が分からない。`path` は相対で書かれるため、
+    /// パスから遡るのも一手間になる。
+    pub source_site: Site,
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +151,12 @@ pub fn from_document(
         };
         let optional = t.entry("optional").and_then(|e| e.value.as_bool()).unwrap_or(false);
 
+        let source_site = ["path", "git", "version"]
+            .iter()
+            .find_map(|k| t.entry(k))
+            .map(|e| e.site)
+            .unwrap_or(t.site);
+
         let kind = if let Some(e) = t.entry("path") {
             match e.value.as_str() {
                 Some(p) => DepKind::Path(PathBuf::from(p)),
@@ -173,7 +186,7 @@ pub fn from_document(
             DepKind::Unsupported("none")
         };
 
-        pkg.deps.push(Dependency { name, kind, optional, site: t.site });
+        pkg.deps.push(Dependency { name, kind, optional, site: t.site, source_site });
     }
 
     pkg
