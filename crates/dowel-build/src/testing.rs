@@ -34,6 +34,46 @@ pub struct Launcher {
     /// ラッパのプログラム。ホスト実行なら `None`
     program: Option<String>,
     args: Vec<String>,
+    /// 成果物の転送。SSH やシリアル経由のように、対象機が
+    /// ビルド機のファイルシステムを見られない場合に設定する
+    transfer: Option<Transfer>,
+}
+
+/// 成果物を対象機へ運ぶ手順（docs/adr/0008-runner-transfer.md）。
+///
+/// パスはマニフェストに書かせず、実装が**末尾に付け足す**。
+/// `transfer` には `<ローカルの成果物> <転送先>` を、
+/// `command` / `args` には転送先のパスを付ける。
+/// 文字列補間を導入しないための形である。
+#[derive(Clone, Debug)]
+struct Transfer {
+    /// 転送コマンドとその固定引数
+    command: Vec<String>,
+    /// 対象機側のディレクトリ
+    remote_dir: String,
+    /// 転送先のホスト。`<host>:<path>` の形を作るためにだけ使う
+    host: Option<String>,
+}
+
+impl Transfer {
+    /// 対象機での成果物のパス。
+    fn remote_path(&self, binary: &Path) -> String {
+        let name = binary.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        format!("{}/{name}", self.remote_dir.trim_end_matches('/'))
+    }
+
+    /// 転送コマンドの完全な引数。末尾は `<ローカル> <転送先>`。
+    fn command_for(&self, binary: &Path) -> (String, Vec<String>) {
+        let remote = self.remote_path(binary);
+        let destination = match &self.host {
+            Some(h) => format!("{h}:{remote}"),
+            None => remote,
+        };
+        let mut parts = self.command.iter().skip(1).cloned().collect::<Vec<_>>();
+        parts.push(binary.display().to_string());
+        parts.push(destination);
+        (self.command[0].clone(), parts)
+    }
 }
 
 impl Launcher {
@@ -60,7 +100,7 @@ impl Launcher {
                 diags.push(d);
             }
             log_debug!("no runner for `{}`; starting artifacts directly", cfg.target);
-            return (Launcher { program: None, args: Vec::new() }, diags);
+            return (Launcher::direct(), diags);
         };
 
         // ランナーの値も `match` や後置 `when` を持ちうる。具体化はここで行う。
@@ -73,11 +113,30 @@ impl Launcher {
             .and_then(|v| dowel_eval::specialize(v, cfg))
             .map(|v| string_list(&v))
             .unwrap_or_default();
+        let str_prop = |name: &str| {
+            runner
+                .prop(name)
+                .and_then(|v| dowel_eval::specialize(v, cfg))
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+        };
+        let transfer_cmd = runner
+            .prop("transfer")
+            .and_then(|v| dowel_eval::specialize(v, cfg))
+            .map(|v| string_list(&v))
+            .unwrap_or_default();
+        // 組み合わせの妥当性は読み込み時に検証済み。ここは具体化の結果を見る。
+        let transfer = match (transfer_cmd.is_empty(), str_prop("remote_dir")) {
+            (false, Some(remote_dir)) => {
+                log_debug!("runner for `{}` transfers via {}", cfg.target, transfer_cmd.join(" "));
+                Some(Transfer { command: transfer_cmd, remote_dir, host: str_prop("host") })
+            }
+            _ => None,
+        };
 
         match program {
             Some(program) => {
                 log_debug!("runner for `{}`: {program} {}", cfg.target, args.join(" "));
-                (Launcher { program: Some(program), args }, diags)
+                (Launcher { program: Some(program), args, transfer }, diags)
             }
             None => {
                 // `command` の存在と型は読み込み時に検証済み。ここへ来るのは
@@ -90,26 +149,38 @@ impl Launcher {
                     .at(runner.site.file, runner.site.span, "declared here")
                     .note("a `when` clause may have removed it"),
                 );
-                (Launcher { program: None, args: Vec::new() }, diags)
+                (Launcher::direct(), diags)
             }
         }
     }
 
     /// ラッパを持たない起動器。ランナーを要さない経路と試験のために使う。
     pub fn direct() -> Launcher {
-        Launcher { program: None, args: Vec::new() }
+        Launcher { program: None, args: Vec::new(), transfer: None }
     }
 
     /// `binary` を起動するためのプログラムと引数。
+    ///
+    /// 転送を伴う場合、渡すのは対象機側のパスである。ローカルのパスを渡すと
+    /// 対象機に存在しないファイルを起動しようとする。
     pub fn command(&self, binary: &Path) -> (String, Vec<String>) {
+        let target_path = match &self.transfer {
+            Some(t) => t.remote_path(binary),
+            None => binary.display().to_string(),
+        };
         match &self.program {
-            None => (binary.display().to_string(), Vec::new()),
+            None => (target_path, Vec::new()),
             Some(program) => {
                 let mut args = self.args.clone();
-                args.push(binary.display().to_string());
+                args.push(target_path);
                 (program.clone(), args)
             }
         }
+    }
+
+    /// 起動前に実行する転送コマンド。転送を伴わない場合は `None`。
+    pub fn transfer_command(&self, binary: &Path) -> Option<(String, Vec<String>)> {
+        self.transfer.as_ref().map(|t| t.command_for(binary))
     }
 }
 
@@ -194,6 +265,9 @@ struct Job {
     cwd: PathBuf,
     program: String,
     args: Vec<String>,
+    /// 起動前に走らせる転送コマンド。対象機がビルド機の
+    /// ファイルシステムを見られない場合にのみ入る
+    transfer: Option<(String, Vec<String>)>,
 }
 
 fn plan_jobs(sess: &Session, plan: &Plan, launcher: &Launcher, targets: &[TargetId]) -> Vec<Job> {
@@ -205,6 +279,7 @@ fn plan_jobs(sess: &Session, plan: &Plan, launcher: &Launcher, targets: &[Target
                 Some(b) => launcher.command(b),
                 None => (String::new(), Vec::new()),
             };
+            let transfer = binary.as_ref().and_then(|b| launcher.transfer_command(b));
             Job {
                 target: tid,
                 label: sess.label(tid),
@@ -214,6 +289,7 @@ fn plan_jobs(sess: &Session, plan: &Plan, launcher: &Launcher, targets: &[Target
                 cwd: sess.package(sess.target(tid).package).root.clone(),
                 program,
                 args,
+                transfer,
             }
         })
         .collect()
@@ -241,6 +317,9 @@ pub fn run(
             if j.program.is_empty() { "<no artifact>" } else { &j.program },
             j.cwd.display()
         );
+        if let Some((program, args)) = &j.transfer {
+            log_trace!("    transfer: {program} {}", args.join(" "));
+        }
     }
 
     if jobs == 1 {
@@ -282,8 +361,28 @@ pub fn run(
     collected.into_iter().map(|(_, o)| o).collect()
 }
 
+/// 成果物を対象機へ転送する。失敗した理由をそのまま返す。
+fn transfer(job: &Job) -> Result<(), String> {
+    let Some((program, args)) = &job.transfer else { return Ok(()) };
+    log_debug!("transferring the artifact for {}", job.label);
+    log_trace!("  {program} {}", args.join(" "));
+    let out = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("cannot start `{program}`: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // 転送の失敗はテストの失敗ではない。理由をそのまま見せる。
+    Err(format!(
+        "`{program}` exited with {:?}\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).trim_end()
+    ))
+}
+
 fn run_one(job: &Job, capture: bool) -> Outcome {
-    let Job { target: tid, label, binary, cwd, program, args } = job;
+    let Job { target: tid, label, binary, cwd, program, args, .. } = job;
     let (label, cwd) = (label.clone(), cwd.clone());
     let Some(binary) = binary.clone() else {
         return Outcome {
@@ -299,6 +398,20 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
         };
     };
     let tid = *tid;
+
+    if let Err(e) = transfer(job) {
+        return Outcome {
+            target: tid,
+            label,
+            binary,
+            status: None,
+            passed: false,
+            duration_ms: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            launch_error: Some(format!("could not transfer the artifact: {e}")),
+        };
+    }
 
     log_debug!("running {label}");
     log_trace!("  {program} (cwd {})", cwd.display());
@@ -545,9 +658,55 @@ mod tests {
         let l = Launcher {
             program: Some("qemu-riscv64".into()),
             args: vec!["-L".into(), "/usr/riscv64-linux-gnu".into()],
+            transfer: None,
         };
         let (program, args) = l.command(Path::new("/tmp/unit"));
         assert_eq!(program, "qemu-riscv64");
         assert_eq!(args, vec!["-L", "/usr/riscv64-linux-gnu", "/tmp/unit"]);
+        assert!(l.transfer_command(Path::new("/tmp/unit")).is_none());
+    }
+
+    #[test]
+    fn a_transfer_appends_the_source_and_the_destination() {
+        // パスはマニフェストに書かせず、末尾に付け足す（ADR-0008）。
+        let l = Launcher {
+            program: Some("ssh".into()),
+            args: vec!["board.local".into()],
+            transfer: Some(Transfer {
+                command: vec!["scp".into(), "-q".into()],
+                remote_dir: "/tmp/dowel".into(),
+                host: Some("board.local".into()),
+            }),
+        };
+        let binary = Path::new("/build/bin/unit_test");
+
+        let (program, args) = l.transfer_command(binary).expect("a transfer was declared");
+        assert_eq!(program, "scp");
+        assert_eq!(args, vec!["-q", "/build/bin/unit_test", "board.local:/tmp/dowel/unit_test"]);
+
+        // 起動側へ渡すのは対象機のパス。ローカルのパスでは対象機に存在しない。
+        let (program, args) = l.command(binary);
+        assert_eq!(program, "ssh");
+        assert_eq!(args, vec!["board.local", "/tmp/dowel/unit_test"]);
+    }
+
+    #[test]
+    fn a_transfer_without_a_host_uses_the_bare_remote_path() {
+        // シリアル書き込みのように、宛先がホスト名を持たない場合。
+        let l = Launcher {
+            program: Some("run-on-device".into()),
+            args: vec!["/dev/ttyUSB0".into()],
+            transfer: Some(Transfer {
+                command: vec!["flash".into()],
+                remote_dir: "/lib/tests/".into(),
+                host: None,
+            }),
+        };
+        let binary = Path::new("/build/bin/unit_test");
+        let (program, args) = l.transfer_command(binary).unwrap();
+        assert_eq!(program, "flash");
+        // `remote_dir` の末尾のスラッシュは重ねない。
+        assert_eq!(args, vec!["/build/bin/unit_test", "/lib/tests/unit_test"]);
+        assert_eq!(l.command(binary).1, vec!["/dev/ttyUSB0", "/lib/tests/unit_test"]);
     }
 }

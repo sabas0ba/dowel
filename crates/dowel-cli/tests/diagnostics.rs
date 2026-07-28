@@ -284,6 +284,15 @@ const CASES: &[Case] = &[
         )],
         args: CHECK,
     },
+    Case {
+        code: "incomplete-runner",
+        why: "`transfer` needs a destination, which only `remote_dir` provides",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[runner.riscv64gc-unknown-linux-gnu]\ncommand = \"ssh\"\ntransfer = [\"scp\"]\n",
+        )],
+        args: CHECK,
+    },
     // --- ビルド計画 -------------------------------------------------------
     Case {
         code: "no-sources",
