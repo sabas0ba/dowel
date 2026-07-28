@@ -745,3 +745,84 @@ fn a_runner_for_another_triple_is_not_used_for_the_host() {
     // ホスト構成では引かれないため、そのまま起動されて通る。
     p.run(".", &["test"]).success();
 }
+
+#[test]
+fn a_runner_transfers_the_artifact_and_runs_the_transferred_copy() {
+    // 実機や qemu-system を用意せずに転送の経路を検査するため、
+    // 転送コマンドに `cp`、転送先にローカルのディレクトリを使う。
+    // テスト本体は argv[0] を見て、転送先から起動されたことを確かめる。
+    let triple = host_triple();
+    let p = Project::new("runner-transfer");
+    let staged = p.path("staged");
+    std::fs::create_dir_all(&staged).unwrap();
+
+    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        &format!(
+            "[test.moved]\nsources = glob(\"*.c\")\n\n\
+             [runner.{triple}]\n\
+             transfer   = [\"cp\"]\n\
+             remote_dir = \"{}\"\n\
+             command    = \"env\"\n\
+             args       = [\"DOWEL_VIA_RUNNER=1\"]\n",
+            staged.display()
+        ),
+    );
+    p.write(
+        "moved.c",
+        "#include <string.h>\n#include <stdlib.h>\n\
+         int main(int argc, char **argv)\n\
+         {\n\
+         \x20   if (argc < 1 || !strstr(argv[0], \"staged/\")) return 1;\n\
+         \x20   return getenv(\"DOWEL_VIA_RUNNER\") ? 0 : 2;\n\
+         }\n",
+    );
+
+    let r = p.run(".", &["test"]);
+    r.success();
+    r.stderr_contains("test r:moved ... ok");
+    assert!(staged.join("moved").exists(), "the artifact was not transferred");
+}
+
+#[test]
+fn a_failed_transfer_is_reported_as_such_and_not_as_a_test_failure() {
+    // 転送の失敗はテストの失敗ではない。原因を取り違えると、
+    // 利用者はテスト対象のコードを調べることになる。
+    let triple = host_triple();
+    let p = Project::new("runner-transfer-fails");
+    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        &format!(
+            "[test.t]\nsources = glob(\"*.c\")\n\n\
+             [runner.{triple}]\n\
+             transfer   = [\"definitely-not-a-transfer-tool\"]\n\
+             remote_dir = \"/tmp/dowel-nowhere\"\n\
+             command    = \"env\"\n"
+        ),
+    );
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("could not transfer the artifact");
+    r.stderr_contains("definitely-not-a-transfer-tool");
+}
+
+#[test]
+fn transfer_and_remote_dir_must_be_declared_together() {
+    let p = Project::new("runner-transfer-incomplete");
+    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[test.t]\nsources = glob(\"*.c\")\n\n\
+         [runner.riscv64gc-unknown-linux-gnu]\ncommand = \"ssh\"\ntransfer = [\"scp\"]\n",
+    );
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("incomplete-runner");
+    r.stderr_contains("remote_dir");
+}

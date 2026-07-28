@@ -100,6 +100,9 @@
 - ninja ファイル生成と `compile_commands.json`（`arguments` 配列形式）
 - 実行器2種。ninja（既定）と direct（逐次、depfile を読む mtime 判定）
 - 構成ごとに分けたビルドディレクトリ
+- `[runner.<triple>]` の転送（`transfer` / `remote_dir` / `host`）。
+  対象機がビルド機のファイルシステムを参照できない場合に、起動前に成果物を運ぶ。
+  パスはマニフェストに書かせず実装が付け足す（[ADR-0008](adr/0008-runner-transfer.md)）
 - `[runner.<triple>]` — ターゲットトリプルごとの実行ラッパ。
   `dowel test --target=<triple>` が透過的にラッパ経由で起動する。
   ホストと違うトリプルでランナーが宣言されていない場合は、**起動する前に**
@@ -155,19 +158,19 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 220 件）。
+現在の内訳（テスト 225 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 132 |
+| `unit-*` | クレートごとの単体テスト | 134 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 8 |
-| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 34 |
+| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 37 |
 | `scenario` | 時間をまたぐ操作列（編集して再ビルド、構成の切り替え） | 11 |
 | `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 8 |
-| `diagnostics` | 診断が CLI まで届くこと（36 事例）と網羅の追跡 | 5 |
+| `diagnostics` | 診断が CLI まで届くこと（37 事例）と網羅の追跡 | 5 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
 | `docs` | 文書のリンクと索引の整合 | 4 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
@@ -207,7 +210,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | `bench` / `template` / `toolchain` の各種別 | Phase 2 / 4 |
 | 移行（`migrate verify` / `import`） | Phase 3 |
 | `dowel debug`、言語サーバ | Phase 4 |
-| SSH / シリアル経由のランナー（成果物の転送を伴うもの） | Phase 4。ラッパ起動の形は実装済み |
+| 対象機に残した成果物の掃除、転送の省略判定 | Phase 4。転送は毎回行う |
 | 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
 | ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |
 

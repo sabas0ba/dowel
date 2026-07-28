@@ -5,14 +5,39 @@
 ターゲットトリプルごとに実行ラッパを宣言し、`dowel test --target <triple>` が
 透過的にラッパ経由で実行されるようにする。
 
-```
+```toml
 [runner.riscv64gc-unknown-linux-gnu]
 command = "qemu-riscv64"
-args    = ["-L", sysroot()]
+args    = ["-L", "/usr/riscv64-linux-gnu"]
 ```
 
 実体として想定するもの: qemu-user、qemu-system、実機への SSH、シリアル経由の書き込みと実行。
 実機を宣言可能にすることで組込み用途に対応する。
+
+### 転送を伴うランナー
+
+対象機がビルド機のファイルシステムを参照できない場合、起動の前に成果物を
+転送する。転送元と転送先のパスはマニフェストに書かず、実装が末尾に付け足す
+（[ADR-0008](adr/0008-runner-transfer.md)）。
+
+```toml
+[runner.aarch64-unknown-linux-gnu]
+host       = "board.local"
+remote_dir = "/tmp/dowel"
+transfer   = ["scp", "-q"]
+command    = "ssh"
+args       = ["board.local"]
+```
+
+上記は以下に展開される。
+
+```
+scp -q <build>/bin/unit_test board.local:/tmp/dowel/unit_test
+ssh board.local /tmp/dowel/unit_test
+```
+
+`transfer` と `remote_dir` は同時に指定する。終了状態は起動コマンドが
+そのまま返すため、`ssh` を用いる場合は対象機側の終了状態が合否になる。
 
 先行例（機能自体は既存）:
 

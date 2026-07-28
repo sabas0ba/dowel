@@ -169,6 +169,24 @@ pub fn runner_props() -> Vec<PropDef> {
             merge: Merge::Append,
             doc: "arguments placed before the artifact path",
         },
+        PropDef {
+            name: "transfer",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "command that copies the artifact. the source and destination are appended",
+        },
+        PropDef {
+            name: "remote_dir",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "directory on the target machine that receives the artifact",
+        },
+        PropDef {
+            name: "host",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "host part of the transfer destination, written as `<host>:<path>`",
+        },
     ]
 }
 

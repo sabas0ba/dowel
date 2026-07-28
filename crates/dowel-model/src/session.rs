@@ -353,6 +353,36 @@ impl Session {
             props.insert(name, entry.value.clone());
         }
 
+        // 転送は「どこへ置くか」と「どう運ぶか」の両方が要る。片方だけでは
+        // 成果物の置き場が決まらないか、置き場だけあって運ぶ手段が無い。
+        let has_transfer = props.contains_key("transfer");
+        let has_remote_dir = props.contains_key("remote_dir");
+        if has_transfer != has_remote_dir {
+            let (present, absent) =
+                if has_transfer { ("transfer", "remote_dir") } else { ("remote_dir", "transfer") };
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "incomplete-runner",
+                    format!("runner `{triple}` sets `{present}` but not `{absent}`"),
+                )
+                .at(file, table.site.span, "both are required to transfer the artifact")
+                .note("without `remote_dir` there is no destination path")
+                .note("without `transfer` there is no way to move the artifact"),
+            );
+            return;
+        }
+        if props.contains_key("host") && !has_transfer {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "incomplete-runner",
+                    format!("runner `{triple}` sets `host` but does not transfer anything"),
+                )
+                .at(file, table.site.span, "`host` only shapes the transfer destination")
+                .note("set `transfer` and `remote_dir`, or remove `host`"),
+            );
+            return;
+        }
+
         if !props.contains_key("command") {
             self.diagnostics.push(
                 Diagnostic::error("missing-field", format!("runner `{triple}` has no `command`"))

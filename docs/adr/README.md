@@ -12,3 +12,4 @@
 | [0005](0005-migration.md) | 移行は動的抽出のみ。静的翻訳は行わない | Accepted |
 | [0006](0006-naming.md) | 名称は `dowel` とする（一次調査は未了） | Accepted |
 | [0007](0007-implementation-language.md) | 実装言語は Rust とし、コアは標準ライブラリのみで書く | Accepted |
+| [0008](0008-runner-transfer.md) | ランナーの転送先パスは位置で決め、文字列補間を導入しない | Accepted |
