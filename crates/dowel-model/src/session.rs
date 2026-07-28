@@ -11,7 +11,7 @@ use crate::query::{self, Key};
 use crate::runner::Runner;
 use crate::target::{label, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
-use dowel_eval::{Document, Site, Value};
+use dowel_eval::{Document, Ns, Site, Value};
 use dowel_query::{Db, Stats};
 use dowel_store::{Inputs, Store};
 use dowel_support::diag::closest;
@@ -249,6 +249,7 @@ impl Session {
                     let build = self.parse_and_eval(f, false);
                     self.by_root.insert(dir.to_path_buf(), id);
                     self.packages.push(pkg);
+                    self.check_feature_refs(id, &build.doc);
                     self.build_targets(id, &build.doc);
                     log_debug!(
                         "loaded package `{}` from {}",
@@ -301,6 +302,31 @@ impl Session {
             .expect("the session never cancels its own queries");
         self.diagnostics.extend(out.diagnostics.iter().cloned());
         out
+    }
+
+    /// `dowel.build` が参照する機能名を、`dowel.toml` の宣言に照らす。
+    ///
+    /// 評価の段では判定できない。`feature.` の値域は同じパッケージの
+    /// `dowel.toml` が決めるものであり、`dowel.build` を1ファイルとして
+    /// 評価する時点では手元にない。
+    ///
+    /// 宣言されていない名前は偽と評価されるため、綴りを誤った分岐は
+    /// 「無効にした機能」と区別が付かない。
+    fn check_feature_refs(&mut self, pkg: PackageId, doc: &Document) {
+        let declared: Vec<String> = self.packages[pkg.0].features.keys().cloned().collect();
+        let mut diags = Vec::new();
+        for r in &doc.cfg_refs {
+            if r.key.ns != Ns::Feature || declared.contains(&r.key.name) {
+                continue;
+            }
+            diags.push(unknown_feature(
+                &r.key.name,
+                &declared,
+                Some(r.site),
+                "this feature is not declared in `dowel.toml`",
+            ));
+        }
+        self.diagnostics.append(&mut diags);
     }
 
     /// `dowel.build` の各テーブルをターゲットへ組み上げる。
@@ -730,6 +756,43 @@ impl Session {
     pub fn root_package(&self) -> Option<&Package> {
         self.packages.first()
     }
+}
+
+/// 宣言されていない機能名の診断。
+///
+/// `dowel.build` からの参照と `--features` の双方が使う。どちらも
+/// 「`[features]` に無い名前」であり、注記と候補提示は同じものになる。
+pub fn unknown_feature(
+    name: &str,
+    declared: &[String],
+    at: Option<Site>,
+    label: &str,
+) -> Diagnostic {
+    let listed: Vec<&str> =
+        declared.iter().map(|s| s.as_str()).filter(|s| *s != "default").collect();
+    let mut d =
+        Diagnostic::error("unknown-feature", format!("unknown feature `{name}`")).note(format!(
+            "`[features]` declares: {}",
+            if listed.is_empty() { "(none)".to_string() } else { listed.join(", ") }
+        ));
+    if let Some(s) = at {
+        d = d.at(s.file, s.span, label);
+    }
+    if let Some(c) = closest(name, listed) {
+        match at {
+            // 位置は `feature.<名前>` の全体を指す。置換もその形で書く。
+            Some(s) => {
+                d = d.suggest(
+                    s.file,
+                    s.span,
+                    format!("feature.{c}"),
+                    format!("did you mean `{c}`?"),
+                )
+            }
+            None => d = d.note(format!("did you mean `{c}`?")),
+        }
+    }
+    d
 }
 
 /// 同じ名前が別ブロックに存在するか。診断の注記に使う。

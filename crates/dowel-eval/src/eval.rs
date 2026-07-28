@@ -19,6 +19,18 @@ use std::collections::BTreeMap;
 pub struct Document {
     pub file: FileId,
     pub tables: Vec<Table>,
+    /// このファイルが読んだ構成キーと、それが書かれた位置。
+    ///
+    /// 値の側には位置を持たせない。`CfgKey` は併合の重複判定で比較されるため、
+    /// 位置を含めると同じ述語が別物になる。読み手（機能名の検証、言語サーバ）は
+    /// この一覧を見る。
+    pub cfg_refs: Vec<CfgRef>,
+}
+
+/// 構成キーの1回の出現。
+pub struct CfgRef {
+    pub key: CfgKey,
+    pub site: Site,
 }
 
 pub struct Table {
@@ -67,7 +79,7 @@ impl Table {
 }
 
 pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>) {
-    let mut ev = Evaluator { src, file, diags: Vec::new() };
+    let mut ev = Evaluator { src, file, diags: Vec::new(), cfg_refs: Vec::new() };
     let mut tables: Vec<Table> = Vec::new();
     // 見出しの前に現れた key-value は根のテーブルに属する。
     tables.push(Table {
@@ -132,13 +144,14 @@ pub fn eval(root: &Node, src: &str, file: FileId) -> (Document, Vec<Diagnostic>)
     if tables[0].entries.is_empty() {
         tables.remove(0);
     }
-    (Document { file, tables }, ev.diags)
+    (Document { file, tables, cfg_refs: ev.cfg_refs }, ev.diags)
 }
 
 struct Evaluator<'a> {
     src: &'a str,
     file: FileId,
     diags: Vec<Diagnostic>,
+    cfg_refs: Vec<CfgRef>,
 }
 
 impl<'a> Evaluator<'a> {
@@ -464,6 +477,9 @@ impl<'a> Evaluator<'a> {
             self.diags.push(d);
             return None;
         }
+        // 語彙にあることは確かめた。名前の妥当性を評価だけで決められない
+        // キー（`feature.*`）は、宣言を読める段で検証する。
+        self.cfg_refs.push(CfgRef { key: key.clone(), site: self.site(node.span) });
         Some(key)
     }
 

@@ -15,7 +15,7 @@ use dowel_eval::schema::{self, Block};
 use dowel_eval::{Config, Opt};
 use dowel_model::{graph, interface, Session};
 use dowel_support::json::JsonWriter;
-use dowel_support::{diag, log, log_debug, log_info, log_trace, Severity};
+use dowel_support::{diag, log, log_debug, log_info, log_trace, Diagnostic, Severity};
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -86,7 +86,8 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     for (path, change) in sess.input_changes() {
         log_trace!("input {}: {change:?}", path.display());
     }
-    let cfg = configure(&sess, opts)?;
+    let (cfg, cfg_diags) = configure(&sess, opts)?;
+    sess.diagnostics.extend(cfg_diags);
     log_debug!("configuration {}", cfg.id());
 
     // グラフとインタフェースの診断も検査の一部。ここまでは常に走らせる。
@@ -337,14 +338,35 @@ fn report_tests(outcomes: &[testing::Outcome], requested: usize, opts: &Options)
 }
 
 /// 構成を組み立てる。機能フラグは根のパッケージの `[features]` から解決する。
-fn configure(sess: &Session, opts: &Options) -> Result<Config, String> {
+///
+/// `--features` に渡された名前も `[features]` の宣言に照らす。オプション解析の
+/// 段では判定できない。値の妥当性は別の語彙（マニフェスト）が決めるものであり、
+/// 引数解析にはその情報がない。
+fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>), String> {
     let mut cfg = Config::host_default();
+    let mut diags = Vec::new();
     cfg.opt = Opt::parse(&opts.config)
         .ok_or_else(|| format!("`--config` must be debug or release (got `{}`)", opts.config))?;
     if let Some(t) = &opts.target {
         cfg.target = t.clone();
     }
     if let Some(root) = sess.root_package() {
+        let declared: Vec<String> = root.features.keys().cloned().collect();
+        for name in &opts.features {
+            if !declared.contains(name) {
+                // 位置は `[features]` の見出しを指す。誤りは `--features` に
+                // あるが、正しい綴りが書かれている場所はそこである。
+                diags.push(
+                    dowel_model::session::unknown_feature(
+                        name,
+                        &declared,
+                        root.features_site,
+                        "declared features are here",
+                    )
+                    .note(format!("`{name}` came from `--features`")),
+                );
+            }
+        }
         // 読み込みの段で解決した集合をそのまま使う。二重に求めると、
         // 「読み込んだ依存」と「有効な機能」が食い違いうる。
         cfg.features = sess.active_features().clone();
@@ -352,7 +374,7 @@ fn configure(sess: &Session, opts: &Options) -> Result<Config, String> {
             cfg.tc_c = tc.clone();
         }
     }
-    Ok(cfg)
+    Ok((cfg, diags))
 }
 
 /// 対象の決定。指定がなければ全ての bin と test。

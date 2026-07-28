@@ -272,6 +272,31 @@ const CASES: &[Case] = &[
         )],
         args: CHECK,
     },
+    // --- 機能フラグ -------------------------------------------------------
+    Case {
+        code: "unknown-feature",
+        why: "`feature.raal` is referenced but `[features]` declares only `real`",
+        files: &[
+            (
+                "app/dowel.toml",
+                "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[features]\ndefault = []\nreal    = []\n",
+            ),
+            (
+                "app/dowel.build",
+                "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\nflags = [\"-DTYPO=1\" when feature.raal]\n",
+            ),
+        ],
+        args: CHECK,
+    },
+    Case {
+        code: "unknown-feature",
+        why: "`--features` names a feature that `[features]` does not declare",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[features]\ndefault = []\nreal    = []\n",
+        )],
+        args: &["check", "--features=nosuchfeature", "--message-format=json"],
+    },
     // --- 依存 -------------------------------------------------------------
     Case {
         code: "incomplete-dependency",
