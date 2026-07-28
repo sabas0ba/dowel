@@ -1,0 +1,12 @@
+[lib.json]
+sources = glob("src/*.c")
+
+[lib.json.public]
+includes = [dir("include")]
+defines  = { JSON_API = 1 }
+
+[test.roundtrip]
+sources = glob("tests/*.c")
+
+[test.roundtrip.private]
+deps = [target("json")]

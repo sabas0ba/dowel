@@ -1,0 +1,30 @@
+[lib.core]
+sources = glob("src/core.c")
+
+[lib.core.public]
+includes = [dir("include")]
+flags    = [
+    "-DAPP_FAST=1"  when feature.fast,
+    "-DAPP_SIMD=1"  when feature.simd,
+    "-DAPP_TRACE=1" when feature.trace,
+    match cfg.opt {
+        debug   => ["-DAPP_OPT=0"],
+        release => ["-DAPP_OPT=1"],
+    },
+]
+defines  = { APP_JSON = 1 when feature.json }
+
+[lib.core.private]
+deps = [dep("json") when feature.json]
+
+[bin.app]
+sources = glob("src/main.c")
+
+[bin.app.private]
+deps = [target("core")]
+
+[test.config]
+sources = glob("tests/*.c")
+
+[test.config.private]
+deps = [target("core")]
