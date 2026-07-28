@@ -91,7 +91,12 @@
 （`UnchangedByStat` / `UnchangedByContent` / `Changed`）が出る。
 
 値の格納は未実装である。現時点で実装したのは容れ物、破損耐性、変更検出、
-および `Session` からストアへの接続である。メモの値そのものの格納は次の増分とする。
+および `Session` からストアへの接続である。
+
+`FileId` は正規化したパスのハッシュであり、プロセスを跨いでも同じファイルは
+同じ識別子を持つ（[ADR-0009](adr/0009-file-identity.md)）。格納した値を
+復元する際に識別子を振り直す走査が要らない。残るのは直列化の形式であり、
+[99-open-questions.md](99-open-questions.md) Q9 にある。
 
 ### 評価（`dowel-eval`）
 
@@ -183,12 +188,12 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 249 件）。
+現在の内訳（テスト 252 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 150 |
+| `unit-*` | クレートごとの単体テスト | 153 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 8 |
