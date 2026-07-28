@@ -34,6 +34,47 @@ fn base(p: &Project) {
     p.write("app/src/main.c", "int main(void) { return 0; }\n");
 }
 
+/// 併合の衝突を起こす最小の構成。
+///
+/// 2つのパッケージが要る。1パッケージでは同じプロパティへ2つの値が
+/// 到達する経路がなく、`error_on_conflict` と `must_equal` は発現しない。
+const TWO_PACKAGES: &[(&str, &str)] = &[
+    (
+        "app/dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    ),
+    ("lib/dowel.toml", "[package]\nname    = \"lib\"\nversion = \"0.1.0\"\n"),
+    ("lib/src/lib.c", "int lib_answer(void) { return 42; }\n"),
+];
+
+const TWO_PACKAGES_WITH_CONFLICTING_DEFINES: &[(&str, &str)] = &[
+    TWO_PACKAGES[0],
+    TWO_PACKAGES[1],
+    TWO_PACKAGES[2],
+    (
+        "lib/dowel.build",
+        "[lib.lib]\nsources = glob(\"src/*.c\")\n\n[lib.lib.public]\ndefines = { SHARED_LIMIT = 64 }\n",
+    ),
+    (
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps    = [dep(\"lib\")]\ndefines = { SHARED_LIMIT = 128 }\n",
+    ),
+];
+
+const TWO_PACKAGES_WITH_CONFLICTING_ABI: &[(&str, &str)] = &[
+    TWO_PACKAGES[0],
+    TWO_PACKAGES[1],
+    TWO_PACKAGES[2],
+    (
+        "lib/dowel.build",
+        "[lib.lib]\nsources = glob(\"src/*.c\")\n\n[lib.lib.public]\nabi = \"x86_64-linux-musl\"\n",
+    ),
+    (
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"lib\")]\nabi  = \"x86_64-linux-gnu\"\n",
+    ),
+];
+
 const CASES: &[Case] = &[
     // --- 構文 -----------------------------------------------------------
     Case {
@@ -293,6 +334,19 @@ const CASES: &[Case] = &[
         )],
         args: CHECK,
     },
+    // --- 併合 -------------------------------------------------------------
+    Case {
+        code: "merge-conflict",
+        why: "`defines` merges with error_on_conflict and two packages set the same key",
+        files: TWO_PACKAGES_WITH_CONFLICTING_DEFINES,
+        args: CHECK,
+    },
+    Case {
+        code: "abi-mismatch",
+        why: "`abi` merges with must_equal and the dependency declares a different one",
+        files: TWO_PACKAGES_WITH_CONFLICTING_ABI,
+        args: CHECK,
+    },
     // --- ビルド計画 -------------------------------------------------------
     Case {
         code: "no-sources",
@@ -503,6 +557,39 @@ fn codes_in(stdout: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// 事例を組み立てて起動し、実行結果をそのまま返す。
+fn run_case(case: &Case, args: &[&str]) -> common::Run {
+    let p = Project::new(&format!("diag-{}-{}", case.code, args[0]));
+    base(&p);
+    for (rel, text) in case.files {
+        p.write(rel, text);
+    }
+    p.run("app", args)
+}
+
+#[test]
+fn a_diagnostic_that_spans_two_files_names_both_in_the_human_rendering() {
+    // 機械可読形式は2つのラベルを持つが、描画が主ラベルのファイルしか
+    // 出さないと、利用者は衝突の相手を探すことになる。
+    for case in CASES.iter().filter(|c| c.code == "merge-conflict" || c.code == "abi-mismatch") {
+        let json = run_case(case, CHECK);
+        let line = json
+            .stdout
+            .lines()
+            .find(|l| l.contains(&format!("\"code\":\"{}\"", case.code)))
+            .unwrap_or_else(|| panic!("no `{}` in\n{json}", case.code));
+        assert!(
+            line.matches("\"primary\":").count() >= 2,
+            "`{}` should carry two labels: {line}",
+            case.code
+        );
+
+        let human = run_case(case, &["check"]);
+        assert!(human.stderr.contains("lib/dowel.build"), "`{}`\n{human}", case.code);
+        assert!(human.stderr.contains("app/dowel.build"), "`{}`\n{human}", case.code);
+    }
+}
+
 #[test]
 fn the_case_table_has_no_duplicates() {
     // 同一コードに対する複数の事例は許容する。発生経路が異なる診断は
@@ -541,8 +628,6 @@ fn covered_codes() -> Vec<&'static str> {
 /// 空にするのが目標である。増やすときは理由を書く。
 /// 理由を書けないものは、事例を書けるということである。
 const UNCOVERED: &[(&str, &str)] = &[
-    ("abi-mismatch", "ABI labels are hand-written until Phase 6; there is no realistic input yet"),
-    ("merge-conflict", "reachable only for `must_equal`, which today only carries `abi`"),
     ("toolchain-mismatch", "`[toolchain]` selection is Phase 5; the warning has no real trigger"),
     ("unimplemented-path-base", "`sysroot` paths are Phase 4"),
     ("empty-dependency", "`[[dependencies]]` with no entry at all is rejected by the parser first"),
