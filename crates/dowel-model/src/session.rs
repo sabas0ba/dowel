@@ -126,6 +126,31 @@ impl Session {
         self.db.stats()
     }
 
+    /// 構成と解決済みの依存をクエリへ渡す。
+    ///
+    /// 依存の解決は `Session` の外（[`crate::graph::build`]）で行う。名前解決に
+    /// 全パッケージが要るためであり、その段をクエリにするのは別の増分である。
+    pub fn declare_derivations(&self, cfg: &dowel_eval::Config, graph: &crate::graph::Graph) {
+        query::set_config(&self.db, cfg);
+        for t in &self.targets {
+            let deps =
+                graph.deps_of(t.id).iter().map(|e| (self.label(e.to), e.block)).collect::<Vec<_>>();
+            query::set_deps(&self.db, &self.label(t.id), deps);
+        }
+    }
+
+    /// 依存側へ供給するプロパティ。メモを経由する。
+    pub fn interface_of(&self, id: TargetId) -> Arc<query::Merged> {
+        query::interface(&self.db, &self.label(id))
+            .expect("the session never cancels its own queries")
+    }
+
+    /// 自身のコンパイルに効くプロパティ。メモを経由する。
+    pub fn compile_env_of(&self, id: TargetId) -> Arc<query::Merged> {
+        query::compile_env(&self.db, &self.label(id))
+            .expect("the session never cancels its own queries")
+    }
+
     /// 今回読み込んだ入力の記録をストアへ書く。
     ///
     /// 書けなくても誤りではない。次回の実行が変更検出をやり直すだけであり、
@@ -195,6 +220,12 @@ impl Session {
                     queue.push((canonical(&dir.join(rel)), Some(dep.source_site)));
                 }
             }
+        }
+        // 宣言をクエリへ渡す。指紋はスパンを含まない要約から導くため、
+        // コメントだけの編集ではここで版が進まない。
+        for t in &self.targets {
+            let label = label(&self.packages[t.package.0].name, &t.name);
+            query::set_declared(&self.db, &label, t.public.clone(), t.private.clone());
         }
         log_debug!("loaded {} packages and {} targets", self.packages.len(), self.targets.len());
         let s = self.db.stats();

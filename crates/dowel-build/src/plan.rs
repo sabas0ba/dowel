@@ -8,7 +8,7 @@ use crate::glob;
 use dowel_eval::schema::TableKind;
 use dowel_eval::{Config, Data, Opt, PathBase, Value};
 use dowel_model::graph::Graph;
-use dowel_model::interface::{self, Interfaces};
+use dowel_model::interface;
 use dowel_model::{Session, TargetId};
 use dowel_support::{log_debug, log_trace, Diagnostic};
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,7 +60,6 @@ pub fn build_dir(root: &Path, cfg: &Config) -> PathBuf {
 pub fn plan(
     sess: &Session,
     graph: &Graph,
-    ifaces: &Interfaces,
     cfg: &Config,
     requested: &[TargetId],
 ) -> (Plan, Vec<Diagnostic>) {
@@ -128,7 +127,7 @@ pub fn plan(
         }
         let target = sess.target(tid);
         let pkg = sess.package(target.package);
-        let env = interface::compile_env(sess, graph, ifaces, tid, cfg, &mut diags);
+        let env = interface::compile_env(sess, tid, &mut diags);
 
         let sources = collect_sources(sess, tid, cfg, &mut diags);
         if sources.is_empty() && target.kind != TableKind::Lib {

@@ -96,12 +96,12 @@ fn public_properties_propagate_and_private_ones_do_not() {
     let cfg = Config::host_default();
     let (g, gd) = graph::build(&sess, &cfg);
     assert!(gd.is_empty(), "{gd:#?}");
-    let (ifaces, id) = interface::compute(&sess, &g, &cfg);
+    let id = interface::prepare(&sess, &g, &cfg);
     assert!(id.is_empty(), "{id:#?}");
 
     let app = sess.find_target("app:app").unwrap();
     let mut diags = Vec::new();
-    let env = interface::compile_env(&sess, &g, &ifaces, app, &cfg, &mut diags);
+    let env = interface::compile_env(&sess, app, &mut diags);
     assert!(diags.is_empty(), "{diags:#?}");
 
     let includes = env.get("includes").expect("includes did not propagate");
@@ -125,10 +125,10 @@ fn propagated_values_keep_a_traceable_provenance() {
     let sess = load(&s, "app");
     let cfg = Config::host_default();
     let (g, _) = graph::build(&sess, &cfg);
-    let (ifaces, _) = interface::compute(&sess, &g, &cfg);
+    let _ = interface::prepare(&sess, &g, &cfg);
     let app = sess.find_target("app:app").unwrap();
 
-    let e = dowel_model::why::explain(&sess, &g, &ifaces, app, "includes", &cfg).unwrap();
+    let e = dowel_model::why::explain(&sess, &g, app, "includes", &cfg).unwrap();
     let text = dowel_model::why::render_text(&e);
     assert!(text.contains("include"), "{text}");
     assert!(text.contains("dir(...)"), "{text}");
@@ -225,10 +225,10 @@ deps = [target("a"), target("b")]
     let sess = Session::load(&s.root);
     let cfg = Config::host_default();
     let (g, _) = graph::build(&sess, &cfg);
-    let (ifaces, _) = interface::compute(&sess, &g, &cfg);
+    let _ = interface::prepare(&sess, &g, &cfg);
     let app = sess.find_target("app").unwrap();
     let mut diags = Vec::new();
-    interface::compile_env(&sess, &g, &ifaces, app, &cfg, &mut diags);
+    interface::compile_env(&sess, app, &mut diags);
     assert!(diags.iter().any(|d| d.code == "abi-mismatch"), "{diags:#?}");
 }
 

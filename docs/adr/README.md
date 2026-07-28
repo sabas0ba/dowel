@@ -15,3 +15,4 @@
 | [0008](0008-runner-transfer.md) | ランナーの転送先パスは位置で決め、文字列補間を導入しない | Accepted |
 | [0009](0009-file-identity.md) | `FileId` は正規化したパスのハッシュとする | Accepted |
 | [0010](0010-check-scope.md) | `check` は計画段まで走らせる | Accepted |
+| [0011](0011-cutoff-and-provenance.md) | 派生の指紋はスパンを含まず、来歴を読む経路はメモを経由しない | Accepted |
