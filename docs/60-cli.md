@@ -8,7 +8,7 @@
 ```sh
 cargo build --release            # target/release/dowel
 
-dowel check                      # 評価と診断のみ。ビルドしない
+dowel check                      # 計画まで走らせ、診断のみ出す。実行はしない
 dowel build                      # 実際にビルドする
 dowel build --config=release
 dowel test                       # test ターゲットをビルドして走らせる

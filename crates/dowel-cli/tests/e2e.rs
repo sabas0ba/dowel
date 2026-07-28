@@ -553,6 +553,9 @@ fn diagnostics_carry_a_location_and_a_suggestion() {
         "dowel.build",
         "[lib.a]\nsources = glob(\"*.c\")\n\n[lib.a.public]\ninclude = [dir(\"x\")]\n",
     );
+    // `check` は計画段まで走る（ADR-0010）。ソースを置かないと `empty-glob` が
+    // 加わり、この事例が見たい1件だけの状態でなくなる。
+    p.write("a.c", "int a(void) { return 0; }\n");
     let r = p.run(".", &["check"]);
     r.failure();
     r.stderr_contains("error[unknown-property]");

@@ -14,3 +14,4 @@
 | [0007](0007-implementation-language.md) | 実装言語は Rust とし、コアは標準ライブラリのみで書く | Accepted |
 | [0008](0008-runner-transfer.md) | ランナーの転送先パスは位置で決め、文字列補間を導入しない | Accepted |
 | [0009](0009-file-identity.md) | `FileId` は正規化したパスのハッシュとする | Accepted |
+| [0010](0010-check-scope.md) | `check` は計画段まで走らせる | Accepted |

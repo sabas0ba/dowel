@@ -404,25 +404,43 @@ const CASES: &[Case] = &[
         code: "no-sources",
         why: "the target declares no `sources`",
         files: &[("app/dowel.build", "[bin.app]\n")],
-        args: BUILD,
+        args: CHECK,
     },
     Case {
         code: "empty-glob",
         why: "the pattern matches no file",
         files: &[("app/dowel.build", "[bin.app]\nsources = glob(\"nowhere/*.c\")\n")],
-        args: BUILD,
+        args: CHECK,
     },
     Case {
         code: "invalid-source",
         why: "a directory cannot be compiled",
         files: &[("app/dowel.build", "[bin.app]\nsources = [dir(\"src\")]\n")],
-        args: BUILD,
+        args: CHECK,
+    },
+    Case {
+        code: "unsupported-language",
+        why: "a `.cpp` source cannot be built with the C driver",
+        files: &[
+            ("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.cpp\")\n"),
+            ("app/src/main.cpp", "int main() { return 0; }\n"),
+        ],
+        args: CHECK,
+    },
+    Case {
+        code: "missing-toolchain",
+        why: "`[toolchain] c` names a compiler that is not on PATH",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain]\nc = \"no-such-compiler-19\"\n",
+        )],
+        args: CHECK,
     },
     Case {
         code: "unresolved-path",
         why: "the declared source does not exist",
         files: &[("app/dowel.build", "[bin.app]\nsources = [file(\"src/absent.c\")]\n")],
-        args: BUILD,
+        args: CHECK,
     },
 ];
 
@@ -699,6 +717,47 @@ fn the_list_of_diagnostics_without_a_location_has_no_stale_entries() {
             entry.1
         );
     }
+}
+
+#[test]
+fn check_reports_everything_build_reports() {
+    // `check` は計画段まで走る。ビルドせずに誤りを洗い出す入口として使う以上、
+    // `check passed` と表示したものが `build` で落ちてはならない。
+    // 実行そのものの失敗（コンパイラの出力）はここでは比べない。安定コードを
+    // 持たず、`check` の守備範囲でもない。
+    let mut failures = Vec::new();
+    for case in CASES {
+        if case.args[0] != "check" {
+            continue;
+        }
+        let p = Project::new(&format!("scope-{}", case.code));
+        base(&p);
+        if case.code == "missing-manifest" {
+            std::fs::remove_file(p.path("app/dowel.toml")).expect("cannot remove the manifest");
+        }
+        if case.code == "missing-build" {
+            std::fs::remove_file(p.path("app/dowel.build")).expect("cannot remove the build file");
+        }
+        for (rel, text) in case.files {
+            p.write(rel, text);
+        }
+        let checked = codes_in(&p.run("app", case.args).stdout);
+        let built = codes_in(&p.run("app", BUILD).stdout);
+        let missing: Vec<&String> = built.difference(&checked).collect();
+        if !missing.is_empty() {
+            failures.push(format!(
+                "  {}: `build` reports {} but `check` does not",
+                case.code,
+                missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} case(s) escape `check`:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
 
 #[test]
