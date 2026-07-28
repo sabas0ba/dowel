@@ -326,6 +326,24 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "inactive-dependency",
+        why: "the reference is not gated on the feature that enables the optional dependency",
+        files: &[
+            (
+                "app/dowel.toml",
+                "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[features]\ndefault = []\nlibfoo  = []\n\n[[dependencies]]\nname     = \"libfoo\"\npath     = \"../libfoo\"\noptional = true\n",
+            ),
+            ("libfoo/dowel.toml", "[package]\nname    = \"libfoo\"\nversion = \"0.1.0\"\n"),
+            ("libfoo/dowel.build", "[lib.libfoo]\nsources = glob(\"src/*.c\")\n"),
+            ("libfoo/src/foo.c", "int foo(void) { return 1; }\n"),
+            (
+                "app/dowel.build",
+                "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"libfoo\")]\n",
+            ),
+        ],
+        args: CHECK,
+    },
+    Case {
         code: "unknown-target",
         why: "`target(\"nope\")` names no target in this package",
         files: &[(

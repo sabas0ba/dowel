@@ -13,7 +13,7 @@ use args::{Command, GraphKind, MessageFormat, Options, OutFormat, Parsed};
 use dowel_build::{compdb, exec, plan as build_plan, testing};
 use dowel_eval::schema::{self, Block};
 use dowel_eval::{Config, Opt};
-use dowel_model::{graph, interface, package, Session};
+use dowel_model::{graph, interface, Session};
 use dowel_support::json::JsonWriter;
 use dowel_support::{diag, log, log_debug, log_info, log_trace, Diagnostic, Severity};
 use std::io::Write;
@@ -71,7 +71,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let mut sess = Session::load(&opts.directory);
+    // 機能フラグの選択は読み込みより前に要る。有効でない任意の依存は
+    // 読み込まないため（docs/10-manifest.md）。
+    let mut sess = Session::load_with(
+        &opts.directory,
+        dowel_model::session::Features {
+            requested: opts.features.clone(),
+            default: opts.default_features,
+        },
+    );
     // 入力の記録は読み込み直後に書く。以降の段階が失敗しても、
     // 何を読んだかは次回の実行にとって有効な情報である。
     sess.save_inputs();
@@ -359,7 +367,9 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
                 );
             }
         }
-        cfg.features = package::resolve_features(root, &opts.features, opts.default_features);
+        // 読み込みの段で解決した集合をそのまま使う。二重に求めると、
+        // 「読み込んだ依存」と「有効な機能」が食い違いうる。
+        cfg.features = sess.active_features().clone();
         if let Some(tc) = &root.toolchain_c {
             cfg.tc_c = tc.clone();
         }
