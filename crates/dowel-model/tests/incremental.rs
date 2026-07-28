@@ -11,7 +11,8 @@
 mod common;
 
 use common::Scratch;
-use dowel_model::Session;
+use dowel_eval::Config;
+use dowel_model::{graph, interface, Session};
 
 /// 2パッケージ（= 4ファイル = 8個の導出クエリ）。
 fn workspace() -> Scratch {
@@ -27,6 +28,83 @@ fn workspace() -> Scratch {
     s.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
     s.write("app/src/main.c", "int main(void) { return 0; }\n");
     s
+}
+
+/// 併合に入力を持つワークスペース。
+///
+/// [`workspace`] の `libfoo` は `public` も `private` も空である。併合の入力が
+/// 空のままでは、要約が変わらないことを検査しても何も確かめたことにならない。
+fn workspace_with_propagation() -> Scratch {
+    let s = workspace();
+    s.write(
+        "libfoo/dowel.build",
+        "[lib.foo]\nsources = glob(\"src/*.c\")\n\n\
+         [lib.foo.public]\nincludes = [dir(\"include\")]\ndefines = { FOO = 1 }\n",
+    );
+    s.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.private]\ndeps = [dep(\"libfoo\")]\nflags = [\"-Wall\"]\n",
+    );
+    s
+}
+
+/// 読み込みの後に走る段。依存を解決し、ターゲット単位の派生まで問い合わせる。
+///
+/// `Session::load` はファイル単位のクエリしか触らない。併合は構成が決まって
+/// から行うため、`graph::build` を挟んでここで問い合わせる。
+fn derive(sess: &Session) {
+    let cfg = Config::host_default();
+    let (g, _) = graph::build(sess, &cfg);
+    interface::prepare(sess, &g, &cfg);
+    for t in &sess.targets {
+        sess.compile_env_of(t.id);
+    }
+}
+
+#[test]
+fn a_comment_only_edit_does_not_reach_the_merge() {
+    // early cutoff（docs/20-architecture.md 3節）が要求するのはこの性質である。
+    // 評価結果はスパンがずれるため必ず変わるが、併合の入力は変わらない。
+    let s = workspace_with_propagation();
+    let mut sess = Session::load(&s.path("app"));
+    derive(&sess);
+
+    // 先頭にコメントを1行足す。宣言の中身は同じで、スパンは全て動く。
+    s.write(
+        "libfoo/dowel.build",
+        "# what this library provides\n[lib.foo]\nsources = glob(\"src/*.c\")\n\n\
+         [lib.foo.public]\nincludes = [dir(\"include\")]\ndefines = { FOO = 1 }\n",
+    );
+    sess.reload();
+    derive(&sess);
+
+    let stats = sess.query_stats();
+    // 触ったファイルの `Parsed` と `Evaluated` だけ。派生の併合は走っていない。
+    assert_eq!(stats.computed, 2, "the merge ran again: {stats:?}");
+    assert_eq!(stats.cut_off, 0, "{stats:?}");
+}
+
+#[test]
+fn changing_a_declared_value_reaches_the_merge() {
+    // 対になる検査。要約が変われば併合は走り直す。
+    // これが無いと、上の検査は「そもそも併合を問い合わせていない」でも通る。
+    let s = workspace_with_propagation();
+    let mut sess = Session::load(&s.path("app"));
+    derive(&sess);
+
+    s.write(
+        "libfoo/dowel.build",
+        "[lib.foo]\nsources = glob(\"src/*.c\")\n\n\
+         [lib.foo.public]\nincludes = [dir(\"include\")]\ndefines = { FOO = 2 }\n",
+    );
+    sess.reload();
+    derive(&sess);
+
+    let stats = sess.query_stats();
+    // `Parsed` と `Evaluated` に加え、libfoo の `interface` と `compile_env`、
+    // それを取り込む app の `compile_env`。
+    assert!(stats.computed >= 5, "the merge did not run: {stats:?}");
 }
 
 #[test]

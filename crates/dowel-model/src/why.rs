@@ -4,7 +4,7 @@
 //! 持たない（docs/10-manifest.md 5節）。
 
 use crate::graph::Graph;
-use crate::interface::{self, Interfaces};
+use crate::interface;
 use crate::session::Session;
 use crate::target::TargetId;
 use dowel_eval::schema::{self, Block};
@@ -35,7 +35,6 @@ pub struct Step {
 pub fn explain(
     sess: &Session,
     graph: &Graph,
-    ifaces: &Interfaces,
     tid: TargetId,
     prop: &str,
     cfg: &Config,
@@ -49,7 +48,7 @@ pub fn explain(
     };
 
     let mut diags: Vec<Diagnostic> = Vec::new();
-    let env = interface::compile_env(sess, graph, ifaces, tid, cfg, &mut diags);
+    let env = interface::compile_env_fresh(sess, graph, tid, cfg, &mut diags);
     let Some(value) = env.get(prop) else {
         return Ok(Explanation {
             target: sess.label(tid),

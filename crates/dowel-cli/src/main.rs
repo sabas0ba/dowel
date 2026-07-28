@@ -93,7 +93,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     // グラフとインタフェースの診断も検査の一部。ここまでは常に走らせる。
     let (g, gdiags) = graph::build(&sess, &cfg);
     sess.diagnostics.extend(gdiags);
-    let (ifaces, idiags) = interface::compute(&sess, &g, &cfg);
+    let idiags = interface::prepare(&sess, &g, &cfg);
     sess.diagnostics.extend(idiags);
 
     match &opts.command {
@@ -110,7 +110,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             // 併合の診断（衝突・ABI 不一致）も compile_env を経由して出る。
             // 対象は全ターゲット。到達しないライブラリも検査の対象である。
             let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
-            let (_, pdiags) = build_plan::plan(&sess, &g, &ifaces, &cfg, &all);
+            let (_, pdiags) = build_plan::plan(&sess, &g, &cfg, &all);
             sess.diagnostics.extend(pdiags);
             let failed = report(&sess, opts);
             if !failed {
@@ -135,7 +135,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 },
                 GraphKind::Action => {
                     let requested = default_targets(&sess, &[])?;
-                    let (p, pdiags) = build_plan::plan(&sess, &g, &ifaces, &cfg, &requested);
+                    let (p, pdiags) = build_plan::plan(&sess, &g, &cfg, &requested);
                     sess.diagnostics.extend(pdiags);
                     if report(&sess, opts) {
                         return Ok(ExitCode::FAILURE);
@@ -156,7 +156,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 return Ok(ExitCode::FAILURE);
             }
             let tid = sess.find_target(target)?;
-            let e = dowel_model::why::explain(&sess, &g, &ifaces, tid, property, &cfg)?;
+            let e = dowel_model::why::explain(&sess, &g, tid, property, &cfg)?;
             match opts.out_format {
                 OutFormat::Json => println!("{}", dowel_model::why::render_json(&e)),
                 _ => print!("{}", dowel_model::why::render_text(&e)),
@@ -166,7 +166,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
         Command::Build { targets } => {
             let requested = default_targets(&sess, targets)?;
-            let Some(p) = build(&mut sess, &g, &ifaces, &cfg, opts, &requested)? else {
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
                 return Ok(ExitCode::FAILURE);
             };
             for t in &requested {
@@ -209,7 +209,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 eprintln!("no test targets. declare one with `[test.<name>]` in dowel.build");
                 return Ok(ExitCode::SUCCESS);
             }
-            let Some(p) = build(&mut sess, &g, &ifaces, &cfg, opts, &requested)? else {
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
                 return Ok(ExitCode::FAILURE);
             };
             if opts.no_run {
@@ -249,12 +249,11 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 fn build(
     sess: &mut Session,
     g: &dowel_model::Graph,
-    ifaces: &dowel_model::Interfaces,
     cfg: &Config,
     opts: &Options,
     requested: &[dowel_model::TargetId],
 ) -> Result<Option<build_plan::Plan>, String> {
-    let (p, pdiags) = build_plan::plan(sess, g, ifaces, cfg, requested);
+    let (p, pdiags) = build_plan::plan(sess, g, cfg, requested);
     sess.diagnostics.extend(pdiags);
     if report(sess, opts) {
         return Ok(None);

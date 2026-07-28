@@ -2,6 +2,7 @@
 
 pub mod codec;
 pub mod config;
+pub mod digest;
 pub mod eval;
 pub mod schema;
 pub mod specialize;
@@ -9,6 +10,7 @@ pub mod strict;
 pub mod value;
 
 pub use config::{Config, Opt};
+pub use digest::{props_digest, value_digest};
 pub use eval::{eval, CfgRef, Document, Entry, Table};
 pub use schema::{Block, Merge, TableKind};
 pub use specialize::specialize;

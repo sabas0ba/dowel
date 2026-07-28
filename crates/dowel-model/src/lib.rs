@@ -11,7 +11,6 @@ pub mod target;
 pub mod why;
 
 pub use graph::Graph;
-pub use interface::Interfaces;
 pub use package::{DepKind, Dependency, Package};
 pub use query::Key as QueryKey;
 pub use runner::Runner;

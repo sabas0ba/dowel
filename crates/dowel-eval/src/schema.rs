@@ -4,7 +4,7 @@
 //! 併合規則を型として宣言し、プロパティを追加しても検証コードを書き足さなくてよい形にする。
 
 use crate::value::{Data, Origin, Prov, Site, Type, Value};
-use dowel_support::{Diagnostic, Label, SourceMap};
+use dowel_support::{Diagnostic, Label};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -248,12 +248,7 @@ pub fn prop_names(block: Block) -> Vec<&'static str> {
 /// 到達した値を1つに畳む。
 ///
 /// 引数は「到達順」に並んでいること。`Union` と `Append` はこの順序を保存する。
-pub fn merge_values(
-    def: &PropDef,
-    values: &[Value],
-    sm: &SourceMap,
-    diags: &mut Vec<Diagnostic>,
-) -> Value {
+pub fn merge_values(def: &PropDef, values: &[Value], diags: &mut Vec<Diagnostic>) -> Value {
     let prov_of = |v: &Value| v.prov.clone();
     let merged_prov = |rule: &'static str, first: Option<&Value>| match first {
         Some(v) => prov_of(v)
@@ -296,7 +291,7 @@ pub fn merge_values(
                 for (k, item) in m {
                     if let Some(prev) = out.get(k) {
                         if prev.data != item.data {
-                            diags.push(conflict_diagnostic(def.name, k, prev, item, sm));
+                            diags.push(conflict_diagnostic(def.name, k, prev, item));
                             continue;
                         }
                     }
@@ -316,7 +311,7 @@ pub fn merge_values(
             };
             for v in iter {
                 if v.data != first.data {
-                    diags.push(must_equal_diagnostic(def.name, first, v, sm));
+                    diags.push(must_equal_diagnostic(def.name, first, v));
                 }
             }
             first.clone()
@@ -359,17 +354,11 @@ fn flatten(v: &Value) -> Vec<Value> {
     }
 }
 
-fn site_label(_sm: &SourceMap, site: Option<Site>, msg: &str) -> Option<Label> {
+fn site_label(site: Option<Site>, msg: &str) -> Option<Label> {
     site.map(|s| Label::secondary(s.file, s.span, msg.to_string()))
 }
 
-fn conflict_diagnostic(
-    prop: &str,
-    key: &str,
-    prev: &Value,
-    cur: &Value,
-    sm: &SourceMap,
-) -> Diagnostic {
+fn conflict_diagnostic(prop: &str, key: &str, prev: &Value, cur: &Value) -> Diagnostic {
     let mut d = Diagnostic::error(
         "merge-conflict",
         format!("conflicting values reached `{key}` of `{prop}`"),
@@ -379,7 +368,6 @@ fn conflict_diagnostic(
         d = d.at(s.file, s.span, format!("this one is {}", cur.display()));
     }
     if let Some(l) = site_label(
-        sm,
         prev.prov.nearest_site(),
         &format!("the value that arrived first is {}", prev.display()),
     ) {
@@ -391,7 +379,7 @@ fn conflict_diagnostic(
     d
 }
 
-fn must_equal_diagnostic(prop: &str, first: &Value, other: &Value, sm: &SourceMap) -> Diagnostic {
+fn must_equal_diagnostic(prop: &str, first: &Value, other: &Value) -> Diagnostic {
     let mut d = Diagnostic::error(
         "abi-mismatch",
         format!("`{prop}` does not match: {} vs {}", first.display(), other.display()),
@@ -403,7 +391,6 @@ fn must_equal_diagnostic(prop: &str, first: &Value, other: &Value, sm: &SourceMa
         d = d.at(s.file, s.span, format!("this one is {}", other.display()));
     }
     if let Some(l) = site_label(
-        sm,
         first.prov.nearest_site(),
         &format!("the value that arrived first is {}", first.display()),
     ) {
@@ -463,7 +450,7 @@ mod tests {
         let a = Value::list(Type::Path, vec![path("include", 0), path("src", 10)], Prov::none());
         let b = Value::list(Type::Path, vec![path("src", 20), path("gen", 30)], Prov::none());
         let mut diags = Vec::new();
-        let merged = merge_values(&def, &[a, b], &SourceMap::new(), &mut diags);
+        let merged = merge_values(&def, &[a, b], &mut diags);
         assert!(diags.is_empty());
         let items = merged.as_list().unwrap();
         assert_eq!(items.len(), 3);
@@ -483,7 +470,7 @@ mod tests {
         // 同じファイル内の重複は今までどおり落ちる。
         let c = Value::list(Type::Path, vec![path_in(FileId(2), "include", 40)], Prov::none());
         let mut diags = Vec::new();
-        let merged = merge_values(&def, &[a, b, c], &SourceMap::new(), &mut diags);
+        let merged = merge_values(&def, &[a, b, c], &mut diags);
         assert!(diags.is_empty());
         let items = merged.as_list().unwrap();
         assert_eq!(items.len(), 2, "{:?}", items.iter().map(|i| i.display()).collect::<Vec<_>>());
@@ -496,7 +483,7 @@ mod tests {
         let a = Value::list(Type::Str, vec![f("-O2", 0), f("-g", 5)], Prov::none());
         let b = Value::list(Type::Str, vec![f("-O2", 10)], Prov::none());
         let mut diags = Vec::new();
-        let merged = merge_values(&def, &[a, b], &SourceMap::new(), &mut diags);
+        let merged = merge_values(&def, &[a, b], &mut diags);
         assert_eq!(merged.as_list().unwrap().len(), 3);
     }
 
@@ -504,10 +491,9 @@ mod tests {
     fn error_on_conflict_fails_on_differing_values() {
         let def = lookup(Block::Private, "defines").unwrap();
         let mut diags = Vec::new();
-        let sm = SourceMap::new();
-        merge_values(&def, &[map_of(&[("A", 1)], 0), map_of(&[("A", 1)], 9)], &sm, &mut diags);
+        merge_values(&def, &[map_of(&[("A", 1)], 0), map_of(&[("A", 1)], 9)], &mut diags);
         assert!(diags.is_empty(), "identical values must not conflict");
-        merge_values(&def, &[map_of(&[("A", 1)], 0), map_of(&[("A", 2)], 9)], &sm, &mut diags);
+        merge_values(&def, &[map_of(&[("A", 1)], 0), map_of(&[("A", 2)], 9)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "merge-conflict");
     }
@@ -521,10 +507,9 @@ mod tests {
             prov: Prov::at(Origin::Literal, site(at)),
         };
         let mut diags = Vec::new();
-        let sm = SourceMap::new();
-        merge_values(&def, &[label("gnu11", 0), label("gnu11", 9)], &sm, &mut diags);
+        merge_values(&def, &[label("gnu11", 0), label("gnu11", 9)], &mut diags);
         assert!(diags.is_empty());
-        merge_values(&def, &[label("gnu11", 0), label("cxx11abi0", 9)], &sm, &mut diags);
+        merge_values(&def, &[label("gnu11", 0), label("cxx11abi0", 9)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "abi-mismatch");
     }
