@@ -119,6 +119,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "missing-manifest",
+        why: "a `path` dependency names a directory with no `dowel.toml`",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"ghost\"\npath = \"../does-not-exist\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "missing-build",
         why: "the package has a manifest but no `dowel.build`",
         files: &[],
@@ -612,6 +621,65 @@ fn a_diagnostic_that_spans_two_files_names_both_in_the_human_rendering() {
         let human = run_case(case, &["check"]);
         assert!(human.stderr.contains("lib/dowel.build"), "`{}`\n{human}", case.code);
         assert!(human.stderr.contains("app/dowel.build"), "`{}`\n{human}", case.code);
+    }
+}
+
+/// 位置を持たない診断と、その理由。事例は `why` で指す。
+///
+/// 空にするのが目標である。位置を付けられない診断は、原因となった記述が
+/// 存在しないものに限られる。
+const WITHOUT_LOCATION: &[(&str, &str)] = &[
+    ("missing-manifest", "the directory has no `dowel.toml`"),
+    // トリプルは `--target` で与えられる。どのマニフェストにも書かれていない。
+    ("missing-runner", "the target triple is not the host and no runner is declared"),
+];
+
+#[test]
+fn every_diagnostic_points_at_a_location() {
+    // 位置の無い診断は、原因の箇所を利用者に示さない。依存が多段になると、
+    // メッセージ中のパスだけでは「どの `dowel.toml` の宣言か」が分からない。
+    let excused: BTreeSet<(&str, &str)> = WITHOUT_LOCATION.iter().copied().collect();
+    let mut failures = Vec::new();
+    for case in CASES {
+        if excused.contains(&(case.code, case.why)) {
+            continue;
+        }
+        let p = Project::new(&format!("loc-{}", case.code));
+        base(&p);
+        if case.code == "missing-build" {
+            std::fs::remove_file(p.path("app/dowel.build")).expect("cannot remove the build file");
+        }
+        for (rel, text) in case.files {
+            p.write(rel, text);
+        }
+        let r = p.run("app", case.args);
+        for line in r.stdout.lines().filter(|l| l.contains(&format!("\"code\":\"{}\"", case.code)))
+        {
+            if line.contains("\"labels\":[]") {
+                failures.push(format!("  {}: {} ", case.code, case.why));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} diagnostic(s) carry no label. give them one, or add the case to WITHOUT_LOCATION \
+         with a reason:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn the_list_of_diagnostics_without_a_location_has_no_stale_entries() {
+    // 位置を付けたのに免除が残っていると、次に落ちても気づけない。
+    let cases: BTreeSet<(&str, &str)> = CASES.iter().map(|c| (c.code, c.why)).collect();
+    for entry in WITHOUT_LOCATION {
+        assert!(
+            cases.contains(entry),
+            "`{}` is excused but no case makes that claim: {}",
+            entry.0,
+            entry.1
+        );
     }
 }
 
