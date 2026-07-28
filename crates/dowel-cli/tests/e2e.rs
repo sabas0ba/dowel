@@ -267,6 +267,64 @@ int main(void) {
     assert_eq!(run_artifact(&bin), "z=7\n");
 }
 
+/// 有効でない任意の依存を持つプロジェクト。実体は与えない。
+fn project_with_an_absent_optional_dependency(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n\
+         [features]\ndefault = []\nabsent  = []\n\n\
+         [[dependencies]]\nname     = \"absent\"\npath     = \"../does-not-exist\"\noptional = true\n",
+    );
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.private]\ndeps = [dep(\"absent\") when feature.absent]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn an_optional_dependency_that_is_off_is_not_read() {
+    // 実体が無くても通る。読み込むと、選ばれていない依存に実体を要求することに
+    // なり、取得を伴う供給形態では取得まで走ることになる。
+    let p = project_with_an_absent_optional_dependency("optional-absent");
+    p.run(".", &["check"]).success();
+
+    // 有効にすれば読みに行く。実体が無いため、そこで初めて落ちる。
+    p.run(".", &["check", "--features=absent"]).failure().stderr_contains("missing-manifest");
+}
+
+#[test]
+fn an_optional_dependency_that_is_off_is_not_a_node_in_the_graph() {
+    // 辺だけが消えて節点が残ると、`dowel graph` の読み手には
+    // 「この構成に含まれる」と読める。
+    let p = Project::new("optional-node");
+    p.write("json/dowel.toml", "[package]\nname = \"json\"\nversion = \"0\"\n");
+    p.write("json/dowel.build", "[lib.json]\nsources = glob(\"*.c\")\n");
+    p.write("json/j.c", "int j(void) { return 1; }\n");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n\
+         [features]\ndefault = [\"json\"]\njson    = []\n\n\
+         [[dependencies]]\nname     = \"json\"\npath     = \"json\"\noptional = true\n",
+    );
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.private]\ndeps = [dep(\"json\") when feature.json]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let on = p.run(".", &["graph"]);
+    on.success().stdout_contains("json:json");
+
+    let off = p.run(".", &["graph", "--no-default-features"]);
+    off.success();
+    assert!(!off.stdout.contains("json"), "the disabled package is still a node\n{off}");
+}
+
 /// テスト対象のライブラリと、通るテスト／落ちるテストの2本。
 ///
 /// テストハーネスは持たない。終了状態 0 が成功という C の慣習に従う。

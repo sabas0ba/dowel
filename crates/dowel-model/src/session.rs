@@ -27,6 +27,24 @@ const INPUTS: &str = "inputs";
 pub const MANIFEST_NAME: &str = "dowel.toml";
 pub const BUILD_NAME: &str = "dowel.build";
 
+/// 読み込みの時点で分かっている機能フラグの選択。
+///
+/// 任意の依存を読むかどうかがこれで決まるため、構成（`Config`）より前に要る。
+/// `Config` は根のマニフェストを読んだ後でなければ組み立てられない。
+#[derive(Clone, Debug)]
+pub struct Features {
+    /// `--features` で明示された名前
+    pub requested: Vec<String>,
+    /// `default` を取り込むか（`--no-default-features` で偽）
+    pub default: bool,
+}
+
+impl Default for Features {
+    fn default() -> Features {
+        Features { requested: Vec::new(), default: true }
+    }
+}
+
 pub struct Session {
     pub sm: SourceMap,
     pub diagnostics: Vec<Diagnostic>,
@@ -44,11 +62,26 @@ pub struct Session {
     inputs: Inputs,
     /// 前回の実行が残した入力の記録
     previous: Inputs,
+    /// 任意の依存を読むかどうかの判定に使う選択
+    features: Features,
+    /// 根の `[features]` から解決した集合。根を読むまでは空
+    active: std::collections::BTreeSet<String>,
 }
 
 impl Session {
     /// `root` にあるパッケージと、そこから到達する `path` 依存を読み込む。
+    ///
+    /// 機能フラグは既定（`default` を取り込み、明示の指定なし）で解決する。
     pub fn load(root: &Path) -> Session {
+        Session::load_with(root, Features::default())
+    }
+
+    /// 機能フラグの選択を与えて読み込む。
+    ///
+    /// 有効でない任意の依存は読み込まない。読み込むと、実体を要求することになり、
+    /// パッケージとしても依存グラフの節点として残る。取得を伴う供給形態
+    /// （Phase 5）では、選ばれていない依存を取得することになる。
+    pub fn load_with(root: &Path, features: Features) -> Session {
         let mut sess = Session {
             sm: SourceMap::new(),
             diagnostics: Vec::new(),
@@ -60,9 +93,16 @@ impl Session {
             db: Db::new(),
             inputs: Inputs::new(),
             previous: read_inputs(&canonical(root)),
+            features,
+            active: std::collections::BTreeSet::new(),
         };
         sess.walk();
         sess
+    }
+
+    /// 有効な機能フラグ。根の `[features]` から解決したもの。
+    pub fn active_features(&self) -> &std::collections::BTreeSet<String> {
+        &self.active
     }
 
     /// ディスクを読み直してモデルを組み直す。
@@ -76,6 +116,7 @@ impl Session {
         self.targets.clear();
         self.runners.clear();
         self.by_root.clear();
+        self.active.clear();
         self.db.reset_stats();
         self.walk();
     }
@@ -119,12 +160,37 @@ impl Session {
         // 2つ目の要素は、その位置を読ませた宣言の位置。根には無い。
         // 読めなかった場合の診断がこれを指す。
         let mut queue: Vec<(PathBuf, Option<Site>)> = vec![(self.root.clone(), None)];
+        let mut root_seen = false;
         while let Some((dir, from)) = queue.pop() {
             if self.by_root.contains_key(&dir) {
                 continue;
             }
             let Some(id) = self.load_package(&dir, from) else { continue };
+            // 機能集合は根の `[features]` が決める。根を読んだ時点で確定する。
+            if !root_seen {
+                root_seen = true;
+                self.active = package::resolve_features(
+                    &self.packages[id.0],
+                    &self.features.requested,
+                    self.features.default,
+                );
+                log_debug!(
+                    "active features: {}",
+                    if self.active.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        self.active.iter().cloned().collect::<Vec<_>>().join(", ")
+                    }
+                );
+            }
             for dep in self.packages[id.0].deps.clone() {
+                if !package::is_active(&dep, &self.active) {
+                    log_debug!(
+                        "not reading optional dependency `{}`; its feature is off",
+                        dep.name
+                    );
+                    continue;
+                }
                 if let DepKind::Path(rel) = &dep.kind {
                     queue.push((canonical(&dir.join(rel)), Some(dep.source_site)));
                 }
