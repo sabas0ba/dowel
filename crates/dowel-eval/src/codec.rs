@@ -25,7 +25,7 @@
 //! 形式と復元の双方が複雑になる。鎖の段数は `dowel why` の表示行数と
 //! 同程度であり、展開しても大きくならない。
 
-use crate::eval::{Document, Entry, Table};
+use crate::eval::{CfgRef, Document, Entry, Table};
 use crate::value::{
     CfgKey, Data, MatchArm, Ns, Origin, PathBase, PathValue, Pattern, Pred, Prov, Site, Type, Value,
 };
@@ -50,6 +50,13 @@ pub fn encode_document(doc: &Document) -> Vec<u8> {
             w.value(&e.value);
         }
     }
+    // 構成参照は文書の一部である。格納しなければ、復元した文書に対する
+    // 機能名の検証だけが働かない。
+    w.len(doc.cfg_refs.len());
+    for r in &doc.cfg_refs {
+        w.cfg_key(&r.key);
+        w.site(r.site);
+    }
     w.0
 }
 
@@ -72,11 +79,16 @@ pub fn decode_document(bytes: &[u8]) -> Option<Document> {
         }
         tables.push(Table { path, array, site, entries });
     }
+    let k = r.len()?;
+    let mut cfg_refs = Vec::with_capacity(k.min(1024));
+    for _ in 0..k {
+        cfg_refs.push(CfgRef { key: r.cfg_key()?, site: r.site()? });
+    }
     // 余りがある場合は形式が合っていない。読めたところまでを使わない。
     if r.i != r.b.len() {
         return None;
     }
-    Some(Document { file, tables })
+    Some(Document { file, tables, cfg_refs })
 }
 
 // --- 書き出し ------------------------------------------------------------

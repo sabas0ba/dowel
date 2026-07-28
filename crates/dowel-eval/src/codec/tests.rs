@@ -98,6 +98,7 @@ fn the_provenance_chain_survives_in_order() {
         .then(Origin::Merged { prop: "includes".into(), rule: "union" }, None);
     let doc = Document {
         file: FileId(7),
+        cfg_refs: Vec::new(),
         tables: vec![Table {
             path: vec!["lib".into(), "a".into()],
             array: false,
@@ -119,6 +120,21 @@ fn the_provenance_chain_survives_in_order() {
     assert!(matches!(chain[2].0, Origin::Literal));
     // 位置は最も根に近い段が持っていた。
     assert_eq!(chain[2].1, Some(Site { file: FileId(7), span: Span::new(1, 2) }));
+}
+
+#[test]
+fn the_configuration_references_survive() {
+    // 機能名の検証は復元した文書に対しても働かなければならない。
+    // 参照の一覧を落とすと、ストア経由の実行だけが綴り誤りを見逃す。
+    let doc = evaluate(
+        "[bin.app]\nsources = glob(\"*.c\")\n\n[bin.app.private]\nflags = [\"-O2\" when feature.fast]\n",
+    );
+    assert_eq!(doc.cfg_refs.len(), 1);
+    let back = decode_document(&encode_document(&doc)).unwrap();
+    assert_eq!(back.cfg_refs.len(), 1);
+    assert_eq!(back.cfg_refs[0].key.display(), "feature.fast");
+    assert_eq!(back.cfg_refs[0].site, doc.cfg_refs[0].site);
+    round_trips(&doc);
 }
 
 #[test]
