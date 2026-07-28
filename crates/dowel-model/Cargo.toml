@@ -11,4 +11,5 @@ description = "Package loading, targets and the dependency graph, interface merg
 dowel-support.workspace = true
 dowel-syntax.workspace = true
 dowel-query.workspace = true
+dowel-store.workspace = true
 dowel-eval.workspace = true

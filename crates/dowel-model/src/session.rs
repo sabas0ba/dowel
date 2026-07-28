@@ -13,12 +13,16 @@ use crate::target::{label, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Document, Site, Value};
 use dowel_query::{Db, Stats};
+use dowel_store::{Inputs, Store};
 use dowel_support::diag::closest;
 use dowel_support::{log, Diagnostic, FileId, SourceMap, Span};
 use dowel_support::{log_debug, log_trace};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// 入力の記録を置くファイル名。ストアのディレクトリ内に置く。
+const INPUTS: &str = "inputs";
 
 pub const MANIFEST_NAME: &str = "dowel.toml";
 pub const BUILD_NAME: &str = "dowel.build";
@@ -36,6 +40,10 @@ pub struct Session {
     root: PathBuf,
     /// 解析と評価のメモ表。`reload` を跨いで生き残る
     db: Db<Key>,
+    /// 読み込んだファイルの記録。プロセスを跨いだ変更検出に使う
+    inputs: Inputs,
+    /// 前回の実行が残した入力の記録
+    previous: Inputs,
 }
 
 impl Session {
@@ -50,6 +58,8 @@ impl Session {
             by_root: BTreeMap::new(),
             root: canonical(root),
             db: Db::new(),
+            inputs: Inputs::new(),
+            previous: read_inputs(&canonical(root)),
         };
         sess.walk();
         sess
@@ -70,9 +80,38 @@ impl Session {
         self.walk();
     }
 
-    /// 解析と評価の再利用状況。`hit` が「メモをそのまま使った件数」。
+    /// 解析と評価の再利用状況。`hit` はメモをそのまま使った件数。
     pub fn query_stats(&self) -> Stats {
         self.db.stats()
+    }
+
+    /// 今回読み込んだ入力の記録をストアへ書く。
+    ///
+    /// 書けなくても誤りではない。次回の実行が変更検出をやり直すだけであり、
+    /// 結果は変わらない。書き手を取得できない場合も同様である。
+    pub fn save_inputs(&self) {
+        let store = Store::open(&self.root);
+        let Ok(Some(_writer)) = store.writer() else {
+            log_debug!("inputs: not writing (no write lock)");
+            return;
+        };
+        let dir = Store::dir(&self.root);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let _ = std::fs::write(dir.join(INPUTS), self.inputs.encode());
+            log_debug!("inputs: recorded {} files", self.inputs.len());
+        }
+    }
+
+    /// 前回の実行から見た入力の変化。プロセスを跨いだ観測に使う。
+    pub fn input_changes(&self) -> Vec<(PathBuf, dowel_store::input::Change)> {
+        let mut out = Vec::new();
+        for (path, _) in self.sm.paths() {
+            let change = self.previous.check(&path, || {
+                std::fs::read_to_string(&path).ok().map(|t| dowel_store::fingerprint(t.as_bytes()))
+            });
+            out.push((path, change));
+        }
+        out
     }
 
     fn walk(&mut self) {
@@ -169,6 +208,9 @@ impl Session {
         // ここで対応を出しておく。
         log_trace!("  file {} is {}", file.0, self.sm.path(file).display());
         query::set_text(&self.db, file, &src);
+        // プロセスを跨いだ変更検出のために記録する。プロセス内の判定は
+        // クエリエンジンが行うため、ここでは記録だけを行う。
+        self.inputs.record(self.sm.path(file), dowel_store::fingerprint(src.as_bytes()));
         // `Session` は打ち切りを公開していないため、この `Db` が
         // 打ち切られることはない。言語サーバを載せる際は、
         // ここが `Result` の伝播点になる。
@@ -612,6 +654,19 @@ fn path_hint(expected: &dowel_eval::Type, actual: &dowel_eval::Type) -> String {
             .into()
     } else {
         format!("expected type {}", expected.display())
+    }
+}
+
+/// 前回の実行が残した入力の記録。無ければ空。
+fn read_inputs(root: &Path) -> Inputs {
+    let path = Store::dir(root).join(INPUTS);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let inputs = Inputs::decode(&text);
+            log_debug!("inputs: {} records from the previous run", inputs.len());
+            inputs
+        }
+        Err(_) => Inputs::new(),
     }
 }
 

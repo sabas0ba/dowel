@@ -82,6 +82,11 @@ impl SourceMap {
         self.files.is_empty()
     }
 
+    /// 読み込んだ全ファイルの識別子とパス。
+    pub fn paths(&self) -> Vec<(PathBuf, FileId)> {
+        self.files.iter().enumerate().map(|(i, f)| (f.path.clone(), FileId(i as u32))).collect()
+    }
+
     pub fn path(&self, file: FileId) -> &Path {
         &self.files[file.0 as usize].path
     }

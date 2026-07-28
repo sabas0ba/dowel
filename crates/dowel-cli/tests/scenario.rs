@@ -286,3 +286,77 @@ fn the_generated_ninja_file_is_stable_across_runs() {
     let second = std::fs::read_to_string(&path).expect("cannot read build.ninja");
     assert_eq!(first, second, "the generated ninja file is not deterministic");
 }
+
+// --- ストアへの入力の記録（docs/20-architecture.md 5.2）------------------
+
+/// ストアが記録した入力の一覧。
+fn recorded_inputs(p: &Project, pkg: &str) -> String {
+    let path = p.path(pkg).join(".dowel/cache/v1/inputs");
+    std::fs::read_to_string(&path).unwrap_or_default()
+}
+
+#[test]
+fn a_run_records_the_manifests_it_read() {
+    let p = project("scenario-inputs");
+    p.run("app", &["check"]).success();
+
+    let text = recorded_inputs(&p, "app");
+    // 読んだのは app と libfoo の dowel.toml / dowel.build の4件。
+    let lines = text.lines().filter(|l| !l.starts_with('#')).count();
+    assert_eq!(lines, 4, "unexpected input records:\n{text}");
+    assert!(text.contains("dowel.build"), "{text}");
+    assert!(text.contains("libfoo"), "{text}");
+}
+
+#[test]
+fn a_second_process_sees_the_previous_run_as_unchanged() {
+    let p = project("scenario-inputs-unchanged");
+    p.run("app", &["check"]).success();
+
+    // 2回目のプロセス。前回の記録と突き合わせ、`stat` の一致で判定する。
+    let r = p.run("app", &["check", "--log-level=trace"]);
+    r.success();
+    assert!(
+        r.stderr.contains("UnchangedByStat"),
+        "the second process did not reuse the recorded stat keys\n{r}"
+    );
+    assert!(!r.stderr.contains("Changed"), "nothing was edited\n{r}");
+}
+
+#[test]
+fn editing_a_manifest_is_reported_as_changed_across_processes() {
+    let p = project("scenario-inputs-changed");
+    p.run("app", &["check"]).success();
+
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.private]\ndeps  = [dep(\"libfoo\")]\nflags = [\"-DX=1\"]\n",
+    );
+    let r = p.run("app", &["check", "--log-level=trace"]);
+    r.success();
+    r.stderr_contains("Changed");
+}
+
+#[test]
+fn rewriting_a_manifest_with_the_same_bytes_is_unchanged_across_processes() {
+    // `stat` は動くが内容は同じ。内容の指紋で「変わっていない」と判定する。
+    let p = project("scenario-inputs-same-bytes");
+    p.run("app", &["check"]).success();
+
+    let text = std::fs::read_to_string(p.path("app/dowel.build")).unwrap();
+    p.write("app/dowel.build", &text);
+
+    let r = p.run("app", &["check", "--log-level=trace"]);
+    r.success();
+    r.stderr_contains("UnchangedByContent");
+}
+
+#[test]
+fn the_recorded_inputs_show_up_in_cache_info() {
+    let p = project("scenario-inputs-cache-info");
+    p.run("app", &["check"]).success();
+    // 入力の記録はストアのディレクトリに置く。
+    p.run("app", &["cache", "info"]).success().stdout_contains(".dowel/cache/v1");
+    assert!(!recorded_inputs(&p, "app").is_empty());
+}
