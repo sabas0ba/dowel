@@ -268,6 +268,22 @@ const CASES: &[Case] = &[
         )],
         args: CHECK,
     },
+    // --- ランナー ---------------------------------------------------------
+    Case {
+        code: "missing-runner",
+        why: "the target triple is not the host and no runner is declared",
+        files: &[("app/dowel.build", "[test.t]\nsources = glob(\"src/*.c\")\n")],
+        args: &["test", "--target=riscv64gc-unknown-linux-gnu", "--message-format=json"],
+    },
+    Case {
+        code: "missing-field",
+        why: "a runner must say what to launch",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[runner.riscv64gc-unknown-linux-gnu]\nargs = [\"-L\", \"/sysroot\"]\n",
+        )],
+        args: CHECK,
+    },
     // --- ビルド計画 -------------------------------------------------------
     Case {
         code: "no-sources",
@@ -344,9 +360,17 @@ fn every_case_produces_the_diagnostic_it_claims() {
 
 #[test]
 fn the_case_table_has_no_duplicates() {
-    let mut seen = std::collections::BTreeSet::new();
+    // 同じコードに複数の事例があってよい。別の経路から出る診断は、
+    // 経路ごとに固定する値打ちがある（`missing-field` はパッケージにも
+    // ランナーにも出る）。重複として弾くのは「同じ主張が2つある」場合に限る。
+    let mut seen = BTreeSet::new();
     for case in CASES {
-        assert!(seen.insert(case.code), "`{}` appears twice in the case table", case.code);
+        assert!(
+            seen.insert((case.code, case.why)),
+            "`{}` has two cases making the same claim: {}",
+            case.code,
+            case.why
+        );
     }
 }
 

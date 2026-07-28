@@ -134,6 +134,11 @@ dowel check --log-format=json    # 1行1オブジェクト
 - ninja ファイル生成と `compile_commands.json`（`arguments` 配列形式）
 - 実行器2種。ninja（既定）と direct（逐次、depfile を読む mtime 判定）
 - 構成ごとに分けたビルドディレクトリ
+- `[runner.<triple>]` — ターゲットトリプルごとの実行ラッパ。
+  `dowel test --target=<triple>` が透過的にラッパ経由で起動する。
+  ホストと違うトリプルでランナーが宣言されていない場合は、**起動する前に**
+  診断で拒む。起動してからでは `Exec format error` になり、構成の誤りが
+  テストの失敗として報告されてしまうため
 - `dowel test` — test ターゲットを起動して終了状態で合否を判定する。
   テストハーネスは持たず、「終了状態 0 なら成功」という C の慣習に従う。
   作業ディレクトリはパッケージルート。失敗したものだけ出力を見せる
@@ -167,6 +172,7 @@ dowel check --log-format=json    # 1行1オブジェクト
 | `plan` | 解決済みのソース・インクルード・定義・フラグ、各アクションの完全なコマンド列 |
 | `exec` | 最新と判定した理由、再実行の理由（どの入力が新しいか） |
 | `test` | 起動したテストの一覧（起動前）と、その作業ディレクトリ・コマンド |
+| `runner` | 宣言されたラッパと、構成に対して選ばれたコマンド |
 
 ## 検証
 
@@ -183,19 +189,19 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 211 件）。
+現在の内訳（テスト 216 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 131 |
+| `unit-*` | クレートごとの単体テスト | 132 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 8 |
-| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 30 |
+| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 34 |
 | `scenario` | 時間をまたぐ操作列（編集して再ビルド、構成の切り替え） | 11 |
 | `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 8 |
-| `diagnostics` | 診断が CLI まで届くこと（34 事例）と網羅の追跡 | 5 |
+| `diagnostics` | 診断が CLI まで届くこと（36 事例）と網羅の追跡 | 5 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
 
@@ -231,9 +237,10 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | 永続化ストア（mmap インデックス + 追記ログ、`flock`） | Phase 1。`Db` のメモ表が差し替え先 |
 | ターゲット単位の派生をクエリ化（early cutoff を効かせる） | Phase 1。現在の粒度はファイル単位 |
 | プローブ事実 DB | Phase 2 |
-| `bench` / `template` / `toolchain` / `runner` の各種別 | Phase 2 / 4 |
+| `bench` / `template` / `toolchain` の各種別 | Phase 2 / 4 |
 | 移行（`migrate verify` / `import`） | Phase 3 |
-| ランナー抽象（qemu / SSH / 実機）、`dowel debug`、言語サーバ | Phase 4。差し込み口は `dowel_build::testing::Launcher` に用意済み |
+| `dowel debug`、言語サーバ | Phase 4 |
+| SSH / シリアル経由のランナー（成果物の転送を伴うもの） | Phase 4。ラッパ起動の形は実装済み |
 | 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
 | ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |
 
@@ -247,4 +254,5 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | [10-manifest.md](10-manifest.md) 3節 | `includes` は「トポロジカル順」 | 自分が先、依存が後 | インクルード探索でもリンク順でも依存元が先に来るのが期待される挙動。トポロジカル順の向きを実装で確定させた |
 | 型 | `defines : Map<Ident, Val>` | `Val` を型として実装 | 文書の記法をそのまま型にした |
 | `abi` | ABI ラベルは算出される | 現状は文字列で手書き | 算出は Phase 6。`must_equal` の経路だけ先に通してある |
+| [30-devexp.md](30-devexp.md) 1節 | `args = ["-L", sysroot()]` | `args : List<Str>`。`sysroot()` は書けない | `sysroot` 基点のパスは Phase 4（`unimplemented-path-base`）。先に文字列で書けるようにし、基点が入った段で `List<Val>` へ広げる |
 | [50-development.md](50-development.md) 3節 | CI は dotfiles から構築した `--network none` のコンテナ内 | GitHub Actions の実行機（当面はこのままとする） | dotfiles の flake を本リポジトリの CI から評価する経路が未整備であり、現時点で手を入れる必要はないと判断した。検査の定義は `scripts/verify.sh` に一本化してあるため、移行が要るようになった際はワークフローの中身が入れ替わるだけで済む |

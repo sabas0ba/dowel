@@ -8,6 +8,7 @@
 
 use crate::package::{self, DepKind, Package};
 use crate::query::{self, Key};
+use crate::runner::Runner;
 use crate::target::{label, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Document, Site, Value};
@@ -27,6 +28,8 @@ pub struct Session {
     pub diagnostics: Vec<Diagnostic>,
     pub packages: Vec<Package>,
     pub targets: Vec<Target>,
+    /// ターゲットトリプル → 実行ラッパ（docs/30-devexp.md 1節）
+    pub runners: BTreeMap<String, Runner>,
     /// 正規化したパッケージルート → 識別子。同じパッケージを2度読まないため。
     by_root: BTreeMap<PathBuf, PackageId>,
     /// 最初に読み込んだ根。`reload` の起点。
@@ -43,6 +46,7 @@ impl Session {
             diagnostics: Vec::new(),
             packages: Vec::new(),
             targets: Vec::new(),
+            runners: BTreeMap::new(),
             by_root: BTreeMap::new(),
             root: canonical(root),
             db: Db::new(),
@@ -60,6 +64,7 @@ impl Session {
         self.diagnostics.clear();
         self.packages.clear();
         self.targets.clear();
+        self.runners.clear();
         self.by_root.clear();
         self.db.reset_stats();
         self.walk();
@@ -194,6 +199,11 @@ impl Session {
             }
 
             let Some(kind) = self.parse_kind(table, doc.file) else { continue };
+            // ランナーはターゲットではない。成果物を生成せず、伝播もしない。
+            if kind == TableKind::Runner {
+                self.declare_runner(table, doc.file);
+                continue;
+            }
             if table.path.len() < 2 {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -275,6 +285,104 @@ impl Session {
                 log_trace!("declared target {}.{}", t.kind.name(), t.name);
             }
         }
+    }
+
+    /// `[runner.<triple>]` を取り込む。
+    ///
+    /// ランナーは構成（ターゲットトリプル）に紐づくものであり、パッケージには
+    /// 紐づかない。複数のパッケージが同じトリプルに宣言した場合は、最初に
+    /// 読んだものを採る。上書きを許すと「どのパッケージを根に置いたか」で
+    /// テストの起動方法が変わり、再現しない。
+    fn declare_runner(&mut self, table: &dowel_eval::Table, file: FileId) {
+        if table.path.len() != 2 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "missing-target-name",
+                    format!("`[{}]` has no target triple", table.path.join(".")),
+                )
+                .at(file, table.site.span, "write `[runner.<triple>]`")
+                .note("a runner is selected by the target triple (docs/30-devexp.md)"),
+            );
+            return;
+        }
+        let triple = table.path[1].clone();
+
+        let mut props = PropMap::new();
+        let known = schema::runner_props();
+        for entry in &table.entries {
+            let name = entry.key.join(".");
+            let Some(def) = known.iter().find(|p| p.name == name) else {
+                let names: Vec<&str> = known.iter().map(|p| p.name).collect();
+                let mut d =
+                    Diagnostic::error("unknown-property", format!("unknown property `{name}`"))
+                        .at(
+                            entry.site.file,
+                            entry.site.span,
+                            "`runner` has no property with this name",
+                        )
+                        .note(format!("`runner` accepts: {}", names.join(", ")));
+                if let Some(c) = closest(&name, names) {
+                    d = d.suggest(
+                        entry.site.file,
+                        entry.site.span,
+                        c,
+                        format!("did you mean `{c}`?"),
+                    );
+                }
+                self.diagnostics.push(d);
+                continue;
+            };
+            if !def.ty.accepts(&entry.value.ty) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "type-mismatch",
+                        format!(
+                            "`{name}` is {} but {} was given",
+                            def.ty.display(),
+                            entry.value.ty.display()
+                        ),
+                    )
+                    .at(
+                        entry.site.file,
+                        entry.site.span,
+                        format!("this value has type {}", entry.value.ty.display()),
+                    ),
+                );
+                continue;
+            }
+            props.insert(name, entry.value.clone());
+        }
+
+        if !props.contains_key("command") {
+            self.diagnostics.push(
+                Diagnostic::error("missing-field", format!("runner `{triple}` has no `command`"))
+                    .at(file, table.site.span, "a runner must say what to launch")
+                    .note("for example `command = \"qemu-riscv64\"`"),
+            );
+            return;
+        }
+
+        if let Some(prev) = self.runners.get(&triple) {
+            let mut d = Diagnostic::error(
+                "duplicate-table",
+                format!("runner `{triple}` is declared twice"),
+            )
+            .at(file, table.site.span, "declared again here")
+            .note("a runner belongs to the target triple, not to a package");
+            d = d.with_label(dowel_support::Label::secondary(
+                prev.site.file,
+                prev.site.span,
+                "first declared here",
+            ));
+            self.diagnostics.push(d);
+            return;
+        }
+
+        log_debug!("declared runner for `{triple}`");
+        for (k, v) in &props {
+            log_trace!("  {k} = {}", v.display());
+        }
+        self.runners.insert(triple.clone(), Runner { triple, site: table.site, props });
     }
 
     fn parse_kind(&mut self, table: &dowel_eval::Table, file: FileId) -> Option<TableKind> {

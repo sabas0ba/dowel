@@ -189,7 +189,16 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
 
-            let launcher = testing::Launcher::for_config(&cfg);
+            // ランナーの解決は起動の直前ではなく、ここで行って診断を出す。
+            // クロス構成でランナーが無いまま起動すると `Exec format error` に
+            // なり、構成の誤りがテストの失敗として報告されてしまう。
+            let (launcher, runner_diags) = testing::Launcher::for_config(&sess, &cfg);
+            if !runner_diags.is_empty() {
+                sess.diagnostics.extend(runner_diags);
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+            }
             let run_opts = test_run_options(opts);
             let outcomes = testing::run(&sess, &p, &launcher, &requested, &run_opts);
 
