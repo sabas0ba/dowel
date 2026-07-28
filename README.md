@@ -12,9 +12,9 @@ C/C++ を主対象とするビルドシステム。CMake / Bazel / Meson に対�
 ## 現在の状態
 
 実装着手済み。[docs/90-roadmap.md](docs/90-roadmap.md) の Phase 1〜2 を、
-**縦に薄く貫通させる**方針で進めている。すなわち、増分クエリエンジンや
-永続化ストアを完成させる前に、パーサから実際の C のコンパイルまでを
-一度通し、そのうえで各層を厚くする。
+最小構成を先に端から端まで接続する方針で進めている。増分クエリエンジンや
+永続化ストアを完成させる前に、パーサから実際の C のコンパイルまでを一度接続し、
+そのうえで各層の実装を進める。
 
 現時点で `dowel check` / `dowel build` / `dowel test` / `dowel why` /
 `dowel graph` / `dowel schema dump` が動く。複数パッケージの C を実際に
@@ -45,7 +45,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 
 ## 文書
 
-[docs/README.md](docs/README.md) に地図がある。要点だけ挙げると:
+一覧は [docs/README.md](docs/README.md) にある。主な参照先は以下のとおり。
 
 - **何をするものか** — [docs/00-overview.md](docs/00-overview.md)
 - **何が動くか** — [docs/91-implementation-status.md](docs/91-implementation-status.md)

@@ -93,7 +93,7 @@ impl SourceMap {
     pub fn slice(&self, file: FileId, span: Span) -> &str {
         let text = self.text(file);
         let range = span.range();
-        // 復元不能な panic を避ける。診断の描画中に落ちるのが最悪の失敗様式であるため。
+        // 診断の描画中の panic を避ける。誤りの報告そのものが失われるためである。
         text.get(range).unwrap_or("")
     }
 

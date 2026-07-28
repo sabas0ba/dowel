@@ -1,7 +1,7 @@
 # コマンド
 
-`dowel` の表面。ここに書いたものは実際に動く（動かないものは
-[91-implementation-status.md](91-implementation-status.md) の未実装表にある）。
+`dowel` が提供するコマンドとオプション。本文書に記載したものは実装済みである。
+未実装の項目は [91-implementation-status.md](91-implementation-status.md) に一覧がある。
 
 ## 一覧
 
@@ -52,6 +52,6 @@ dowel check --log-format=json    # 1行1オブジェクト
 ## 診断の機械可読形式
 
 `--message-format=json` で1行1診断の JSON を stdout に出す。
-各診断は安定コード（`unknown-property` など）を持ち、これは互換性の対象である。
-コードの一覧と、それぞれを出す最小の入力は
-`crates/dowel-cli/tests/diagnostics.rs` の事例表にある。
+各診断は安定コード（`unknown-property` 等）を持つ。コードは互換性の対象とする。
+コードの一覧と、各コードを発生させる最小の入力は
+`crates/dowel-cli/tests/diagnostics.rs` の事例表に定義してある。

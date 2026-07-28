@@ -126,8 +126,8 @@ fn touching_a_public_header_recompiles_everything_that_includes_it() {
 
 #[test]
 fn adding_a_source_file_is_picked_up_without_touching_the_manifest() {
-    // `glob` の展開は評価ではなく plan で行う。ここが逆だと、
-    // 「ファイルを足したのにビルドに入らない」という最も苛立たしい失敗になる。
+    // `glob` の展開は評価時ではなく plan 時に行う。逆にすると、
+    // ファイルを追加してもマニフェストを変更するまでビルド対象に入らない。
     let p = project("scenario-add-source");
     p.run("app", &["build", "--executor=direct"]).success();
 

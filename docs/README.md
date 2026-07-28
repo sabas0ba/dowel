@@ -1,18 +1,18 @@
-# 文書の地図
+# 文書一覧
 
-## 何から読むか
+## 目的別の参照先
 
-| 目的 | 読むもの |
+| 目的 | 文書 |
 |---|---|
-| これは何か、何をしないか | [00-overview.md](00-overview.md) |
-| 実際に何が動くか | [91-implementation-status.md](91-implementation-status.md) |
-| コマンドの使い方 | [60-cli.md](60-cli.md) |
-| マニフェストの書き方 | [10-manifest.md](10-manifest.md) |
-| 手を入れる | [50-development.md](50-development.md) → [51-testing.md](51-testing.md) |
+| 目標と非目標 | [00-overview.md](00-overview.md) |
+| 実装済みの機能 | [91-implementation-status.md](91-implementation-status.md) |
+| コマンドの仕様 | [60-cli.md](60-cli.md) |
+| マニフェストの記述方法 | [10-manifest.md](10-manifest.md) |
+| 開発への参加 | [50-development.md](50-development.md) → [51-testing.md](51-testing.md) |
 
 ## 番号の規約
 
-十の位が主題、一の位が同じ主題の中の分冊である。
+十の位が主題を、一の位が同一主題内の分冊を表す。
 
 | 帯 | 主題 |
 |---|---|
@@ -26,13 +26,13 @@
 | `9x` | 計画と現況 |
 | `99` | 未決事項 |
 
-新しい文書は、既存の帯に収まるならその帯へ足す。収まらない主題が出た場合に
-新しい帯を起こす。番号を詰め直さない — 文書は本文中と原典（コード中の
-コメント）の双方から参照されており、付け替えると参照が切れる。
+新しい文書は、既存の帯に収まるならその帯に追加する。収まらない主題が生じた場合に
+新しい帯を追加する。番号の再割り当ては行わない。文書番号は Markdown のリンクと
+ソースコード中のコメントの双方から参照されており、変更すると参照が解決しなくなる。
 
 ## 一覧
 
-| 文書 | 何が書いてあるか |
+| 文書 | 内容 |
 |---|---|
 | [00-overview.md](00-overview.md) | 目標・非目標、既存システムに対する位置づけ |
 | [10-manifest.md](10-manifest.md) | マニフェスト仕様（`dowel.toml` / `dowel.build`）、型と併合意味論 |
@@ -49,15 +49,14 @@
 
 ## 文書の扱い
 
-- **決定は [ADR](adr/README.md) に記録する。** 覆す場合は当該 ADR を Superseded とし、
-  新しい ADR を追加する。既存の ADR を書き換えない
-- **未決は [99-open-questions.md](99-open-questions.md) に集約する。**
-  決まったら ADR へ移し、当該項目を削除する
-- **計画と現況を混ぜない。** [90-roadmap.md](90-roadmap.md) は「こうする」、
-  [91-implementation-status.md](91-implementation-status.md) は「こうなっている」。
-  両者が食い違う場合、後者が現況を示す
-- **実装が仕様から外れた場合は、隠さず差異として記録する。**
-  91 の「設計文書との差異」節がその置き場である
+- 決定は [ADR](adr/README.md) に記録する。決定を覆す場合は当該 ADR を Superseded とし、
+  新しい ADR を追加する。既存の ADR は書き換えない
+- 未決事項は [99-open-questions.md](99-open-questions.md) に集約する。
+  決定したものは ADR へ移し、当該項目を削除する
+- 計画と現況を分離する。[90-roadmap.md](90-roadmap.md) は計画、
+  [91-implementation-status.md](91-implementation-status.md) は現況を記述する。
+  両者が食い違う場合は後者を現況とみなす
+- 実装が仕様と異なる場合は、91 の「設計文書との差異」節に記録する
 
-この地図と一覧は
-`crates/dowel-cli/tests/docs.rs` が検査している。文書を足して一覧へ書き忘れると落ちる。
+本一覧と `docs/` の中身が一致することは `crates/dowel-cli/tests/docs.rs` が検査する。
+文書を追加して一覧に記載しなかった場合、検証が失敗する。

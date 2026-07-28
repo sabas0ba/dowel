@@ -663,7 +663,7 @@ impl<'a> Evaluator<'a> {
     }
 }
 
-/// 要素の型を1つに寄せる。揃わなければ `Unknown` とし、
+/// 要素の型を1つに統一する。統一できない場合は `Unknown` とし、
 /// 型検査は代入先のスキーマが行う。
 fn unify_elems(items: &[Value]) -> Type {
     let mut ty: Option<Type> = None;

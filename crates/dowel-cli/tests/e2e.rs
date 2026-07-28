@@ -183,7 +183,7 @@ fn the_build_leaves_no_stray_files_in_the_project() {
     let p = two_package_project("no-stray-files");
     p.run("app", &["build"]).success();
 
-    // ninja の作業ファイルはビルドディレクトリに閉じ込める。
+    // ninja の作業ファイルはビルドディレクトリ内に限定する。
     // 利用者のプロジェクトへ勝手に物を置かない。
     for stray in [".ninja_log", ".ninja_deps", "build.ninja"] {
         assert!(!p.path("app").join(stray).exists(), "`{stray}` was left in the project root");

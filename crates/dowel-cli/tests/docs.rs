@@ -1,10 +1,10 @@
-//! 文書の整合。**リンクが切れていないこと**と**索引に漏れが無いこと**。
+//! 文書の整合性検査。リンクの解決可能性と、索引の完全性を確かめる。
 //!
-//! 文書は腐る。腐っても誰も落ちないため、腐ったまま残る。
-//! ここは「腐ったら落ちる」機構であり、`diagnostics.rs` の網羅検査と同じ役目を負う。
+//! 文書の不整合はビルドにもテストにも影響しないため、検査しない限り検出されない。
+//! `diagnostics.rs` の網羅検査と同じく、放置を防ぐための機械的な検査である。
 //!
-//! 検査するのは機械的に判定できるものだけである。内容が正しいかは見ない。
-//! 見るのは以下の4つ。
+//! 対象は機械的に判定できる項目に限る。記述内容の妥当性は検査しない。
+//! 検査項目は以下の4つ。
 //!
 //! - 相対リンクの指す先が存在すること
 //! - コードとスクリプトが名指しする文書が存在すること
@@ -19,7 +19,7 @@ use common::repo_root;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// 検査対象の Markdown。生成物とビルド成果物は見ない。
+/// 検査対象の Markdown。生成物とビルド成果物は対象外とする。
 fn markdown_files() -> Vec<PathBuf> {
     let root = repo_root();
     let mut out = vec![root.join("README.md"), root.join("CLAUDE.md")];
@@ -52,7 +52,7 @@ fn relative_links(text: &str) -> Vec<String> {
             }
             if j < bytes.len() {
                 let target: String = bytes[start..j].iter().collect();
-                // 外部と、同一文書内の見出しは対象外。
+                // 外部 URL と同一文書内の見出しは対象外とする。
                 let external = target.starts_with("http://")
                     || target.starts_with("https://")
                     || target.starts_with('#')
@@ -75,7 +75,7 @@ fn every_relative_link_in_the_documents_resolves() {
         let text = std::fs::read_to_string(&file).expect("cannot read the document");
         let dir = file.parent().expect("a file has a parent").to_path_buf();
         for target in relative_links(&text) {
-            // 見出しへの参照は本体だけを見る。
+            // 見出し付きの参照はパス部分のみを検査する。
             let path_part = target.split('#').next().unwrap_or(&target);
             if path_part.is_empty() {
                 continue;
@@ -92,10 +92,10 @@ fn every_relative_link_in_the_documents_resolves() {
     assert!(broken.is_empty(), "these links do not resolve:\n{}", broken.join("\n"));
 }
 
-/// コードやスクリプトの中で名指しされている文書。
+/// コードやスクリプトの中で参照されている文書。
 ///
-/// 番号を付け替えたときに真っ先に切れるのがここである。本文中のリンクと違い
-/// Markdown の書式を持たないため、別に拾う。
+/// 文書番号を変更した場合、Markdown のリンクより先にこちらが解決しなくなる。
+/// Markdown の書式を持たないため、別途走査する。
 #[test]
 fn every_document_named_from_the_source_exists() {
     let root = repo_root();
@@ -160,7 +160,7 @@ fn doc_paths(text: &str) -> BTreeSet<String> {
 
 #[test]
 fn the_document_map_lists_every_document() {
-    // 文書を足して地図に書き忘れると、誰も辿り着けない文書ができる。
+    // 一覧に記載しなかった文書は、参照経路を持たないまま残る。
     let docs = repo_root().join("docs");
     let map = std::fs::read_to_string(docs.join("README.md")).expect("docs/README.md is missing");
 
@@ -184,7 +184,7 @@ fn the_document_map_lists_every_document() {
 
 #[test]
 fn the_adr_index_matches_the_records() {
-    // ADR は「決定の一覧」としてしか読まれない。索引から漏れた決定は無いのと同じ。
+    // ADR は索引経由で参照される。索引に無い決定は事実上参照できない。
     let adr = repo_root().join("docs/adr");
     let index =
         std::fs::read_to_string(adr.join("README.md")).expect("docs/adr/README.md is missing");
@@ -204,7 +204,7 @@ fn the_adr_index_matches_the_records() {
         missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
     );
 
-    // 逆向き。索引に載っているのに実体が無い行を拾う。
+    // 逆方向。索引に記載があるが実体が存在しない行を検出する。
     for line in index.lines().filter(|l| l.contains("](0")) {
         for target in relative_links(line) {
             assert!(
