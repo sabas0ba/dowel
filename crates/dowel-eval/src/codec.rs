@@ -41,11 +41,13 @@ pub fn encode_document(doc: &Document) -> Vec<u8> {
     w.len(doc.tables.len());
     for t in &doc.tables {
         w.strs(&t.path);
+        w.spans(&t.path_spans);
         w.bool(t.array);
         w.site(t.site);
         w.len(t.entries.len());
         for e in &t.entries {
             w.strs(&e.key);
+            w.spans(&e.key_spans);
             w.site(e.site);
             w.value(&e.value);
         }
@@ -63,14 +65,20 @@ pub fn decode_document(bytes: &[u8]) -> Option<Document> {
     let mut tables = Vec::with_capacity(n.min(1024));
     for _ in 0..n {
         let path = r.strs()?;
+        let path_spans = r.spans()?;
         let array = r.bool()?;
         let site = r.site()?;
         let m = r.len()?;
         let mut entries = Vec::with_capacity(m.min(1024));
         for _ in 0..m {
-            entries.push(Entry { key: r.strs()?, site: r.site()?, value: r.value()? });
+            entries.push(Entry {
+                key: r.strs()?,
+                key_spans: r.spans()?,
+                site: r.site()?,
+                value: r.value()?,
+            });
         }
-        tables.push(Table { path, array, site, entries });
+        tables.push(Table { path, path_spans, array, site, entries });
     }
     // 余りがある場合は形式が合っていない。読めたところまでを使わない。
     if r.i != r.b.len() {
@@ -115,6 +123,12 @@ impl W {
     fn span(&mut self, s: Span) {
         self.u32(s.start);
         self.u32(s.end);
+    }
+    fn spans(&mut self, v: &[Span]) {
+        self.len(v.len());
+        for s in v {
+            self.span(*s);
+        }
     }
     fn site(&mut self, s: Site) {
         self.u64(s.file.0);
@@ -354,6 +368,14 @@ impl R<'_> {
     }
     fn span(&mut self) -> Option<Span> {
         Some(Span::new(self.u32()?, self.u32()?))
+    }
+    fn spans(&mut self) -> Option<Vec<Span>> {
+        let n = self.len()?;
+        let mut out = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            out.push(self.span()?);
+        }
+        Some(out)
     }
     fn site(&mut self) -> Option<Site> {
         Some(Site { file: FileId(self.u64()?), span: self.span()? })
