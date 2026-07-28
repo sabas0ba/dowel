@@ -109,7 +109,11 @@ deps    = [target("foo")]
 | `lib` / `bin` / `test` / `bench` | ターゲット |
 | `template` | 再利用単位（非再帰） |
 | `toolchain` | ツールチェーン記述 |
-| `runner` | 実行ラッパ（qemu 等） |
+| `runner` | 実行ラッパ（qemu 等）。`[runner.<triple>]` で名前はターゲットトリプル |
+
+`runner` だけは名前がターゲット名ではなくターゲットトリプルであり、
+プロパティの集合も他と別である（`command` と `args`）。成果物を生成せず、
+伝播もしないため、ターゲットと同じ語彙を与えると意味のない記述が型検査を通る。
 
 ### `public` / `private`
 

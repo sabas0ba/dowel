@@ -44,7 +44,7 @@ pub enum TableKind {
     Template,
     /// ツールチェーン記述。未実装
     Toolchain,
-    /// 実行ラッパ。未実装
+    /// 実行ラッパ（docs/30-devexp.md 1節）
     Runner,
 }
 
@@ -81,7 +81,7 @@ impl TableKind {
 
     /// 現時点で実装しているか。実装していない種別は診断で明示する。
     pub fn is_implemented(self) -> bool {
-        matches!(self, TableKind::Lib | TableKind::Bin | TableKind::Test)
+        matches!(self, TableKind::Lib | TableKind::Bin | TableKind::Test | TableKind::Runner)
     }
 
     pub const ALL: &'static [TableKind] = &[
@@ -148,6 +148,28 @@ pub fn root_props() -> Vec<PropDef> {
         merge: Merge::Append,
         doc: "sources to compile. does not propagate",
     }]
+}
+
+/// `[runner.<triple>]` に置けるプロパティ（docs/30-devexp.md 1節）。
+///
+/// ターゲットのプロパティとは別の集合である。ランナーは成果物を生成せず、
+/// 伝播もしない。同じ名前空間に混ぜると `sources` を持つランナーのような
+/// 意味のない記述が型検査を通ってしまう。
+pub fn runner_props() -> Vec<PropDef> {
+    vec![
+        PropDef {
+            name: "command",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "the program that wraps the artifact, such as `qemu-riscv64`",
+        },
+        PropDef {
+            name: "args",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments placed before the artifact path",
+        },
+    ]
 }
 
 /// `public` / `private` ブロックに置けるプロパティ。

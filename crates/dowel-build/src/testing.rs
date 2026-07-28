@@ -21,22 +21,106 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// 成果物を起動するコマンドを組み立てる。
+/// 成果物を起動するコマンドを組み立てる（docs/30-devexp.md 1節）。
 ///
-/// 既定は「成果物をそのまま起動する」。ターゲットトリプルごとの実行ラッパは
-/// 未実装であり、それを差し込むのがこの型の役目になる。
-pub struct Launcher;
+/// ターゲットトリプルごとに宣言された `[runner.<triple>]` を引き、
+/// 「何で包んで起動するか」を決める。宣言が無ければそのまま起動する。
+///
+/// ## ホストと違うトリプルでランナーが無い場合
+///
+/// そのまま起動すると `Exec format error` になる。これはテストの失敗として
+/// 報告され、利用者は自分のコードを疑う。原因は構成にあるため、
+/// 起動する前に構成の誤りとして診断を出す。
+pub struct Launcher {
+    /// ラッパのプログラム。ホスト実行なら `None`
+    program: Option<String>,
+    args: Vec<String>,
+}
 
 impl Launcher {
-    pub fn for_config(_cfg: &dowel_eval::Config) -> Launcher {
-        // 構成を受け取る形にしてあるのは、ランナーの選択がターゲットトリプルに
-        // 依るためである。現時点では選択肢が1つしかない。
-        Launcher
+    /// 構成に対応するランナーを引く。
+    ///
+    /// 診断を返すのは「クロスなのにランナーが無い」場合のみ。
+    pub fn for_config(
+        sess: &Session,
+        cfg: &dowel_eval::Config,
+    ) -> (Launcher, Vec<dowel_support::Diagnostic>) {
+        let mut diags = Vec::new();
+        let Some(runner) = sess.runners.get(&cfg.target) else {
+            if cfg.target != dowel_eval::config::default_triple() {
+                let declared: Vec<&str> = sess.runners.keys().map(|s| s.as_str()).collect();
+                let mut d = dowel_support::Diagnostic::error(
+                    "missing-runner",
+                    format!("no runner is declared for `{}`", cfg.target),
+                )
+                .note("the artifact is built for another machine and cannot be started here")
+                .note("declare one, for example `[runner.<triple>]` with `command = \"qemu-...\"`");
+                if !declared.is_empty() {
+                    d = d.note(format!("runners are declared for: {}", declared.join(", ")));
+                }
+                diags.push(d);
+            }
+            log_debug!("no runner for `{}`; starting artifacts directly", cfg.target);
+            return (Launcher { program: None, args: Vec::new() }, diags);
+        };
+
+        // ランナーの値も `match` や後置 `when` を持ちうる。具体化はここで行う。
+        let program = runner
+            .prop("command")
+            .and_then(|v| dowel_eval::specialize(v, cfg))
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
+        let args = runner
+            .prop("args")
+            .and_then(|v| dowel_eval::specialize(v, cfg))
+            .map(|v| string_list(&v))
+            .unwrap_or_default();
+
+        match program {
+            Some(program) => {
+                log_debug!("runner for `{}`: {program} {}", cfg.target, args.join(" "));
+                (Launcher { program: Some(program), args }, diags)
+            }
+            None => {
+                // `command` の存在と型は読み込み時に検証済み。ここへ来るのは
+                // 構成によって値が消えた場合（`when` が全て偽など）である。
+                diags.push(
+                    dowel_support::Diagnostic::error(
+                        "missing-runner",
+                        format!("runner `{}` has no `command` in this configuration", cfg.target),
+                    )
+                    .at(runner.site.file, runner.site.span, "declared here")
+                    .note("a `when` clause may have removed it"),
+                );
+                (Launcher { program: None, args: Vec::new() }, diags)
+            }
+        }
+    }
+
+    /// ラッパを持たない起動器。ランナーを要さない経路と試験のために使う。
+    pub fn direct() -> Launcher {
+        Launcher { program: None, args: Vec::new() }
     }
 
     /// `binary` を起動するためのプログラムと引数。
     pub fn command(&self, binary: &Path) -> (String, Vec<String>) {
-        (binary.display().to_string(), Vec::new())
+        match &self.program {
+            None => (binary.display().to_string(), Vec::new()),
+            Some(program) => {
+                let mut args = self.args.clone();
+                args.push(binary.display().to_string());
+                (program.clone(), args)
+            }
+        }
+    }
+}
+
+/// 具体化済みの `List<Str>` を取り出す。
+fn string_list(v: &dowel_eval::Value) -> Vec<String> {
+    match &v.data {
+        dowel_eval::Data::List(items) => {
+            items.iter().filter_map(|i| i.as_str().map(|s| s.to_string())).collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -449,10 +533,22 @@ mod tests {
     }
 
     #[test]
-    fn the_default_launcher_starts_the_artifact_directly() {
-        let l = Launcher::for_config(&dowel_eval::Config::host_default());
-        let (program, args) = l.command(Path::new("/tmp/unit"));
+    fn without_a_runner_the_artifact_is_started_directly() {
+        let (program, args) = Launcher::direct().command(Path::new("/tmp/unit"));
         assert_eq!(program, "/tmp/unit");
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn a_runner_wraps_the_artifact_and_keeps_its_arguments_in_front() {
+        // 成果物のパスは引数の**末尾**に来る。`qemu-riscv64 -L <sysroot> <binary>`
+        // のように、ラッパの引数が先で成果物が後という並びが求められる。
+        let l = Launcher {
+            program: Some("qemu-riscv64".into()),
+            args: vec!["-L".into(), "/usr/riscv64-linux-gnu".into()],
+        };
+        let (program, args) = l.command(Path::new("/tmp/unit"));
+        assert_eq!(program, "qemu-riscv64");
+        assert_eq!(args, vec!["-L", "/usr/riscv64-linux-gnu", "/tmp/unit"]);
     }
 }

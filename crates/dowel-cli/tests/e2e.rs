@@ -652,3 +652,96 @@ fn logs_expose_the_dependency_graph_and_action_counts() {
     let line = j.stderr.lines().find(|l| l.contains("\"level\"")).expect("no JSON log line found");
     assert!(line.starts_with('{') && line.ends_with('}'), "{line}");
 }
+
+// --- ランナー抽象（docs/30-devexp.md 1節）--------------------------------
+
+/// ホストのトリプル。`[runner.<triple>]` を実際に引かせるために要る。
+fn host_triple() -> String {
+    let p = Project::new("triple-probe");
+    p.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[lib.a]\nsources = glob(\"*.c\")\n");
+    p.write("a.c", "int a(void) { return 1; }\n");
+    p.run(".", &["build"]).success();
+    // ビルドディレクトリ名は `<triple>-<opt>`。
+    let dir = build_dir(&p.root, "debug");
+    let name = dir.file_name().expect("no build directory").to_string_lossy().to_string();
+    name.trim_end_matches("-debug").to_string()
+}
+
+/// ランナーを1つ宣言したプロジェクト。テスト本体は環境変数を見て合否を決める。
+///
+/// qemu を要求せずにランナーの経路を通すため、ラッパには `env` を使う。
+/// 「ラッパ経由で起動されたこと」がテスト自身から観測できる形にしてある。
+fn project_with_a_runner(name: &str, triple: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        &format!(
+            "[test.wrapped]\nsources = glob(\"*.c\")\n\n\
+             [runner.{triple}]\ncommand = \"env\"\nargs    = [\"DOWEL_RAN_VIA_RUNNER=1\"]\n"
+        ),
+    );
+    p.write(
+        "wrapped.c",
+        "#include <stdlib.h>\n\
+         int main(void) { return getenv(\"DOWEL_RAN_VIA_RUNNER\") ? 0 : 1; }\n",
+    );
+    p
+}
+
+#[test]
+fn a_declared_runner_wraps_the_test_binary() {
+    let triple = host_triple();
+    let p = project_with_a_runner("runner-wraps", &triple);
+
+    let r = p.run(".", &["test"]);
+    // ラッパ経由で起動されていなければ、テスト本体が終了状態 1 を返す。
+    r.success();
+    r.stderr_contains("test r:wrapped ... ok");
+}
+
+#[test]
+fn the_runner_command_shows_up_in_the_trace() {
+    let triple = host_triple();
+    let p = project_with_a_runner("runner-trace", &triple);
+    let r = p.run(".", &["test", "--log-level=trace"]);
+    r.success();
+    r.stderr_contains("declared runner for");
+    // 何で包んだかが読める。ここが読めないと、クロス実行の失敗を切り分けられない。
+    r.stderr_contains("runner for");
+    r.stderr_contains("env DOWEL_RAN_VIA_RUNNER=1");
+}
+
+#[test]
+fn without_a_runner_a_foreign_target_is_refused_before_launching() {
+    // 起動してからでは `Exec format error` になり、構成の誤りが
+    // テストの失敗として報告されてしまう。
+    let p = Project::new("runner-missing");
+    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    p.write("dowel.build", "[test.t]\nsources = glob(\"*.c\")\n");
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    // ビルドはホストのコンパイラで通るが、起動は拒まれる。
+    let r = p.run(".", &["test", "--target=riscv64gc-unknown-linux-gnu", "--no-run"]);
+    r.success();
+    let r = p.run(".", &["test", "--target=riscv64gc-unknown-linux-gnu"]);
+    r.failure();
+    r.stderr_contains("missing-runner");
+    r.stderr_contains("riscv64gc-unknown-linux-gnu");
+}
+
+#[test]
+fn a_runner_for_another_triple_is_not_used_for_the_host() {
+    let p = Project::new("runner-other-triple");
+    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[test.t]\nsources = glob(\"*.c\")\n\n\
+         [runner.riscv64gc-unknown-linux-gnu]\ncommand = \"definitely-not-a-program\"\n",
+    );
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    // ホスト構成では引かれないため、そのまま起動されて通る。
+    p.run(".", &["test"]).success();
+}
