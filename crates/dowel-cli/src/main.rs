@@ -59,6 +59,17 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         println!("{}", schema_dump());
         return Ok(ExitCode::SUCCESS);
     }
+    // ストアの操作もマニフェストを要さない。壊れたマニフェストの状態でも
+    // 掃除できる必要がある。
+    if opts.command == Command::CacheInfo {
+        return cache_info(&opts.directory);
+    }
+    if opts.command == Command::CacheGc {
+        let removed = dowel_store::Store::gc(&opts.directory)
+            .map_err(|e| format!("cannot clean the store: {e}"))?;
+        eprintln!("removed {removed} store(s) left by older formats");
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let mut sess = Session::load(&opts.directory);
     let cfg = configure(&sess, opts)?;
@@ -71,7 +82,9 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     sess.diagnostics.extend(idiags);
 
     match &opts.command {
-        Command::SchemaDump => unreachable!("handled above"),
+        Command::SchemaDump | Command::CacheInfo | Command::CacheGc => {
+            unreachable!("handled above")
+        }
 
         Command::Check => {
             // 併合の診断（衝突・ABI 不一致）は compile_env を求めて初めて出る。
@@ -189,9 +202,9 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 return Ok(ExitCode::SUCCESS);
             }
 
-            // ランナーの解決は起動の直前ではなく、ここで行って診断を出す。
-            // クロス構成でランナーが無いまま起動すると `Exec format error` に
-            // なり、構成の誤りがテストの失敗として報告されてしまう。
+            // ランナーの解決は起動の直前ではなく、この位置で行って診断を出す。
+            // クロス構成でランナーが無いまま起動すると `Exec format error` になり、
+            // 構成の誤りがテストの失敗として報告される。
             let (launcher, runner_diags) = testing::Launcher::for_config(&sess, &cfg);
             if !runner_diags.is_empty() {
                 sess.diagnostics.extend(runner_diags);
@@ -384,6 +397,18 @@ fn choose_executor(opts: &Options) -> Result<exec::Executor, String> {
             exec::Executor::Direct
         }),
     }
+}
+
+/// ストアの規模を報告する。stdout へ出すのは成果物であるため。
+fn cache_info(root: &std::path::Path) -> Result<ExitCode, String> {
+    let dir = dowel_store::Store::dir(root);
+    let store = dowel_store::Store::open(root);
+    let values = std::fs::metadata(dir.join("values")).map(|m| m.len()).unwrap_or(0);
+    println!("directory  {}", dir.display());
+    println!("format     {}", dowel_store::FORMAT);
+    println!("records    {}", store.len());
+    println!("values     {values} bytes");
+    Ok(ExitCode::SUCCESS)
 }
 
 /// 診断を出力する。誤りが1件でもあれば `true`。

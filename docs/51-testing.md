@@ -1,7 +1,7 @@
 # テストスイートの設計
 
 [50-development.md](50-development.md) は開発環境と規約を扱う。本文書は
-**何をどう検査するか**を扱う。
+検査の対象と方法を扱う。
 
 ## 方針
 
@@ -10,29 +10,29 @@
 
 | 層 | 問い | 場所 | 段階名 |
 |---|---|---|---|
-| 単体 | 部品は仕様どおりか | `crates/*/src/**` の `mod tests` | `unit-*` |
-| 頑健性 | 壊れた入力で落ちないか、不変量は保たれるか | `crates/dowel-syntax/tests/robustness.rs` | `syntax-robustness` |
-| 統合 | 層をまたいだ組み上げは正しいか | `crates/dowel-model/tests/` | `model-*` |
-| e2e | 生成したグラフを実行すると本当に動くか | `crates/dowel-cli/tests/e2e.rs` | `e2e` |
-| **シナリオ** | 時間をまたぐ操作列で正しく振る舞うか | `crates/dowel-cli/tests/scenario.rs` | `scenario` |
-| **実物** | 現実の形のプロジェクトが通るか | `tests/projects/` | `fixture` |
-| **診断と網羅** | 診断が利用者まで届くか。機能に対しテストがあるか | `crates/dowel-cli/tests/diagnostics.rs` | `diagnostics` |
-| 例 | 文書に載せた例が動くか | `crates/dowel-cli/tests/example.rs` | `example` |
+| 単体 | 各部品が仕様どおりか | `crates/*/src/**` の `mod tests` | `unit-*` |
+| 頑健性 | 壊れた入力に対する耐性と不変量の保持 | `crates/dowel-syntax/tests/robustness.rs` | `syntax-robustness` |
+| 統合 | 層をまたいだ組み上げの正しさ | `crates/dowel-model/tests/` | `model-*` |
+| e2e | 生成したグラフの実行結果 | `crates/dowel-cli/tests/e2e.rs` | `e2e` |
+| シナリオ | 時間をまたぐ操作列での振る舞い | `crates/dowel-cli/tests/scenario.rs` | `scenario` |
+| フィクスチャ | 実プロジェクトの形状でのビルドと実行 | `tests/projects/` | `fixture` |
+| 診断と網羅 | 診断が利用者に到達するか。機能に対する検査の有無 | `crates/dowel-cli/tests/diagnostics.rs` | `diagnostics` |
+| 例 | 文書に記載した例の動作 | `crates/dowel-cli/tests/example.rs` | `example` |
 | 文書 | リンクが解決するか。索引が完全か | `crates/dowel-cli/tests/docs.rs` | `docs` |
-| 計測 | 予算内か | `scripts/measure-startup.py` | `startup` |
+| 計測 | 予算の遵守 | `scripts/measure-startup.py` | `startup` |
 
 入口は1つ（`make verify`）。ローカルでも CI でも同じものを実行する。
 
-## 新しい3層をなぜ足したか
+## 後から追加した3層
 
-### 実物（`tests/projects/`）
+### フィクスチャ（`tests/projects/`）
 
 合成した2パッケージのプロジェクトは、意味論を個別に検査する用途には適するが、
 実際のプロジェクトが持つ依存形状を持たない。
 
 - 依存が3層以上あり、公開と非公開が混ざる
 - ダイヤモンド（同じライブラリへ2経路で到達する）
-- **どのパッケージも公開ヘッダを `include/` に置く**という慣習
+- どのパッケージも公開ヘッダを `include/` に置くという慣習
 
 3点目に起因して、この層を追加した最初の実行で欠陥を検出した。併合が相対パスのみで
 重複を判定していたため、依存が2段を超えると別パッケージのインクルードディレクトリが
@@ -99,7 +99,7 @@
 | 複数の層をまたぐ組み上げ | `crates/dowel-model/tests/` |
 | コンパイラに渡る引数、実際に動く成果物 | `e2e.rs` |
 | 編集してからの再実行、構成の切り替え、テストの再実行 | `scenario.rs` |
-| 現実の依存形状でしか出ない性質 | `tests/projects/` に新しいフィクスチャ |
+| 実プロジェクトの依存形状でのみ発現する性質 | `tests/projects/` に新しいフィクスチャ |
 | 新しい診断 | `diagnostics.rs` の事例表（足さないと網羅検査が落ちる） |
 | 新しい文書 | `docs/README.md` の一覧（未記載の場合、文書検査が失敗する） |
 

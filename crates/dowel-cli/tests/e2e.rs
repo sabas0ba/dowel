@@ -715,8 +715,8 @@ fn the_runner_command_shows_up_in_the_trace() {
 
 #[test]
 fn without_a_runner_a_foreign_target_is_refused_before_launching() {
-    // 起動してからでは `Exec format error` になり、構成の誤りが
-    // テストの失敗として報告されてしまう。
+    // 起動後では `Exec format error` になり、構成の誤りが
+    // テストの失敗として報告される。
     let p = Project::new("runner-missing");
     p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
     p.write("dowel.build", "[test.t]\nsources = glob(\"*.c\")\n");
@@ -825,4 +825,41 @@ fn transfer_and_remote_dir_must_be_declared_together() {
     r.failure();
     r.stderr_contains("incomplete-runner");
     r.stderr_contains("remote_dir");
+}
+
+// --- ストア（docs/20-architecture.md 5節）--------------------------------
+
+#[test]
+fn cache_info_reports_an_empty_store_before_anything_is_written() {
+    let p = two_package_project("cache-info");
+    let r = p.run("app", &["cache", "info"]);
+    r.success();
+    r.stdout_contains("records    0");
+    r.stdout_contains(".dowel/cache/v1");
+}
+
+#[test]
+fn cache_gc_removes_stores_left_by_older_formats() {
+    let p = two_package_project("cache-gc");
+    // 過去の形式が残っている状態を作る。
+    let old = p.path("app/.dowel/cache/v0");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("index"), b"stale").unwrap();
+
+    let r = p.run("app", &["cache", "gc"]);
+    r.success();
+    r.stderr_contains("removed 1 store");
+    assert!(!old.exists(), "the old store was not removed");
+
+    // 2度目は何も消さない。
+    p.run("app", &["cache", "gc"]).success().stderr_contains("removed 0 store");
+}
+
+#[test]
+fn cache_commands_work_without_a_readable_manifest() {
+    // 壊れたマニフェストの状態でも掃除できる必要がある。
+    let p = Project::new("cache-broken-manifest");
+    p.write("dowel.toml", "[package\n");
+    p.run(".", &["cache", "info"]).success();
+    p.run(".", &["cache", "gc"]).success();
 }

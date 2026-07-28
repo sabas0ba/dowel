@@ -19,6 +19,7 @@ dependencies = [
  "dowel-build",
  "dowel-eval",
  "dowel-model",
+ "dowel-store",
  "dowel-support",
  "dowel-syntax",
 ]
@@ -43,6 +44,13 @@ dependencies = [
 
 [[package]]
 name = "dowel-query"
+version = "0.0.1"
+dependencies = [
+ "dowel-support",
+]
+
+[[package]]
+name = "dowel-store"
 version = "0.0.1"
 dependencies = [
  "dowel-support",

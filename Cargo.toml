@@ -4,6 +4,7 @@ members = [
     "crates/dowel-support",
     "crates/dowel-syntax",
     "crates/dowel-query",
+    "crates/dowel-store",
     "crates/dowel-eval",
     "crates/dowel-model",
     "crates/dowel-build",
@@ -13,7 +14,7 @@ members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"  # std::fs::File::try_lock（ADR-0002 の単一書き手制限）
 license = "Apache-2.0"
 repository = "https://github.com/sabas0ba/dowel"
 
@@ -21,6 +22,7 @@ repository = "https://github.com/sabas0ba/dowel"
 dowel-support = { path = "crates/dowel-support" }
 dowel-syntax = { path = "crates/dowel-syntax" }
 dowel-query = { path = "crates/dowel-query" }
+dowel-store = { path = "crates/dowel-store" }
 dowel-eval = { path = "crates/dowel-eval" }
 dowel-model = { path = "crates/dowel-model" }
 dowel-build = { path = "crates/dowel-build" }

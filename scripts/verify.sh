@@ -93,6 +93,7 @@ run clippy gating -- cargo clippy --all-targets --all-features -- -D warnings
 run unit-support gating -- cargo test -p dowel-support --lib
 run unit-syntax gating -- cargo test -p dowel-syntax --lib
 run unit-query gating -- cargo test -p dowel-query --lib
+run unit-store gating -- cargo test -p dowel-store --lib
 run unit-eval gating -- cargo test -p dowel-eval --lib
 run unit-model gating -- cargo test -p dowel-model --lib
 run unit-build gating -- cargo test -p dowel-build --lib
@@ -115,7 +116,7 @@ run fixture gating -- cargo test -p dowel-cli --test fixture
 # 診断が利用者まで届くこと、および網羅の追跡。
 run diagnostics gating -- cargo test -p dowel-cli --test diagnostics
 run example gating -- cargo test -p dowel-cli --test example
-# 文書のリンクと索引。腐っても誰も落ちないため、落ちる機構を置く。
+# 文書のリンクと索引。検査しない限り不整合は検出されない。
 run docs gating -- cargo test -p dowel-cli --test docs
 
 # --- 計測 ---------------------------------------------------------------
