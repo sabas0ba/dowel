@@ -24,6 +24,8 @@ pub struct Package {
     pub features: BTreeMap<String, Vec<String>>,
     /// `[toolchain] c = "..."`
     pub toolchain_c: Option<String>,
+    /// その宣言が書かれた位置。実在しないツールチェーンを指す診断が参照する
+    pub toolchain_site: Option<Site>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +65,7 @@ pub fn from_document(
         deps: Vec::new(),
         features: BTreeMap::new(),
         toolchain_c: None,
+        toolchain_site: None,
     };
 
     match doc.table(&["package"]) {
@@ -96,7 +99,10 @@ pub fn from_document(
     if let Some(t) = doc.table(&["toolchain"]) {
         if let Some(e) = t.entry("c") {
             match e.value.as_str() {
-                Some(s) => pkg.toolchain_c = Some(s.to_string()),
+                Some(s) => {
+                    pkg.toolchain_c = Some(s.to_string());
+                    pkg.toolchain_site = Some(e.site);
+                }
                 None => type_err(diags, e.site, "toolchain.c", "a string"),
             }
         }
@@ -247,6 +253,7 @@ mod tests {
             deps: Vec::new(),
             features: map,
             toolchain_c: None,
+            toolchain_site: None,
         }
     }
 

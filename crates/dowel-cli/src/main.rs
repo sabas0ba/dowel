@@ -93,12 +93,16 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         }
 
         Command::Check => {
-            // 併合の診断（衝突・ABI 不一致）は compile_env を求めて初めて出る。
-            let mut diags = Vec::new();
-            for t in &sess.targets {
-                interface::compile_env(&sess, &g, &ifaces, t.id, &cfg, &mut diags);
-            }
-            sess.diagnostics.extend(diags);
+            // 計画まで走らせる。glob 展開・パス解決・ツールチェーンの実在は
+            // 評価では判定できず（docs/10-manifest.md 3節）、ここを外すと
+            // `check passed` と表示したものが `build` で落ちる。
+            // アクションは生成するだけで実行せず、何も書かない。
+            //
+            // 併合の診断（衝突・ABI 不一致）も compile_env を経由して出る。
+            // 対象は全ターゲット。到達しないライブラリも検査の対象である。
+            let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
+            let (_, pdiags) = build_plan::plan(&sess, &g, &ifaces, &cfg, &all);
+            sess.diagnostics.extend(pdiags);
             let failed = report(&sess, opts);
             if !failed {
                 eprintln!(

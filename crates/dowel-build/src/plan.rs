@@ -88,6 +88,23 @@ pub fn plan(
         }
     }
 
+    // 固定した対象が実在するかどうかは、記録されない入力を排除する前提である
+    // （docs/00-overview.md 2節）。確かめなければ `/bin/sh: not found` が
+    // ビルドの失敗として出るだけで、`[toolchain]` のどの行が原因かを示さない。
+    if !crate::exec::program_exists(&cfg.tc_c) {
+        let mut d = Diagnostic::error(
+            "missing-toolchain",
+            format!("cannot find the C compiler `{}`", cfg.tc_c),
+        );
+        match sess.root_package().and_then(|p| p.toolchain_site) {
+            Some(s) => d = d.at(s.file, s.span, "declared here"),
+            None => d = d.note("no `[toolchain]` is declared, so the default `cc` is used"),
+        }
+        diags.push(d.note(
+            "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
+        ));
+    }
+
     // 必要なターゲットの集合。要求されたものとその推移的依存。
     let mut needed: BTreeSet<TargetId> = BTreeSet::new();
     for &t in requested {
@@ -303,6 +320,44 @@ fn default_compile_flags(cfg: &Config) -> Vec<String> {
     }
 }
 
+/// C++ として扱われる拡張子。
+///
+/// `cc` は driver であり拡張子で言語を判別する。`.cpp` を渡すとコンパイルは
+/// 通るが、リンクも `cc` のまま行われるため C++ 標準ライブラリが付かない。
+const CXX_EXTENSIONS: &[&str] = &["cc", "cp", "cpp", "cxx", "c++", "CPP", "C"];
+
+fn is_cxx(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| CXX_EXTENSIONS.contains(&e))
+}
+
+/// C++ のソースを取り除き、1つの `sources` 要素につき1件だけ報告する。
+///
+/// 素通しにすると、利用者が手にするのはリンカの未定義参照だけになる。
+/// マニフェストのどこを直せばよいかを示すものが無い。
+fn drop_cxx(
+    paths: Vec<PathBuf>,
+    site: Option<dowel_eval::Site>,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<PathBuf> {
+    let (cxx, c): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| is_cxx(p));
+    if let Some(first) = cxx.first() {
+        let more =
+            if cxx.len() > 1 { format!(" and {} more", cxx.len() - 1) } else { String::new() };
+        let mut d = Diagnostic::error(
+            "unsupported-language",
+            format!("`{}`{more} is a C++ source", first.display()),
+        );
+        if let Some(s) = site {
+            d = d.at(s.file, s.span, "C++ cannot be built yet");
+        }
+        diags.push(
+            d.note("the C driver would compile it but link without the C++ runtime")
+                .note("C++ support is not implemented (docs/91-implementation-status.md)"),
+        );
+    }
+    c
+}
+
 fn collect_sources(
     sess: &Session,
     tid: TargetId,
@@ -329,6 +384,7 @@ fn collect_sources(
                     }
                     diags.push(d.note(format!("scanned {}", pkg_root.display())));
                 }
+                let hits = drop_cxx(hits, item.prov.nearest_site(), diags);
                 out.extend(hits.into_iter().map(|rel| pkg_root.join(rel)));
             }
             Data::Path(p) if p.base == PathBase::Package => {
@@ -352,7 +408,7 @@ fn collect_sources(
                             p.rel
                         )));
                     }
-                    Ok(_) => out.push(path),
+                    Ok(_) => out.extend(drop_cxx(vec![path], site, diags)),
                     Err(e) => {
                         let mut d = Diagnostic::error(
                             "unresolved-path",

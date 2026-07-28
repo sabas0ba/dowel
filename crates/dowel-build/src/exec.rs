@@ -60,6 +60,37 @@ impl std::fmt::Display for Failure {
 }
 
 /// `ninja` が使えるか。
+/// `PATH` に実行可能ファイルがあるか。
+///
+/// 起動して確かめない。`check` の中で呼ぶため、プロセスを起こす余裕がない
+/// （起動予算は 10ms、docs/20-architecture.md 5.4）。区切りを含む名前は
+/// パスとして扱う。
+pub fn program_exists(name: &str) -> bool {
+    let p = Path::new(name);
+    if p.components().count() > 1 {
+        return is_executable(p);
+    }
+    let Some(path) = std::env::var_os("PATH") else { return false };
+    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(name)))
+}
+
+fn is_executable(p: &Path) -> bool {
+    let Ok(m) = std::fs::metadata(p) else { return false };
+    if !m.is_file() {
+        return false;
+    }
+    // 実行ビットは Unix でのみ意味を持つ。他の環境では存在だけを見る。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        m.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 pub fn ninja_available() -> bool {
     Command::new("ninja")
         .arg("--version")
