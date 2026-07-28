@@ -245,7 +245,13 @@ pub fn render(d: &Diagnostic, sm: &SourceMap, color: bool) -> String {
         out.push_str(&format!("{pad}  = note: {n}\n"));
     }
     for s in &d.suggestions {
-        out.push_str(&format!("{pad}  = help: {} — `{}`\n", s.message, s.replacement));
+        // 「did you mean `includes`?」のように、説明が置換文字列を既に
+        // 引用している場合は繰り返さない。
+        if s.message.contains(&format!("`{}`", s.replacement)) {
+            out.push_str(&format!("{pad}  = help: {}\n", s.message));
+        } else {
+            out.push_str(&format!("{pad}  = help: {} — `{}`\n", s.message, s.replacement));
+        }
     }
     out
 }
@@ -385,7 +391,18 @@ mod tests {
         assert!(out.contains("error[unknown-property]"), "{out}");
         assert!(out.contains("--> libfoo/dowel.build:2:3"), "{out}");
         assert!(out.contains("^^^^^^^"), "{out}");
-        assert!(out.contains("= help:"), "{out}");
+        assert!(out.contains("= help: did you mean `includes`?"), "{out}");
+        // 説明が置換文字列を引用しているため、末尾に繰り返さない。
+        assert!(!out.contains("? — `includes`"), "{out}");
+    }
+
+    #[test]
+    fn a_suggestion_whose_message_omits_the_replacement_shows_it() {
+        let (sm, f) = sample();
+        let d = Diagnostic::error("unknown-property", "unknown property `include`")
+            .at(f, Span::new(19, 26), "here")
+            .suggest(f, Span::new(19, 26), "includes", "write the plural form");
+        assert!(render(&d, &sm, false).contains("= help: write the plural form — `includes`"));
     }
 
     #[test]
