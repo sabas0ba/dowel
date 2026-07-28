@@ -8,7 +8,7 @@ pub mod strict;
 pub mod value;
 
 pub use config::{Config, Opt};
-pub use eval::{eval, Document, Entry, Table};
+pub use eval::{eval, CfgRef, Document, Entry, Table};
 pub use schema::{Block, Merge, TableKind};
 pub use specialize::specialize;
-pub use value::{Data, Origin, PathBase, PathValue, Prov, Site, Type, Value};
+pub use value::{CfgKey, Data, Ns, Origin, PathBase, PathValue, Prov, Site, Type, Value};

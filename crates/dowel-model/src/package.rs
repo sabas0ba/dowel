@@ -22,6 +22,8 @@ pub struct Package {
     pub deps: Vec<Dependency>,
     /// 機能フラグ名 → それが有効化する他の機能
     pub features: BTreeMap<String, Vec<String>>,
+    /// `[features]` の見出し。宣言されていない名前を指す診断が参照する
+    pub features_site: Option<Site>,
     /// `[toolchain] c = "..."`
     pub toolchain_c: Option<String>,
 }
@@ -62,6 +64,7 @@ pub fn from_document(
         build_file: None,
         deps: Vec::new(),
         features: BTreeMap::new(),
+        features_site: None,
         toolchain_c: None,
     };
 
@@ -103,6 +106,7 @@ pub fn from_document(
     }
 
     if let Some(t) = doc.table(&["features"]) {
+        pkg.features_site = Some(t.site);
         for e in &t.entries {
             let name = e.key.join(".");
             let mut enables = Vec::new();
@@ -246,6 +250,7 @@ mod tests {
             build_file: None,
             deps: Vec::new(),
             features: map,
+            features_site: None,
             toolchain_c: None,
         }
     }
