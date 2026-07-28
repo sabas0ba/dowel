@@ -1,12 +1,12 @@
-//! 実物のプロジェクトを丸ごとビルドする層。
+//! 実プロジェクトの形状を持つフィクスチャをビルドする層。
 //!
-//! 合成した2パッケージのプロジェクトは、意味論を1つずつ切り出すには良いが、
-//! 現実のプロジェクトが持つ形（3層以上の依存、ダイヤモンド、公開と非公開の混在、
+//! 合成した2パッケージのプロジェクトは、意味論を個別に検査する用途には適するが、
+//! 実プロジェクトの依存形状（3層以上の依存、ダイヤモンド、公開と非公開の混在、
 //! 全パッケージが公開ヘッダを `include/` に置く慣習）を持たない。
-//! そこでしか現れない欠陥があるため、現物を `tests/projects/` に置いて丸ごと通す。
+//! この形状でのみ発現する欠陥があるため、実体を `tests/projects/` に置いて検査する。
 //!
-//! 主張の大半はフィクスチャ側の C に書いてある（`#error` と終了状態）。
-//! ここに書くのは、C から観測できないものだけである。
+//! 検査の大半はフィクスチャ側の C に記述する（`#error` と終了状態）。
+//! 本ファイルに記述するのは、C から観測できない項目のみである。
 //! 規約は `tests/projects/README.md`、設計は `docs/51-testing.md` にある。
 
 mod common;
@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 
 /// このファイルがテストを持っているフィクスチャ。
 ///
-/// `tests/projects/` に置いただけでテストが増えるようにはしていない。
-/// フィクスチャごとに「C から観測できない主張」が違うためである。
-/// 置き忘れは [`every_fixture_directory_has_a_test`] が検出する。
+/// `tests/projects/` への配置のみではテストは増えない。C から観測できない
+/// 検査項目がフィクスチャごとに異なるためである。
+/// 未記載は [`every_fixture_directory_has_a_test`] が検出する。
 const FIXTURES: &[&str] = &["layered"];
 
 fn stage(name: &str) -> Project {
@@ -41,8 +41,8 @@ fn packages(root: &Path) -> Vec<String> {
 
 /// 全パッケージについて `check` → `build` → `build`（何も走らないこと）→ `test`。
 ///
-/// 2回目のビルドを見るのは、無駄な再実行が「ただ遅いだけ」に見えて
-/// 実際には依存の取りこぼしの裏返しであることが多いためである。
+/// 2回目のビルドを検査するのは、不要な再実行が依存関係の記述漏れを
+/// 示している場合があるためである。
 fn check_build_and_test(p: &Project) {
     for pkg in packages(&p.root) {
         p.run(&pkg, &["check"]).success();
@@ -76,8 +76,8 @@ fn every_fixture_directory_has_a_test() {
 
 #[test]
 fn every_fixture_is_left_clean_in_the_repository() {
-    // ハーネスを通さずに実行した跡が現物に残っていないこと。
-    // 残っていると、次の実行が前回の結果を引き継いで通ってしまう。
+    // ハーネスを経由せずに実行した成果物が実体に残っていないこと。
+    // 残っている場合、次の実行が前回の結果を引き継いで成功する。
     for name in FIXTURES {
         let dir = repo_root().join("tests/projects").join(name);
         for pkg in packages(&dir) {
@@ -123,9 +123,9 @@ fn app_arguments(p: &Project) -> String {
 
 #[test]
 fn layered_resolves_transitive_includes_to_distinct_directories() {
-    // 5パッケージ全てが公開ヘッダを `include/` に置く。相対パスだけで
-    // 重複を判定すると1つを残して消える。C 側では「include できたか」しか
-    // 見えないため、実際に別々のディレクトリが並んでいることはここで確かめる。
+    // 5パッケージ全てが公開ヘッダを `include/` に置く。相対パスのみで
+    // 重複を判定すると1つを残して除去される。C 側では include の成否しか
+    // 観測できないため、探索パスの内容はここで検査する。
     let p = stage("layered");
     p.run("app", &["build"]).success();
     let args = app_arguments(&p);
@@ -138,8 +138,8 @@ fn layered_resolves_transitive_includes_to_distinct_directories() {
 
 #[test]
 fn layered_does_not_leak_a_private_dependency_into_dependents() {
-    // `util` は `net` の非公開依存。`app` の引数に現れてはならない。
-    // C 側は「定義が無いこと」を見るが、探索パスの漏れはここでしか見えない。
+    // `util` は `net` の非公開依存であり、`app` の引数に現れてはならない。
+    // C 側は定義の不在を検査するが、探索パスの漏れはここでのみ観測できる。
     let p = stage("layered");
     p.run("app", &["build"]).success();
     let args = app_arguments(&p);
@@ -153,7 +153,7 @@ fn layered_shows_the_diamond_in_the_graph() {
     let p = stage("layered");
     let r = p.run("app", &["graph", "--format=dot"]);
     r.success();
-    // base へ2経路。片方だけになっていたら形が崩れている。
+    // base へ2経路。片方のみの場合、依存形状が正しく構築されていない。
     r.stdout_contains("codec:codec");
     r.stdout_contains("net:net");
     for from in ["codec:codec", "net:net"] {
@@ -167,8 +167,8 @@ fn layered_shows_the_diamond_in_the_graph() {
 
 #[test]
 fn layered_explains_where_a_transitive_define_came_from() {
-    // `dowel why` が2段の伝播を辿れること。デバッグの主要な導線であり、
-    // 経路が1段しかない合成プロジェクトでは検査にならない。
+    // `dowel why` が2段の伝播を辿れること。経路が1段の合成プロジェクトでは
+    // この性質を検査できない。
     let p = stage("layered");
     let r = p.run("app", &["why", "app:app", "defines"]);
     r.success();

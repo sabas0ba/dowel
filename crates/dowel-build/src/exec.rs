@@ -87,8 +87,8 @@ pub fn run(plan: &Plan, executor: Executor, jobs: Option<usize>) -> Result<(), F
     if result.is_ok() {
         // 成功した実行の全アクションを記録する。実行器を跨いでも
         // 「今ある成果物はどのコマンドで作られたか」が一貫する。
-        // 途中で失敗した場合は書かない。作り直せたものまで最新扱いされると、
-        // 次の実行が古い成果物を残したまま通ってしまう。
+        // 途中で失敗した場合は書かない。再生成できたものまで最新扱いにすると、
+        // 次の実行が古い成果物を残したまま成功する。
         CommandLog::of(plan).save(&plan.build_dir);
     }
     result

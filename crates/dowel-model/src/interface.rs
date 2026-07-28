@@ -1,7 +1,7 @@
 //! インタフェース併合。
 //!
-//! ターゲットが**外へ供給する**プロパティ（`interface`）と、
-//! **自身のコンパイルに効く**プロパティ（`compile_env`）を区別する。
+//! ターゲットが外へ供給するプロパティ（`interface`）と、
+//! 自身のコンパイルに効くプロパティ（`compile_env`）を区別する。
 //!
 //! - `interface(T)` = T の `public` ＋ T の `public.deps` の `interface`
 //! - `compile_env(T)` = T の `public` ＋ T の `private` ＋ 全依存の `interface`

@@ -1,0 +1,11 @@
+[package]
+name = "dowel-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "On-disk store: append-only value log, fixed-length index, single-writer locking."
+
+[dependencies]
+dowel-support.workspace = true

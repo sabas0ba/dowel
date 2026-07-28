@@ -526,7 +526,7 @@ impl Session {
     /// ソースファイルの属するパッケージ。
     ///
     /// 伝播した `Path` の基準点を決めるために要る。値は「パッケージルートからの
-    /// 相対」で表されるが、どのパッケージかは値自身ではなく**宣言された位置**が持つ。
+    /// 相対」で表されるが、どのパッケージかは値自身ではなく宣言された位置が持つ。
     pub fn package_of_file(&self, file: FileId) -> Option<PackageId> {
         self.packages
             .iter()

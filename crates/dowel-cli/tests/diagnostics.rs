@@ -1,10 +1,10 @@
-//! 診断の網羅。**安定コードを持つ診断が、実際に CLI から出ること**を確かめる。
+//! 診断の網羅検査。安定コードを持つ診断が、実際に CLI から出ることを確かめる。
 //!
-//! 単体テストは「その関数が診断を作ること」を見るが、利用者に届くまでには
-//! 評価・検証・整形・出力の経路がある。途中で握り潰されても単体テストは通る。
-//! ここは `dowel` を実際に起動し、`--message-format=json` に現れることを見る。
+//! 単体テストは診断が生成されることを検査する。しかし利用者に到達するまでには
+//! 評価・検証・整形・出力の経路があり、途中で破棄されても単体テストは成功する。
+//! 本ファイルは `dowel` を実際に起動し、`--message-format=json` への出力を検査する。
 //!
-//! 併せて網羅も追う。診断を足したのに事例を足し忘れると、このファイルが落ちる。
+//! 併せて網羅も追跡する。診断を追加して事例を追加しなかった場合、検証が失敗する。
 //! 設計は [`docs/51-testing.md`](../../../docs/51-testing.md) にある。
 
 mod common;
@@ -520,7 +520,7 @@ fn the_uncovered_list_has_no_stale_entries() {
 
 #[test]
 fn the_case_table_only_names_codes_that_exist() {
-    // 綴りを間違えた事例は、何も検査していないのに通ってしまう。
+    // 綴りを誤った事例は、何も検査せずに成功する。
     let declared = declared_codes();
     for code in covered_codes() {
         assert!(declared.contains(code), "`{code}` is in the case table but no code emits it");

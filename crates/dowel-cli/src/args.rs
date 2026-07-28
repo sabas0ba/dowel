@@ -25,6 +25,8 @@ Commands:
                        Show how a value reached a target.
     graph              Dump the dependency graph or the action graph.
     schema dump        Print the schema and configuration vocabulary in machine-readable form.
+    cache info         Report the size and record count of the on-disk store.
+    cache gc           Remove stores left by older formats.
 
 Common options:
     -C, --directory <path>   Operate on the package in this directory (default: .)
@@ -78,6 +80,8 @@ pub enum Command {
     Why { target: String, property: String },
     Graph,
     SchemaDump,
+    CacheInfo,
+    CacheGc,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -156,7 +160,7 @@ pub enum Parsed {
     Version,
 }
 
-const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema"];
+const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema", "cache"];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -336,6 +340,14 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             }
             Command::Why { target: positional[0].clone(), property: positional[1].clone() }
         }
+        "cache" => match positional.first().map(|s| s.as_str()) {
+            Some("info") => Command::CacheInfo,
+            Some("gc") => Command::CacheGc,
+            Some(other) => {
+                return Err(format!("`cache` takes info or gc (got `{other}`)"));
+            }
+            None => return Err("write `cache info` or `cache gc`".into()),
+        },
         "schema" => match positional.first().map(|s| s.as_str()) {
             Some("dump") => Command::SchemaDump,
             Some(other) => {

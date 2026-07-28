@@ -385,7 +385,7 @@ fn collect_sources(
 
 /// 伝播してきた `Path` を絶対パスにする。
 ///
-/// 基準点は値ではなく**宣言された位置**が決める。`libfoo` の `dir("include")` は
+/// 基準点は値ではなく宣言された位置が決める。`libfoo` の `dir("include")` は
 /// `libfoo` のルートから解決されなければならない。
 fn collect_includes(
     sess: &Session,

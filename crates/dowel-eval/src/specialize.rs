@@ -1,7 +1,7 @@
 //! 構成による具体化。
 //!
 //! `Cfg<T>` を `T` に落とす段階である。マニフェスト評価とは分離されており、
-//! `--release` や `--target` の切り替えでは**この段階だけ**をやり直す
+//! `--release` や `--target` の切り替えではこの段階だけをやり直す
 //! （docs/10-manifest.md 3節）。
 
 use crate::config::{CfgValue, Config};

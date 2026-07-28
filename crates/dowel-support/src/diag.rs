@@ -313,8 +313,8 @@ pub fn render_json(d: &Diagnostic, sm: &SourceMap) -> String {
 /// 似た名前の候補を返す。未知のプロパティ名に対する修正提案に使う。
 /// 編集距離は Levenshtein。候補が多くないため素朴な実装で足りる。
 pub fn closest<'a>(needle: &str, candidates: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
-    // 閾値は文字数で決める。バイト長で決めると非 ASCII の語が
-    // 無関係な候補に一致してしまう。
+    // 閾値は文字数で決める。バイト長で決めると、非 ASCII の語が
+    // 無関係な候補に一致する。
     let max = (needle.chars().count() / 3).max(1) + 1;
     candidates
         .into_iter()
