@@ -92,6 +92,7 @@ run clippy gating -- cargo clippy --all-targets --all-features -- -D warnings
 # クレートごとに分けるのは、失敗が「どの層のものか」を記録に残すため。
 run unit-support gating -- cargo test -p dowel-support --lib
 run unit-syntax gating -- cargo test -p dowel-syntax --lib
+run unit-query gating -- cargo test -p dowel-query --lib
 run unit-eval gating -- cargo test -p dowel-eval --lib
 run unit-model gating -- cargo test -p dowel-model --lib
 run unit-build gating -- cargo test -p dowel-build --lib
@@ -102,9 +103,17 @@ run unit-cli gating -- cargo test -p dowel-cli --bins
 run syntax-robustness gating -- cargo test -p dowel-syntax --test robustness
 # マニフェスト読み込みからインタフェース併合まで。
 run model-integration gating -- cargo test -p dowel-model --test model
+# 読み直しの増分性。何を計算しなかったかを数え上げで検査する。
+run model-incremental gating -- cargo test -p dowel-model --test incremental
 
 # --- e2e（実際に C をコンパイルして実行する）---------------------------
 run e2e gating -- cargo test -p dowel-cli --test e2e
+# 時間をまたぐ操作列（編集して再ビルド、構成の切り替え、テストの再実行）。
+run scenario gating -- cargo test -p dowel-cli --test scenario
+# 現実の形をしたプロジェクトを丸ごと通す。
+run fixture gating -- cargo test -p dowel-cli --test fixture
+# 診断が利用者まで届くこと、および網羅の追跡。
+run diagnostics gating -- cargo test -p dowel-cli --test diagnostics
 run example gating -- cargo test -p dowel-cli --test example
 
 # --- 計測 ---------------------------------------------------------------

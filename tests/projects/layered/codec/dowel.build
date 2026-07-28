@@ -1,0 +1,20 @@
+# 中間層。`public.deps` なので base の公開部分は codec を使う側まで届く。
+# `private.defines` は自分のコンパイルにのみ効き、依存元へは届かない。
+
+[lib.codec]
+sources = glob("src/**.c")
+
+[lib.codec.public]
+deps     = [dep("base")]
+includes = [dir("include")]
+defines  = { CODEC_API = 1 }
+
+[lib.codec.private]
+defines = { CODEC_INTERNAL = 1 }
+flags   = ["-Wall", "-Wextra", "-Werror"]
+
+[test.codec_test]
+sources = glob("tests/*.c")
+
+[test.codec_test.private]
+deps = [target("codec")]

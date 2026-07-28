@@ -36,8 +36,16 @@ name = "dowel-model"
 version = "0.0.1"
 dependencies = [
  "dowel-eval",
+ "dowel-query",
  "dowel-support",
  "dowel-syntax",
+]
+
+[[package]]
+name = "dowel-query"
+version = "0.0.1"
+dependencies = [
+ "dowel-support",
 ]
 
 [[package]]

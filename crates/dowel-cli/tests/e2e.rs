@@ -633,7 +633,16 @@ fn logs_expose_the_dependency_graph_and_action_counts() {
     r.stderr_contains("  include "); // 解決済みのインクルード探索パス
     r.stderr_contains("  define  "); // 解決済みの定義
     r.stderr_contains("  action["); // 各アクションの完全なコマンド列
-                                    // 段階ごとの所要時間が出る。
+
+    // 増分エンジンの観測。鍵は `FileId` でしか語れないため、
+    // ファイル番号とパスの対応も同じログに出ていること。
+    r.stderr_contains("parsing file ");
+    r.stderr_contains("evaluating file ");
+    r.stderr_contains("recomputed, value changed");
+    r.stderr_contains(" is "); // `file 0 is <path>`
+    r.stderr_contains("queries: "); // 計算・再利用・検証の内訳
+
+    // 段階ごとの所要時間が出る。
     r.stderr_contains("← plan");
     r.stderr_contains("← execute");
 

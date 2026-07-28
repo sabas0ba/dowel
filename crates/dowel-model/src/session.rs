@@ -1,20 +1,23 @@
 //! マニフェストの読み込みとターゲットの構築。
 //!
-//! `Session` は「1回の CLI 実行が触れた全て」を保持する。増分クエリエンジンと
-//! 永続化ストア（docs/20-architecture.md 5節）を差し込む先はここであり、
-//! 現時点では素朴に全部を読む実装が入っている。
-//! 外から見た形（`load` して `targets` と `graph` を得る）を変えずに
-//! 内側を置き換えられるよう、読み込みの入口をこの1箇所に閉じてある。
+//! `Session` は「1回の CLI 実行が触れた全て」を保持する。読み込みの経路は
+//! 増分クエリエンジン（[`crate::query`]）を通しており、
+//! [`Session::reload`] は中身の変わらなかったファイルを解析し直さない。
+//! 永続化ストア（docs/20-architecture.md 5節）を差し込む先も同じ場所であり、
+//! `Db` のメモ表がその差し替え対象になる。
 
 use crate::package::{self, DepKind, Package};
+use crate::query::{self, Key};
 use crate::target::{label, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Document, Site, Value};
+use dowel_query::{Db, Stats};
 use dowel_support::diag::closest;
 use dowel_support::{log, Diagnostic, FileId, SourceMap, Span};
 use dowel_support::{log_debug, log_trace};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const MANIFEST_NAME: &str = "dowel.toml";
 pub const BUILD_NAME: &str = "dowel.build";
@@ -26,33 +29,70 @@ pub struct Session {
     pub targets: Vec<Target>,
     /// 正規化したパッケージルート → 識別子。同じパッケージを2度読まないため。
     by_root: BTreeMap<PathBuf, PackageId>,
+    /// 最初に読み込んだ根。`reload` の起点。
+    root: PathBuf,
+    /// 解析と評価のメモ表。`reload` を跨いで生き残る
+    db: Db<Key>,
 }
 
 impl Session {
     /// `root` にあるパッケージと、そこから到達する `path` 依存を読み込む。
     pub fn load(root: &Path) -> Session {
-        let _phase = log::Phase::start("load");
         let mut sess = Session {
             sm: SourceMap::new(),
             diagnostics: Vec::new(),
             packages: Vec::new(),
             targets: Vec::new(),
             by_root: BTreeMap::new(),
+            root: canonical(root),
+            db: Db::new(),
         };
-        let mut queue = vec![canonical(root)];
+        sess.walk();
+        sess
+    }
+
+    /// ディスクを読み直してモデルを組み直す。
+    ///
+    /// 中身が変わっていないファイルは字句解析・構文解析・評価をやり直さない。
+    /// 監視モードと言語サーバの入口であり、増分がどれだけ効いたかは
+    /// [`Session::query_stats`] で観測できる。
+    pub fn reload(&mut self) {
+        self.diagnostics.clear();
+        self.packages.clear();
+        self.targets.clear();
+        self.by_root.clear();
+        self.db.reset_stats();
+        self.walk();
+    }
+
+    /// 解析と評価の再利用状況。`hit` が「メモをそのまま使った件数」。
+    pub fn query_stats(&self) -> Stats {
+        self.db.stats()
+    }
+
+    fn walk(&mut self) {
+        let _phase = log::Phase::start("load");
+        let mut queue = vec![self.root.clone()];
         while let Some(dir) = queue.pop() {
-            if sess.by_root.contains_key(&dir) {
+            if self.by_root.contains_key(&dir) {
                 continue;
             }
-            let Some(id) = sess.load_package(&dir) else { continue };
-            for dep in sess.packages[id.0].deps.clone() {
+            let Some(id) = self.load_package(&dir) else { continue };
+            for dep in self.packages[id.0].deps.clone() {
                 if let DepKind::Path(rel) = &dep.kind {
                     queue.push(canonical(&dir.join(rel)));
                 }
             }
         }
-        log_debug!("loaded {} packages and {} targets", sess.packages.len(), sess.targets.len());
-        sess
+        log_debug!("loaded {} packages and {} targets", self.packages.len(), self.targets.len());
+        let s = self.db.stats();
+        log_debug!(
+            "queries: {} computed, {} reused, {} verified, {} skipped by durability",
+            s.computed,
+            s.hit,
+            s.verified,
+            s.skipped
+        );
     }
 
     fn load_package(&mut self, dir: &Path) -> Option<PackageId> {
@@ -72,10 +112,10 @@ impl Session {
         };
 
         let id = PackageId(self.packages.len());
-        let doc = self.parse_and_eval(manifest_file, true);
+        let manifest = self.parse_and_eval(manifest_file, true);
         let mut diags = Vec::new();
         let mut pkg =
-            package::from_document(id, &doc, dir.to_path_buf(), manifest_file, &mut diags);
+            package::from_document(id, &manifest.doc, dir.to_path_buf(), manifest_file, &mut diags);
         self.diagnostics.append(&mut diags);
 
         let build_path = dir.join(BUILD_NAME);
@@ -83,10 +123,10 @@ impl Session {
             match self.sm.load(&build_path) {
                 Ok(f) => {
                     pkg.build_file = Some(f);
-                    let doc = self.parse_and_eval(f, false);
+                    let build = self.parse_and_eval(f, false);
                     self.by_root.insert(dir.to_path_buf(), id);
                     self.packages.push(pkg);
-                    self.build_targets(id, &doc);
+                    self.build_targets(id, &build.doc);
                     log_debug!(
                         "loaded package `{}` from {}",
                         self.packages[id.0].name,
@@ -111,27 +151,26 @@ impl Session {
         Some(id)
     }
 
-    fn parse_and_eval(&mut self, file: FileId, strict: bool) -> Document {
+    /// ファイルを解析して評価する。結果はクエリエンジンのメモに残り、
+    /// `reload` で中身が変わっていなければそのまま再利用される。
+    fn parse_and_eval(&mut self, file: FileId, strict: bool) -> Arc<query::Evaluated> {
         let src = self.sm.text(file).to_string();
         log_debug!(
             "reading {} ({} bytes, strict={strict})",
             self.sm.path(file).display(),
             src.len()
         );
-        let parsed = dowel_syntax::parse(&src, file);
-        self.diagnostics.extend(parsed.diagnostics);
-        if strict {
-            self.diagnostics.extend(dowel_eval::strict::check(&parsed.root, file));
-        }
-        let (doc, diags) = dowel_eval::eval(&parsed.root, &src, file);
-        self.diagnostics.extend(diags);
-        for table in &doc.tables {
-            log_trace!("  table [{}] with {} entries", table.path.join("."), table.entries.len());
-            for e in &table.entries {
-                log_trace!("    {} = {}", e.key.join("."), e.value.display());
-            }
-        }
-        doc
+        // クエリのログは鍵（`FileId`）でしか語れない。突き合わせられるよう
+        // ここで対応を出しておく。
+        log_trace!("  file {} is {}", file.0, self.sm.path(file).display());
+        query::set_text(&self.db, file, &src);
+        // `Session` は打ち切りを公開していないため、この `Db` が
+        // 打ち切られることはない。言語サーバを載せる際は、
+        // ここが `Result` の伝播点になる。
+        let out = query::evaluated(&self.db, file, strict)
+            .expect("the session never cancels its own queries");
+        self.diagnostics.extend(out.diagnostics.iter().cloned());
+        out
     }
 
     /// `dowel.build` の各テーブルをターゲットへ組み上げる。

@@ -96,6 +96,46 @@ impl Outcome {
     }
 }
 
+/// 1本のテストを起動するのに必要な全て。
+///
+/// `Session` から切り離してあるのは、並列実行の作業スレッドが
+/// モデルを触らないようにするためである。`Session` は増分エンジンの
+/// メモ表を内側に持ち、スレッド間で共有できない。
+/// 「何を起動するか」の決定は逐次に済ませ、スレッドには起動だけをさせる。
+#[derive(Clone, Debug)]
+struct Job {
+    target: TargetId,
+    label: String,
+    /// 計画に成果物が無い場合は `None`
+    binary: Option<PathBuf>,
+    cwd: PathBuf,
+    program: String,
+    args: Vec<String>,
+}
+
+fn plan_jobs(sess: &Session, plan: &Plan, launcher: &Launcher, targets: &[TargetId]) -> Vec<Job> {
+    targets
+        .iter()
+        .map(|&tid| {
+            let binary = plan.artifacts.get(&tid).cloned();
+            let (program, args) = match &binary {
+                Some(b) => launcher.command(b),
+                None => (String::new(), Vec::new()),
+            };
+            Job {
+                target: tid,
+                label: sess.label(tid),
+                binary,
+                // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
+                // マニフェストに書いたものと同じ基準で解決されるようにする。
+                cwd: sess.package(sess.target(tid).package).root.clone(),
+                program,
+                args,
+            }
+        })
+        .collect()
+}
+
 /// 与えられたテストターゲットを起動する。
 ///
 /// 戻り値は要求順。`fail_fast` で打ち切った場合、起動しなかったものは含まれない。
@@ -110,11 +150,20 @@ pub fn run(
     let _phase = dowel_support::log::Phase::start("test");
     let jobs = opts.jobs.max(1).min(targets.len().max(1));
     log_debug!("running {} tests with {jobs} job(s)", targets.len());
+    let planned = plan_jobs(sess, plan, launcher, targets);
+    for j in &planned {
+        log_trace!(
+            "  planned {}: {} (cwd {})",
+            j.label,
+            if j.program.is_empty() { "<no artifact>" } else { &j.program },
+            j.cwd.display()
+        );
+    }
 
     if jobs == 1 {
         let mut out = Vec::new();
-        for &tid in targets {
-            let outcome = run_one(sess, plan, launcher, tid, opts.capture);
+        for job in &planned {
+            let outcome = run_one(job, opts.capture);
             let failed = !outcome.passed;
             out.push(outcome);
             if failed && opts.fail_fast {
@@ -136,8 +185,8 @@ pub fn run(
                     break;
                 }
                 let i = next.fetch_add(1, Ordering::Relaxed);
-                let Some(&tid) = targets.get(i) else { break };
-                let outcome = run_one(sess, plan, launcher, tid, opts.capture);
+                let Some(job) = planned.get(i) else { break };
+                let outcome = run_one(job, opts.capture);
                 if !outcome.passed {
                     stop.store(true, Ordering::Relaxed);
                 }
@@ -150,17 +199,12 @@ pub fn run(
     collected.into_iter().map(|(_, o)| o).collect()
 }
 
-fn run_one(
-    sess: &Session,
-    plan: &Plan,
-    launcher: &Launcher,
-    tid: TargetId,
-    capture: bool,
-) -> Outcome {
-    let label = sess.label(tid);
-    let Some(binary) = plan.artifacts.get(&tid).cloned() else {
+fn run_one(job: &Job, capture: bool) -> Outcome {
+    let Job { target: tid, label, binary, cwd, program, args } = job;
+    let (label, cwd) = (label.clone(), cwd.clone());
+    let Some(binary) = binary.clone() else {
         return Outcome {
-            target: tid,
+            target: *tid,
             label,
             binary: PathBuf::new(),
             status: None,
@@ -171,16 +215,13 @@ fn run_one(
             launch_error: Some("no artifact was planned for this target".into()),
         };
     };
+    let tid = *tid;
 
-    // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
-    // マニフェストに書いたものと同じ基準で解決されるようにする。
-    let cwd = sess.package(sess.target(tid).package).root.clone();
-    let (program, args) = launcher.command(&binary);
     log_debug!("running {label}");
-    log_trace!("  {} (cwd {})", program, cwd.display());
+    log_trace!("  {program} (cwd {})", cwd.display());
 
-    let mut cmd = Command::new(&program);
-    cmd.args(&args).current_dir(&cwd);
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(&cwd);
     let start = Instant::now();
     let result = if capture {
         cmd.output().map(|o| {

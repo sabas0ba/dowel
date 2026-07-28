@@ -98,6 +98,31 @@ impl std::fmt::Display for Run {
     }
 }
 
+/// ディレクトリを再帰的に複製する。過去のビルド結果は持ち込まない。
+///
+/// リポジトリに置いた現物（`examples/`、`tests/projects/`）は汚さず、
+/// `target/` 配下へ写してからビルドする。
+pub fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("cannot create the destination directory");
+    for entry in std::fs::read_dir(from).expect("cannot read the source directory").flatten() {
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if entry.file_name() == ".dowel" {
+                continue;
+            }
+            copy_dir(&src, &dst);
+        } else {
+            std::fs::copy(&src, &dst).expect("cannot copy the file");
+        }
+    }
+}
+
+/// リポジトリのルート。現物を写す元を指すために使う。
+pub fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").to_path_buf()
+}
+
 /// 成果物を実行して標準出力を返す。
 pub fn run_artifact(path: &Path) -> String {
     let out = Command::new(path)

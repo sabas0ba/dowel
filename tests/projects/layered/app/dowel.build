@@ -1,0 +1,19 @@
+# 最上層。codec と net に依存し、base はその双方から推移的に届く。
+
+[bin.app]
+sources = glob("src/*.c")
+
+[bin.app.private]
+deps  = [dep("codec"), dep("net")]
+flags = match cfg.opt {
+    debug   => ["-DAPP_OPT=0"],
+    release => ["-DAPP_OPT=1"],
+}
+
+# 実行ファイルそのものは依存にできないため、テストは同じ依存を並べて
+# 「配線が期待どおりか」を確かめる。実プロジェクトでも同じ形になる。
+[test.wiring_test]
+sources = glob("tests/*.c")
+
+[test.wiring_test.private]
+deps = [dep("codec"), dep("net")]

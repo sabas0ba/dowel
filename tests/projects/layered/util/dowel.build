@@ -1,0 +1,18 @@
+# 最下層その2。`net` が **非公開で** 依存する。
+# したがって `app` からは util の公開ヘッダも公開定義も見えてはならない。
+
+[lib.util]
+sources = glob("src/**.c")
+
+[lib.util.public]
+includes = [dir("include")]
+defines  = { UTIL_API = 1 }
+
+[lib.util.private]
+flags = ["-Wall", "-Wextra", "-Werror"]
+
+[test.util_test]
+sources = glob("tests/*.c")
+
+[test.util_test.private]
+deps = [target("util")]

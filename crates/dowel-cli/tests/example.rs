@@ -8,30 +8,11 @@
 
 mod common;
 
-use common::{build_dir, run_artifact, Project};
-use std::path::Path;
-
-fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).expect("cannot create the destination directory");
-    for entry in std::fs::read_dir(from).expect("cannot read the source directory").flatten() {
-        let src = entry.path();
-        let dst = to.join(entry.file_name());
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            // 過去のビルド結果は持ち込まない。
-            if entry.file_name() == ".dowel" {
-                continue;
-            }
-            copy_dir(&src, &dst);
-        } else {
-            std::fs::copy(&src, &dst).expect("cannot copy the file");
-        }
-    }
-}
+use common::{build_dir, copy_dir, repo_root, run_artifact, Project};
 
 fn staged_example() -> Project {
     let p = Project::new("example-hello");
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello");
-    copy_dir(&source, &p.root);
+    copy_dir(&repo_root().join("examples/hello"), &p.root);
     p
 }
 

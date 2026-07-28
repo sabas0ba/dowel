@@ -1,6 +1,7 @@
 //! 読み込んだソースファイルの集合と、バイトオフセット→行桁の変換。
 
 use crate::span::Span;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// `SourceMap` 内でのファイルの識別子。
@@ -36,6 +37,8 @@ fn line_starts(text: &str) -> Vec<u32> {
 #[derive(Default)]
 pub struct SourceMap {
     files: Vec<SourceFile>,
+    /// パス → 識別子。同じファイルを読み直しても識別子を変えないため。
+    by_path: BTreeMap<PathBuf, FileId>,
 }
 
 impl SourceMap {
@@ -45,15 +48,30 @@ impl SourceMap {
 
     pub fn add(&mut self, path: impl Into<PathBuf>, text: String) -> FileId {
         let id = FileId(self.files.len() as u32);
+        let path = path.into();
         let line_starts = line_starts(&text);
-        self.files.push(SourceFile { path: path.into(), text, line_starts });
+        self.by_path.insert(path.clone(), id);
+        self.files.push(SourceFile { path, text, line_starts });
         id
     }
 
+    /// ディスクから読む。
+    ///
+    /// 既に読んだパスなら中身を差し替え、**同じ識別子を返す**。スパンは
+    /// `FileId` と対で意味を持つため、読み直しで識別子が変わると、
+    /// 増分の再利用で残った値の来歴が別のファイルを指すことになる。
     pub fn load(&mut self, path: impl AsRef<Path>) -> std::io::Result<FileId> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path)?;
-        Ok(self.add(path, text))
+        match self.by_path.get(path).copied() {
+            Some(id) => {
+                let f = &mut self.files[id.0 as usize];
+                f.line_starts = line_starts(&text);
+                f.text = text;
+                Ok(id)
+            }
+            None => Ok(self.add(path, text)),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -120,6 +138,27 @@ mod tests {
         assert_eq!(sm.line_col(f, 4), LineCol { line: 2, col: 1 });
         // 「あ」は 3 バイト。桁は文字数で数えるため 2 になる。
         assert_eq!(sm.line_col(f, 7), LineCol { line: 2, col: 2 });
+    }
+
+    #[test]
+    fn reloading_a_path_keeps_its_identifier() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sourcemap-reload.build");
+        std::fs::write(&path, "one\n").unwrap();
+
+        let mut sm = SourceMap::new();
+        let first = sm.load(&path).unwrap();
+        assert_eq!(sm.text(first), "one\n");
+
+        // 読み直しても識別子は同じ。中身と行頭表は差し替わる。
+        std::fs::write(&path, "one\ntwo\n").unwrap();
+        let again = sm.load(&path).unwrap();
+        assert_eq!(again, first);
+        assert_eq!(sm.len(), 1);
+        assert_eq!(sm.text(first), "one\ntwo\n");
+        assert_eq!(sm.line_text(first, 2), "two");
     }
 
     #[test]
