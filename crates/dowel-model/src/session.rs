@@ -116,15 +116,17 @@ impl Session {
 
     fn walk(&mut self) {
         let _phase = log::Phase::start("load");
-        let mut queue = vec![self.root.clone()];
-        while let Some(dir) = queue.pop() {
+        // 2つ目の要素は、その位置を読ませた宣言の位置。根には無い。
+        // 読めなかった場合の診断がこれを指す。
+        let mut queue: Vec<(PathBuf, Option<Site>)> = vec![(self.root.clone(), None)];
+        while let Some((dir, from)) = queue.pop() {
             if self.by_root.contains_key(&dir) {
                 continue;
             }
-            let Some(id) = self.load_package(&dir) else { continue };
+            let Some(id) = self.load_package(&dir, from) else { continue };
             for dep in self.packages[id.0].deps.clone() {
                 if let DepKind::Path(rel) = &dep.kind {
-                    queue.push(canonical(&dir.join(rel)));
+                    queue.push((canonical(&dir.join(rel)), Some(dep.source_site)));
                 }
             }
         }
@@ -139,18 +141,21 @@ impl Session {
         );
     }
 
-    fn load_package(&mut self, dir: &Path) -> Option<PackageId> {
+    fn load_package(&mut self, dir: &Path, from: Option<Site>) -> Option<PackageId> {
         let manifest_path = dir.join(MANIFEST_NAME);
         let manifest_file = match self.sm.load(&manifest_path) {
             Ok(f) => f,
             Err(e) => {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        "missing-manifest",
-                        format!("cannot read {}: {e}", manifest_path.display()),
-                    )
-                    .note("a package root requires a `dowel.toml`"),
-                );
+                let mut d = Diagnostic::error(
+                    "missing-manifest",
+                    format!("cannot read {}: {e}", manifest_path.display()),
+                )
+                .note("a package root requires a `dowel.toml`");
+                // 根には宣言が無い。依存として辿り着いた場合だけ位置を持つ。
+                if let Some(s) = from {
+                    d = d.at(s.file, s.span, "this dependency does not name a package root");
+                }
+                self.diagnostics.push(d);
                 return None;
             }
         };
@@ -161,6 +166,14 @@ impl Session {
         let mut pkg =
             package::from_document(id, &manifest.doc, dir.to_path_buf(), manifest_file, &mut diags);
         self.diagnostics.append(&mut diags);
+
+        // 読めなかった `dowel.build` を指す位置は、それを要求している
+        // `[package]` の宣言である。ファイル自体が無いためそこは指せない。
+        let package_site = manifest
+            .doc
+            .table(&["package"])
+            .map(|t| t.site)
+            .unwrap_or(Site::new(manifest_file, Span::EMPTY));
 
         let build_path = dir.join(BUILD_NAME);
         if build_path.exists() {
@@ -178,14 +191,18 @@ impl Session {
                     );
                     return Some(id);
                 }
-                Err(e) => self.diagnostics.push(Diagnostic::error(
-                    "unreadable-build",
-                    format!("cannot read {}: {e}", build_path.display()),
-                )),
+                Err(e) => self.diagnostics.push(
+                    Diagnostic::error(
+                        "unreadable-build",
+                        format!("cannot read {}: {e}", build_path.display()),
+                    )
+                    .at(package_site.file, package_site.span, "declared here"),
+                ),
             }
         } else {
             self.diagnostics.push(
                 Diagnostic::error("missing-build", format!("missing {}", build_path.display()))
+                    .at(package_site.file, package_site.span, "this package has no targets")
                     .note("target definitions belong in `dowel.build` (docs/10-manifest.md)"),
             );
         }
