@@ -4,6 +4,7 @@ mod common;
 
 use common::Scratch;
 use dowel_eval::Config;
+use dowel_model::session::Features;
 use dowel_model::{graph, interface, Session};
 
 /// 依存するライブラリと、それを使う実行ファイルの2パッケージ構成。
@@ -256,17 +257,24 @@ zlib = ["libz"]
         "dowel.build",
         "[bin.a]\nsources = []\n\n[bin.a.private]\ndeps = [dep(\"libz\") when feature.zlib]\n",
     );
-    let sess = Session::load(&s.root);
-    assert!(!sess.has_errors(), "{:?}", codes(&sess));
-
+    // 機能フラグは読み込みの前に決まる。有効でない任意の依存は読み込まない
+    // ため、読み込んだ後に構成だけを差し替えることはできない。
+    let off = Session::load(&s.root);
+    assert!(!off.has_errors(), "{:?}", codes(&off));
     let mut cfg = Config::host_default();
-    let a = sess.find_target("a").unwrap();
-
-    let (g, _) = graph::build(&sess, &cfg);
+    cfg.features = off.active_features().clone();
+    let a = off.find_target("a").unwrap();
+    let (g, _) = graph::build(&off, &cfg);
     assert_eq!(g.deps_of(a).len(), 0, "no edge appears while the feature is off");
+    assert_eq!(off.packages.len(), 1, "the optional package is not read while the feature is off");
 
-    cfg.features.insert("zlib".into());
-    let (g, _) = graph::build(&sess, &cfg);
+    let on =
+        Session::load_with(&s.root, Features { requested: vec!["zlib".into()], default: true });
+    assert!(!on.has_errors(), "{:?}", codes(&on));
+    let mut cfg = Config::host_default();
+    cfg.features = on.active_features().clone();
+    let a = on.find_target("a").unwrap();
+    let (g, _) = graph::build(&on, &cfg);
     assert_eq!(g.deps_of(a).len(), 1, "the edge appears once the feature is on");
 }
 

@@ -97,6 +97,24 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
                             Err(Unresolved::NotDeclared) => {
                                 diags.push(undeclared_dep(sess, target.package, name, &item))
                             }
+                            Err(Unresolved::Inactive) => diags.push(
+                                Diagnostic::error(
+                                    "inactive-dependency",
+                                    format!("`{name}` is optional and its feature is not enabled"),
+                                )
+                                .with_label(label_at(
+                                    &item,
+                                    "this dependency is not part of the current configuration",
+                                ))
+                                .note(format!(
+                                    "write `dep(\"{name}\") when feature.{name}` so the reference \
+                                     appears with the feature"
+                                ))
+                                .note(format!(
+                                    "or enable it with `--features={name}`, or drop `optional` \
+                                     from its declaration"
+                                )),
+                            ),
                             // 供給形態が未実装なものは `dowel.toml` の読み取りで
                             // 既に診断済み。同じことを2度言わない。
                             Err(Unresolved::AlreadyReported) => {}
@@ -167,6 +185,8 @@ fn resolve_target(sess: &Session, pkg: PackageId, name: &str) -> Option<TargetId
 
 enum Unresolved {
     NotDeclared,
+    /// 任意の依存で、対応する機能が有効でない。読み込んでいないため解決できない
+    Inactive,
     AlreadyReported,
 }
 
@@ -175,8 +195,13 @@ fn resolve_package_targets(
     from: PackageId,
     dep_name: &str,
 ) -> Result<Vec<TargetId>, Unresolved> {
-    if !sess.package(from).deps.iter().any(|d| d.name == dep_name) {
+    let Some(dep) = sess.package(from).deps.iter().find(|d| d.name == dep_name) else {
         return Err(Unresolved::NotDeclared);
+    };
+    // 有効でない任意の依存は読み込んでいない。解決できないのは
+    // 供給形態が未実装だからではないため、区別して報告する。
+    if !crate::package::is_active(dep, sess.active_features()) {
+        return Err(Unresolved::Inactive);
     }
     let Some(pid) = sess.dep_package(from, dep_name) else {
         return Err(Unresolved::AlreadyReported);
