@@ -223,8 +223,8 @@ const CASES: &[Case] = &[
     // --- 式 ---------------------------------------------------------------
     Case {
         code: "unknown-function",
-        why: "`files(...)` does not exist",
-        files: &[("app/dowel.build", "[bin.app]\nsources = files(\"src/*.c\")\n")],
+        why: "`globs(...)` does not exist",
+        files: &[("app/dowel.build", "[bin.app]\nsources = globs(\"src/*.c\")\n")],
         args: CHECK,
     },
     Case {
@@ -444,6 +444,142 @@ fn every_case_produces_the_diagnostic_it_claims() {
         failures.len(),
         failures.join("\n")
     );
+}
+
+// ---------------------------------------------------------------------------
+// 修正提案の適用。
+//
+// 事例表は提案の存在しか見ない。範囲の誤りは適用して初めて現れる。
+// ここでは提案を書き戻し、もう一度 `check` を掛ける。
+//
+// 判定は2つ。元の診断が消えること、新しい診断が出ないこと。後者があるため、
+// 提案を持つ事例は「その提案を当てれば通る入力」でなければならない。
+// `unknown-function` の事例が `files` ではなく `globs` なのはこのためである。
+// `files` は `file` に直り、今度は型が合わなくなる。
+// ---------------------------------------------------------------------------
+
+/// 1件の修正提案。
+struct Fix {
+    file: String,
+    start: usize,
+    end: usize,
+    replacement: String,
+}
+
+/// JSON 診断1行から提案を取り出す。
+///
+/// 完全な JSON 構文解析ではない。`render_json` の出力する形（1診断1行、
+/// 提案は同じ並びの平坦な対象）だけを読む。
+fn fixes_of(line: &str) -> Vec<Fix> {
+    let Some(rest) = line.split("\"suggestions\":[").nth(1) else { return Vec::new() };
+    let mut out = Vec::new();
+    for obj in rest.split('{').skip(1) {
+        let Some(obj) = obj.split('}').next() else { continue };
+        let (Some(file), Some(start), Some(end), Some(replacement)) = (
+            json_str(obj, "file"),
+            json_u64(obj, "byte_start"),
+            json_u64(obj, "byte_end"),
+            json_str(obj, "replacement"),
+        ) else {
+            continue;
+        };
+        out.push(Fix { file, start, end, replacement });
+    }
+    out
+}
+
+/// `"key":"..."` の中身。`\"` と `\\` の脱出を解く。
+fn json_str(obj: &str, key: &str) -> Option<String> {
+    let rest = obj.split(&format!("\"{key}\":\"")).nth(1)?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            _ => out.push(c),
+        }
+    }
+    None
+}
+
+fn json_u64(obj: &str, key: &str) -> Option<usize> {
+    let rest = obj.split(&format!("\"{key}\":")).nth(1)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// 提案を書き戻す。同じファイルの複数箇所は後ろから当てる。
+fn apply(fixes: &[Fix]) {
+    let mut files: BTreeSet<&str> = BTreeSet::new();
+    for f in fixes {
+        files.insert(&f.file);
+    }
+    for file in files {
+        let mut text = std::fs::read_to_string(file).expect("cannot read the manifest");
+        let mut here: Vec<&Fix> = fixes.iter().filter(|f| f.file == file).collect();
+        here.sort_by_key(|f| std::cmp::Reverse(f.start));
+        for f in here {
+            assert!(f.end <= text.len() && f.start <= f.end, "the suggested range is not in range");
+            text.replace_range(f.start..f.end, &f.replacement);
+        }
+        std::fs::write(file, text).expect("cannot write the manifest back");
+    }
+}
+
+#[test]
+fn applying_a_suggestion_fixes_the_diagnostic_and_adds_no_other() {
+    let mut failures = Vec::new();
+    for case in CASES {
+        let p = Project::new(&format!("fix-{}", case.code));
+        base(&p);
+        for (rel, text) in case.files {
+            p.write(rel, text);
+        }
+        let before = p.run("app", case.args);
+        let Some(line) =
+            before.stdout.lines().find(|l| l.contains(&format!("\"code\":\"{}\"", case.code)))
+        else {
+            continue;
+        };
+        let fixes = fixes_of(line);
+        if fixes.is_empty() {
+            continue;
+        }
+
+        let seen: BTreeSet<String> = codes_in(&before.stdout);
+        apply(&fixes);
+        let after = p.run("app", case.args);
+        let now = codes_in(&after.stdout);
+
+        if now.contains(case.code) {
+            failures.push(format!("  {}: still reported after applying the fix", case.code));
+        }
+        let added: Vec<&String> = now.difference(&seen).collect();
+        if !added.is_empty() {
+            failures.push(format!(
+                "  {}: applying the fix introduced {}",
+                case.code,
+                added.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} suggestion(s) cannot be applied:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// 出力に現れた安定コードの集合。
+fn codes_in(stdout: &str) -> BTreeSet<String> {
+    stdout
+        .lines()
+        .filter_map(|l| l.split("\"code\":\"").nth(1))
+        .filter_map(|rest| rest.split('"').next())
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// 事例を組み立てて起動し、実行結果をそのまま返す。

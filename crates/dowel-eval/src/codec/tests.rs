@@ -101,10 +101,12 @@ fn the_provenance_chain_survives_in_order() {
         cfg_refs: Vec::new(),
         tables: vec![Table {
             path: vec!["lib".into(), "a".into()],
+            path_spans: vec![Span::new(1, 4), Span::new(5, 6)],
             array: false,
             site: Site { file: FileId(7), span: Span::new(0, 5) },
             entries: vec![Entry {
                 key: vec!["includes".into()],
+                key_spans: vec![Span::new(6, 9)],
                 site: Site { file: FileId(7), span: Span::new(6, 9) },
                 value: Value { ty: Type::Path, data: Data::Glob("*.c".into()), prov },
             }],
@@ -135,6 +137,23 @@ fn the_configuration_references_survive() {
     assert_eq!(back.cfg_refs[0].key.display(), "feature.fast");
     assert_eq!(back.cfg_refs[0].site, doc.cfg_refs[0].site);
     round_trips(&doc);
+}
+
+#[test]
+fn the_segment_spans_survive() {
+    // 修正提案は段ごとの位置を使う。復元した文書から提案を出せなければ、
+    // ストア経由の実行だけが範囲の誤った提案を出すことになる。
+    let src = "[lib.foo.public]\nincludes = [dir(\"include\")]\n";
+    let back = decode_document(&encode_document(&evaluate(src))).unwrap();
+    let table = &back.tables[0];
+    assert_eq!(table.path, ["lib", "foo", "public"]);
+    let text = |s: dowel_support::Span| &src[s.range()];
+    assert_eq!(
+        table.path_spans.iter().map(|&s| text(s)).collect::<Vec<_>>(),
+        ["lib", "foo", "public"]
+    );
+    let entry = &table.entries[0];
+    assert_eq!(entry.key_spans.iter().map(|&s| text(s)).collect::<Vec<_>>(), ["includes"]);
 }
 
 #[test]

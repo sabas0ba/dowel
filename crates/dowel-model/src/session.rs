@@ -299,13 +299,11 @@ impl Session {
                         )
                         .at(doc.file, table.site.span, "only `public` or `private`")
                         .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
-                        if let Some(c) = closest(&table.path[2], ["public", "private"]) {
-                            d = d.suggest(
-                                doc.file,
-                                table.site.span,
-                                format!("[{}.{}.{}]", kind.name(), name, c),
-                                format!("did you mean `{c}`?"),
-                            );
+                        if let (Some(c), Some(&span)) = (
+                            closest(&table.path[2], ["public", "private"]),
+                            table.path_spans.get(2),
+                        ) {
+                            d = d.suggest(doc.file, span, c, format!("did you mean `{c}`?"));
                         }
                         self.diagnostics.push(d);
                         continue;
@@ -344,7 +342,14 @@ impl Session {
             });
 
             for entry in &table.entries {
-                self.assign_prop(tid, block, entry.key.clone(), entry.value.clone(), entry.site);
+                self.assign_prop(
+                    tid,
+                    block,
+                    entry.key.clone(),
+                    &entry.key_spans,
+                    entry.value.clone(),
+                    entry.site,
+                );
             }
         }
 
@@ -389,13 +394,13 @@ impl Session {
                             "`runner` has no property with this name",
                         )
                         .note(format!("`runner` accepts: {}", names.join(", ")));
-                if let Some(c) = closest(&name, names) {
-                    d = d.suggest(
-                        entry.site.file,
-                        entry.site.span,
-                        c,
-                        format!("did you mean `{c}`?"),
-                    );
+                // 提案は誤った鍵だけを置き換える。ドット付きの鍵は
+                // `closest` に一致しないため、単一の段のときだけ提案する。
+                if let (Some(c), Some(&span)) = (
+                    closest(&name, names),
+                    entry.key_spans.first().filter(|_| entry.key.len() == 1),
+                ) {
+                    d = d.suggest(entry.site.file, span, c, format!("did you mean `{c}`?"));
                 }
                 self.diagnostics.push(d);
                 continue;
@@ -490,8 +495,8 @@ impl Session {
             let mut d = Diagnostic::error("unknown-kind", format!("unknown table kind `{head}`"))
                 .at(file, table.site.span, "no such kind")
                 .note(format!("available kinds: {}", known.join(", ")));
-            if let Some(c) = closest(head, known) {
-                d = d.suggest(file, table.site.span, c, format!("did you mean `{c}`?"));
+            if let (Some(c), Some(&span)) = (closest(head, known), table.path_spans.first()) {
+                d = d.suggest(file, span, c, format!("did you mean `{c}`?"));
             }
             self.diagnostics.push(d);
             return None;
@@ -516,17 +521,20 @@ impl Session {
         tid: TargetId,
         block: Block,
         key: Vec<String>,
+        key_spans: &[Span],
         value: Value,
         site: Site,
     ) {
         // `[lib.foo]` の中に `public.includes = ...` と書く形も許す。
-        let (block, name) = match key.len() {
-            1 => (block, key[0].clone()),
+        // 3つ目の要素は、名前が書かれた段の添字である。名前が段をまたぐ
+        // 場合（`a.b.c` など）は該当する段がないため `None` になる。
+        let (block, name, at) = match key.len() {
+            1 => (block, key[0].clone(), Some(0)),
             2 if block == Block::Root => match Block::parse(&key[0]) {
-                Some(b) => (b, key[1].clone()),
-                None => (block, key.join(".")),
+                Some(b) => (b, key[1].clone(), Some(1)),
+                None => (block, key.join("."), None),
             },
-            _ => (block, key.join(".")),
+            _ => (block, key.join("."), None),
         };
 
         let Some(def) = schema::lookup(block, &name) else {
@@ -538,8 +546,12 @@ impl Session {
                     format!("`{}` has no property with this name", block.name()),
                 )
                 .note(format!("`{}` accepts: {}", block.name(), known.join(", ")));
-            if let Some(c) = closest(&name, known.iter().copied()) {
-                d = d.suggest(site.file, site.span, c, format!("did you mean `{c}`?"));
+            // 範囲は誤った鍵だけを覆う。key-value 全体を覆うと、適用した結果から
+            // 値が消える（#12）。ラベルの範囲は「どの記述が誤りか」を示すため
+            // 行全体のままにする。
+            let span = at.and_then(|i| key_spans.get(i)).copied();
+            if let (Some(c), Some(span)) = (closest(&name, known.iter().copied()), span) {
+                d = d.suggest(site.file, span, c, format!("did you mean `{c}`?"));
             } else if let Some(other) = other_block_with(&name, block) {
                 d = d.note(format!("`{name}` is a property of `{}`", other.name()));
             }
