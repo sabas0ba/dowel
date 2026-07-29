@@ -6,7 +6,7 @@
 //! - **stderr** — 進行と誤り
 //!
 //! `dowel` という名前で起動された場合は shim として働き、選んだ版へ
-//! exec する（docs/adr/0012-self-acquisition.md、docs/61-acquisition.md）。
+//! exec する（docs/adr/0013-self-acquisition.md、docs/61-acquisition.md）。
 
 mod acquire;
 mod args;

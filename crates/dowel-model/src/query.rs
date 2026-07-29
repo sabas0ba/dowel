@@ -42,6 +42,7 @@ use dowel_eval::{Config, Value};
 use dowel_query::{fingerprint_str, Cancelled, Db, Durability, Fingerprint};
 use dowel_support::{log_trace, Diagnostic, FileId};
 use dowel_syntax::Parsed;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// クエリの鍵。
@@ -111,12 +112,44 @@ pub fn parsed(db: &Db<Key>, file: FileId) -> Result<Arc<Parsed>, Cancelled> {
     })
 }
 
+/// プロセスを跨いだ評価結果の供給元（[ADR-0012](../../../docs/adr/0012-store-contents.md)）。
+///
+/// クエリからストアの形式を見えなくするために挟む。実装は
+/// [`crate::persist::Cache`]。
+pub trait Evaluations {
+    /// 本文の指紋が `fingerprint` であるファイルの評価結果。
+    ///
+    /// 診断を持つファイルは格納されないため、返る文書に対応する診断は無い。
+    fn get(&self, file: FileId, fingerprint: u64) -> Option<dowel_eval::Document>;
+
+    /// 診断を出さずに計算できた結果を渡す。格納するかは実装が決める。
+    fn put(&self, file: FileId, fingerprint: u64, doc: &dowel_eval::Document);
+
+    /// 診断があったため渡さなかったことを伝える。数え上げのためだけに持つ。
+    fn skipped(&self, file: FileId);
+}
+
 /// 評価。`strict` は `dowel.toml` にのみ課す追加検証であり、
 /// ファイルの種別で決まって変わらない。同じ `file` に別の `strict` で
 /// 問い合わせてはならない（メモが黙って食い違う）。
-pub fn evaluated(db: &Db<Key>, file: FileId, strict: bool) -> Result<Arc<Evaluated>, Cancelled> {
+///
+/// `store` を与えると、本文が前回と同じファイルは解析も評価もせずに復元する。
+/// `strict` は診断を足すだけで文書を変えないため、復元の可否に関わらない。
+pub fn evaluated(
+    db: &Db<Key>,
+    file: FileId,
+    strict: bool,
+    store: Option<Rc<dyn Evaluations>>,
+) -> Result<Arc<Evaluated>, Cancelled> {
     db.query(Key::Evaluated(file), move |db| {
         let src = db.input::<String>(Key::Text(file))?.expect("the text input is set before eval");
+        let fp = fingerprint_of_source(&src);
+        // 復元は解析の前に試す。復元できた場合、`Parsed` のメモは作られない。
+        if let Some(store) = &store {
+            if let Some(doc) = store.get(file, fp) {
+                return Ok((Evaluated { doc, diagnostics: Vec::new() }, fp));
+            }
+        }
         let tree = parsed(db, file)?;
         log_trace!("evaluating file {} (strict={strict})", file.0);
 
@@ -133,7 +166,14 @@ pub fn evaluated(db: &Db<Key>, file: FileId, strict: bool) -> Result<Arc<Evaluat
                 log_trace!("    {} = {}", e.key.join("."), e.value.display());
             }
         }
-        Ok((Evaluated { doc, diagnostics }, fingerprint_of_source(&src)))
+        if let Some(store) = &store {
+            if diagnostics.is_empty() {
+                store.put(file, fp, &doc);
+            } else {
+                store.skipped(file);
+            }
+        }
+        Ok((Evaluated { doc, diagnostics }, fp))
     })
 }
 

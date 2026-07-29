@@ -1,7 +1,7 @@
 //! git / cargo の起動。
 //!
 //! 取得・解決・ビルドは外部コマンドへ委譲する
-//! （docs/adr/0012-self-acquisition.md）。ここでは呼び出しの作法を揃える。
+//! （docs/adr/0013-self-acquisition.md）。ここでは呼び出しの作法を揃える。
 //!
 //! - 呼び出し元の環境（`GIT_DIR` 等）は遮蔽する。dowelup 自身が git
 //!   リポジトリの中から起動されても、mirror の操作に混入しない

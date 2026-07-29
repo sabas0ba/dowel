@@ -2,7 +2,7 @@
 
 `dowelup` は dowel 自体を取得し、プロジェクトごとに版を固定し、透過的に
 切り替えるためのコマンドである。設計上の決定は
-[ADR-0012](adr/0012-self-acquisition.md) にある。
+[ADR-0013](adr/0013-self-acquisition.md) にある。
 
 ## 導入
 

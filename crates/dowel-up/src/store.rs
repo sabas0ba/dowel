@@ -10,7 +10,7 @@
 //!
 //! pin（`.dowel-version`）と `default` に書くのは解決済みの sha だけである。
 //! タグやブランチの名前は可動であり、固定とみなさない
-//! （docs/adr/0012-self-acquisition.md）。
+//! （docs/adr/0013-self-acquisition.md）。
 
 use crate::spec;
 use std::path::{Path, PathBuf};
@@ -160,7 +160,7 @@ pub fn select(home: &Home, start: &Path) -> Result<Selection, String> {
 /// pin / default ファイルから sha を読む。
 ///
 /// sha 以外（チャネル名やブランチ名）は解決せずに拒む。shim が暗黙に
-/// ネットワークへ触れないための制約である（docs/adr/0012-self-acquisition.md）。
+/// ネットワークへ触れないための制約である（docs/adr/0013-self-acquisition.md）。
 pub fn read_selection(file: &Path) -> Result<String, String> {
     let text = std::fs::read_to_string(file)
         .map_err(|e| format!("cannot read {}: {e}", file.display()))?;

@@ -4,6 +4,7 @@ pub mod dump;
 pub mod graph;
 pub mod interface;
 pub mod package;
+pub mod persist;
 pub mod query;
 pub mod runner;
 pub mod session;

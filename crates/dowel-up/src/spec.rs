@@ -1,7 +1,7 @@
 //! 版の指定子。
 //!
 //! どの形も解決の入口にすぎず、正本は commit sha である
-//! （docs/adr/0012-self-acquisition.md）。ここでは形の判定だけを行い、
+//! （docs/adr/0013-self-acquisition.md）。ここでは形の判定だけを行い、
 //! 上流への問い合わせは `acquire` が行う。
 
 use std::fmt;

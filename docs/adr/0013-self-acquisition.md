@@ -1,4 +1,4 @@
-# ADR-0012: dowel 自体の取得は別バイナリが担い、参照は commit sha に固定する
+# ADR-0013: dowel 自体の取得は別バイナリが担い、参照は commit sha に固定する
 
 状態: Accepted
 

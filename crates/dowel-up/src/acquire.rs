@@ -1,7 +1,7 @@
 //! 上流からの解決と取得。
 //!
 //! すべての指定子はここで commit sha に落ち、以後は sha が正本になる
-//! （docs/adr/0012-self-acquisition.md）。取得はソースからのビルドであり、
+//! （docs/adr/0013-self-acquisition.md）。取得はソースからのビルドであり、
 //! 履歴とネットワークの操作は git に、ビルドは cargo に委譲する。
 
 use crate::proc;
