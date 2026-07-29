@@ -17,7 +17,10 @@ A working example lives at [`examples/hello`](../examples/hello).
 
 | Document | Contents |
 |---|---|
-| [10-manifest.md](10-manifest.md) | The manifest reference: everything `dowel.toml` / `dowel.build` accept, types and merge semantics |
+| [10-manifest.md](10-manifest.md) | The manifest model: the two files, the evaluation pipeline in one pass |
+| [11-toml-reference.md](11-toml-reference.md) | `dowel.toml`: every table and key that is read, and how it is validated |
+| [12-build-reference.md](12-build-reference.md) | `dowel.build`: the complete syntax, every target/runner property, the configuration vocabulary |
+| [13-semantics.md](13-semantics.md) | How declared values behave: specialization, propagation and merging, planning, execution |
 | [60-cli.md](60-cli.md) | The command reference: every option, output contract, exit status, machine-readable diagnostics |
 | [91-implementation-status.md](91-implementation-status.md) | What works today: the not-yet-implemented list, measurements, divergences from the design documents |
 
@@ -81,7 +84,10 @@ and changing one breaks those references.
 | Document | Contents |
 |---|---|
 | [00-overview.md](00-overview.md) | Goals, non-goals, positioning against existing systems |
-| [10-manifest.md](10-manifest.md) | The manifest reference (`dowel.toml` / `dowel.build`), types and merge semantics |
+| [10-manifest.md](10-manifest.md) | The manifest model and the index of the language references |
+| [11-toml-reference.md](11-toml-reference.md) | `dowel.toml` reference: tables, keys, validation |
+| [12-build-reference.md](12-build-reference.md) | `dowel.build` reference: syntax, properties, configuration vocabulary |
+| [13-semantics.md](13-semantics.md) | Semantics: specialization, propagation and merging, planning, execution |
 | [20-architecture.md](20-architecture.md) | The incremental query engine, the persistent store, language-server internals |
 | [30-devexp.md](30-devexp.md) | Runners, debugger integration, editor integration |
 | [40-migration.md](40-migration.md) | Migration from existing build systems |

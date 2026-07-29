@@ -130,8 +130,9 @@ tests is shown.
 - The default is sequential because C tests may use shared resources (working
   directory, fixed ports, output files)
 - When `--target=<triple>` differs from the host, launch goes through the
-  declared runner (`[runner.<triple>]` in [10-manifest.md](10-manifest.md)).
-  If no runner is declared, the launch is refused with a diagnostic beforehand
+  declared runner (`[runner.<triple>]` in
+  [12-build-reference.md](12-build-reference.md)). If no runner is declared,
+  the launch is refused with a diagnostic beforehand
 - `--message-format=json` emits one result per line on stdout
 
 ## `dowel why`

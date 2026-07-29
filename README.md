@@ -47,7 +47,9 @@ User-facing documentation comes in two kinds: how-to guides and reference.
 |---|---|
 | From installation to your first build | [docs/62-getting-started.md](docs/62-getting-started.md) |
 | Task-oriented how-tos (testing, cross execution, editors, CI) | [docs/63-guides.md](docs/63-guides.md) |
-| The manifest reference (`dowel.toml` / `dowel.build`, types and merging) | [docs/10-manifest.md](docs/10-manifest.md) |
+| The manifest model (`dowel.toml` / `dowel.build`) | [docs/10-manifest.md](docs/10-manifest.md) |
+| The `dowel.build` syntax and every configurable property | [docs/12-build-reference.md](docs/12-build-reference.md) |
+| How declared values behave (merging, propagation, planning) | [docs/13-semantics.md](docs/13-semantics.md) |
 | The command reference | [docs/60-cli.md](docs/60-cli.md) |
 | What works today and what doesn't | [docs/91-implementation-status.md](docs/91-implementation-status.md) |
 

@@ -163,7 +163,9 @@ stable codes, and unknown names come with suggestions.
   [63-guides.md](63-guides.md)
 - Pinning and switching versions of dowel itself (`dowelup`) —
   [61-acquisition.md](61-acquisition.md)
-- Everything the manifests accept — [10-manifest.md](10-manifest.md)
+- Everything the manifests accept — [11-toml-reference.md](11-toml-reference.md)
+  and [12-build-reference.md](12-build-reference.md); how it behaves —
+  [13-semantics.md](13-semantics.md)
 - Every command and option — [60-cli.md](60-cli.md)
 - What works today and what doesn't —
   [91-implementation-status.md](91-implementation-status.md)

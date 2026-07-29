@@ -3,7 +3,7 @@
 Task-oriented how-tos. Everything described here is implemented. Installation
 and the first build are in [62-getting-started.md](62-getting-started.md), the
 complete option list in [60-cli.md](60-cli.md), and the manifest syntax in
-[10-manifest.md](10-manifest.md).
+[12-build-reference.md](12-build-reference.md).
 
 ## 1. Building
 
@@ -45,7 +45,7 @@ dowel test --no-run              # build only; do not run
 ## 3. Switching configurations and feature flags
 
 Branching on the manifest side uses `match` / `when`
-([10-manifest.md](10-manifest.md) section 2). From the CLI:
+([12-build-reference.md](12-build-reference.md) section 5). From the CLI:
 
 ```sh
 dowel build --config=release
