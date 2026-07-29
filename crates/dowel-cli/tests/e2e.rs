@@ -160,6 +160,37 @@ fn touching_a_header_triggers_recompilation() {
 }
 
 #[test]
+fn a_header_change_is_seen_after_building_with_the_other_executor() {
+    // issue #41: ninja で組んだツリーを direct で組み直す。依存の記録が
+    // 実行器の実装詳細に畳まれていると、ヘッダの変更が黙って見落とされ、
+    // 古い成果物が残る。
+    let p = two_package_project("cross-executor-header");
+    p.run("app", &["build"]).success(); // 既定の ninja
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
+
+    p.write(
+        "libfoo/src/internal.h",
+        "#pragma once\n#define FOO_BIAS 100\nstatic inline int bias(void) { return FOO_BIAS; }\n",
+    );
+    let r = p.run("app", &["build", "--executor=direct", "--log-level=trace"]);
+    r.success();
+    assert!(!r.stderr.contains("ran 0 actions"), "the header change did not propagate\n{r}");
+    assert_eq!(run_artifact(&bin), "sum=105 opt=0 api=1\n");
+}
+
+#[test]
+fn the_artifact_is_up_to_date_after_crossing_executors() {
+    // issue #41 の裏面。何も変えずに実行器を替えただけなら、全てを
+    // 作り直すのではなく最新と判定される。依存の記録（depfile）が
+    // 実行器を跨いで残っていることの検査である。
+    let p = two_package_project("cross-executor-clean");
+    p.run("app", &["build"]).success(); // 既定の ninja
+    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
+    r.success().stderr_contains("ran 0 actions");
+}
+
+#[test]
 fn writes_compile_commands() {
     let p = two_package_project("compdb");
     p.run("app", &["build"]).success();
