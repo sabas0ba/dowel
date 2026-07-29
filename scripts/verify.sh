@@ -97,6 +97,7 @@ run unit-store gating -- cargo test -p dowel-store --lib
 run unit-eval gating -- cargo test -p dowel-eval --lib
 run unit-model gating -- cargo test -p dowel-model --lib
 run unit-build gating -- cargo test -p dowel-build --lib
+run unit-lsp gating -- cargo test -p dowel-lsp --lib
 run unit-cli gating -- cargo test -p dowel-cli --bins
 
 # --- 統合テスト ---------------------------------------------------------

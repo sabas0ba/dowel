@@ -160,6 +160,22 @@
     並列を既定にすると順序に依存する失敗が発生する。表示は常に要求順
   - `--no-run` / `--nocapture`、`--message-format=json` で1件1行の結果
 
+### 言語サーバ（`dowel-lsp`）
+
+`dowel lsp` が標準入出力で LSP を話す。エディタが起動主体であり、
+[ADR-0002](adr/0002-no-daemon.md) が退けた常駐デーモンとは区別される。
+
+- 全文同期。`didOpen` / `didChange` / `didSave` / `didClose` に応じて
+  `publishDiagnostics` を返す
+- 診断の範囲は 0 始まりの行と UTF-16 単位の桁。注記と修正提案の説明は
+  本文に畳む
+- `dowel.toml` は名前で判別し、厳密な TOML の検証（[ADR-0003](adr/0003-manifest-split.md)）を課す
+- JSON-RPC の枠付けと本文の読み取りは自前（[ADR-0007](adr/0007-implementation-language.md)）。
+  読めない本文は捨てて次を読み、1件の不正で接続を落とさない
+
+見ているのは開いているファイル1つである。ファイルを跨ぐ診断は
+`dowel_lsp::UNSUPPORTED` に理由とともに列挙してある。
+
 ### 診断とログ
 
 - 重大度・安定コード・複数ラベル・注記・機械適用可能な修正提案
@@ -204,12 +220,12 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 288 件）。
+現在の内訳（テスト 319 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 177 |
+| `unit-*` | クレートごとの単体テスト | 208 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 10 |
@@ -258,7 +274,8 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | プローブ事実 DB | Phase 2 |
 | `bench` / `template` / `toolchain` の各種別 | Phase 2 / 4 |
 | 移行（`migrate verify` / `import`） | Phase 3 |
-| `dowel debug`、言語サーバ | Phase 4 |
+| `dowel debug` | Phase 4 |
+| 言語サーバのファイルを跨ぐ診断、ホバー | Phase 4。診断はファイル単位まで実装済み（`dowel_lsp::UNSUPPORTED`） |
 | 対象機に残した成果物の掃除、転送の省略判定 | Phase 4。転送は毎回行う |
 | 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
 | ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |
