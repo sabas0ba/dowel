@@ -1,96 +1,107 @@
-# ロードマップ
+# Roadmap
 
-## 方針
+## Approach
 
-各フェーズは**独立に価値を持ち、次へ進まない判断ができる**ように区切る。
-特に Phase 0 は「作らない」判断を早期に可能にすることを目的とする。
+Phases are cut so that **each is valuable on its own and permits the decision
+not to proceed**. Phase 0 in particular exists to make a "don't build it"
+decision possible early.
 
-## Phase 0: 計測と前提検証（実装なし）
+## Phase 0: measurement and premise validation (no implementation)
 
-いずれもビルドシステムを書かずに実施でき、以後の設計判断の根拠となる。
+All of these can be done without writing a build system, and they ground the
+design decisions that follow.
 
-| 項目 | 方法 | 判断材料 |
+| Item | Method | What it informs |
 |---|---|---|
-| cold configure の内訳 | 実プロジェクトで `strace -c`、プロセス起動回数・stat 回数・実時間 | プローブ事実 DB の効果見積り |
-| 再構成レイテンシ | マニフェスト1ファイル変更時の所要時間 | 増分評価の効果見積り |
-| ジェネレータ式・文字列操作の出現数 | 静的な数え上げ | 型と診断の効果見積り |
-| ABI 不整合の実在性 | 既存プロジェクトに ABI ラベル検査を外付けし、検出数を測る | **実行層へ投資する根拠の有無** |
+| Breakdown of cold configure | `strace -c` on real projects; process launches, stat counts, wall time | expected payoff of the probe-fact DB |
+| Reconfiguration latency | time taken when one manifest file changes | expected payoff of incremental evaluation |
+| Frequency of generator expressions / string manipulation | static counting | expected payoff of types and diagnostics |
+| Whether ABI mismatches occur in the wild | bolt an ABI label check onto existing projects; count detections | **whether investing in an execution layer is justified** |
 
-最後の項目が重要。検出数が有意でなければ、ABI 検証を中心に据える前提が崩れる。
-その場合は増分評価と診断に焦点を絞る（＝既存の上位層としても成立する）。
+The last item is the important one. If the detection count is not
+significant, the premise of centering ABI verification collapses — in which
+case the focus narrows to incremental evaluation and diagnostics (which
+stands even as a layer over existing systems).
 
-## Phase 1: コア
+## Phase 1: the core
 
-後付け不可能な制約を確定させる段階。
+The phase that pins down the constraints that cannot be retrofitted.
 
-- ロスレス CST を持つパーサ（誤り耐性つき）
-- 増分クエリエンジン（early cutoff、キャンセル、耐久度階層）
-- 永続化ストア（mmap インデックス + 追記ログ、`flock`、原子的差し替え）
-- 型システムと併合意味論
-- 来歴の追跡と `dowel why`
-- `dowel check`（計画まで走らせ、実行しない。範囲は [ADR-0010](adr/0010-check-scope.md)）
+- A parser with a lossless CST (error-tolerant)
+- The incremental query engine (early cutoff, cancellation, durability
+  layers)
+- The persistent store (mmap index + append-only log, `flock`, atomic swap)
+- The type system and merge semantics
+- Provenance tracking and `dowel why`
+- `dowel check` (runs through planning without executing; scope per
+  [ADR-0010](adr/0010-check-scope.md))
 
-**出荷物**: `dowel check` と `dowel why`。既存プロジェクトに並置して検証できる。
+**Deliverable**: `dowel check` and `dowel why`, verifiable side by side with
+an existing project.
 
-## Phase 2: 生成
+## Phase 2: generation
 
-- アクショングラフの構築
-- ninja ファイルの生成
-- `compile_commands.json` の出力
-- プローブ事実 DB
+- Action graph construction
+- ninja file generation
+- `compile_commands.json` output
+- The probe-fact DB
 - `dowel build` / `dowel test`
 
-**出荷物**: 実際にビルドできる状態。ただし依存供給は pkg-config 委譲のみ。
+**Deliverable**: actually able to build — though dependency supply is
+pkg-config delegation only.
 
-## Phase 3: 移行と相互運用
+## Phase 3: migration and interoperation
 
-- `dowel migrate verify`（compile_commands 比較）
-- `dowel migrate import`（CMake File API）
-- vcpkg / Conan からの依存取り込み
-- CMake `find_package` 用 config ファイルの出力（逆方向）
+- `dowel migrate verify` (compile_commands comparison)
+- `dowel migrate import` (CMake File API)
+- Importing dependencies from vcpkg / Conan
+- Emitting CMake `find_package` config files (the reverse direction)
 
-**出荷物**: 既存プロジェクトへの段階的導入が可能な状態。
+**Deliverable**: incremental adoption in existing projects becomes possible.
 
-## Phase 4: 開発体験
+## Phase 4: developer experience
 
-- ランナー抽象（qemu / SSH / 実機）
-- `dowel debug`（substitute-path の自動整合、DAP 設定生成）
-- 言語サーバ（診断とホバーのみ）
-- 診断の JSON 出力
+- The runner abstraction (qemu / SSH / real hardware)
+- `dowel debug` (auto-consistent substitute-path, DAP config generation)
+- The language server (diagnostics and hover only)
+- JSON diagnostics
 
-ランナーとデバッガ連携は投資に対する体感差が最も大きく、他と独立に検証できる。
-Phase 3 と並行してよい。
+Runners and debugger integration have the largest felt impact per investment
+and can be validated independently of the rest; this phase may run in
+parallel with Phase 3.
 
-## Phase 5: 依存管理
+## Phase 5: dependency management
 
-- `dowel.lock` の生成と検証
-- cooldown、ライセンス許可リスト、新規推移依存の承認フロー
-- ツールチェーンの取得とハッシュ固定
-- vendoring とオフラインビルド
+- `dowel.lock` generation and verification
+- Cooldown, license allowlists, approval flow for new transitive dependencies
+- Toolchain acquisition and hash pinning
+- Vendoring and offline builds
 
 ## Phase 6: ABI / FFI
 
-Phase 0 の検証結果が肯定的だった場合に着手する。
+Started only if the Phase 0 validation comes back positive.
 
-- ABI ラベルの算出と `must_equal` 検証
-- ABI 境界の宣言（IDL）
-- `dowel abi check`（前バージョンとの差分検査）
-- シンボル可視性の自動生成
-- 輸出ターゲット: C ABI / CPython 拡張 / N-API / JVM Panama
+- ABI label computation and `must_equal` verification
+- ABI boundary declaration (IDL)
+- `dowel abi check` (diff against the previous version)
+- Generated symbol visibility
+- Export targets: C ABI / CPython extensions / N-API / JVM Panama
 
-## 実行層（未計画）
+## The execution layer (unplanned)
 
-隔離実行と CAS によるアクションキャッシュは、Phase 2 の ninja 生成を置き換える。
-永続化ストアの機構をそのまま再利用できるため、後から導入する経路は閉じていない。
-Phase 5 までの実運用結果を見て判断する。
+Isolated execution with a CAS action cache would replace the Phase 2 ninja
+generation. The persistent store's machinery is reusable as-is, so the door
+to introducing it later stays open. Decide based on operational experience
+through Phase 5.
 
-## 完了の性質
+## The nature of "done"
 
-| 部分 | 完了しうるか |
+| Part | Can it finish? |
 |---|---|
-| クエリコア + 言語 + 型 | する |
-| 生成・移行・ランナー | する |
-| 言語サーバ | **しない**（継続的な保守コスト） |
-| ABI / FFI 輸出 | 対象言語ごとに増え続ける |
+| query core + language + types | yes |
+| generation / migration / runners | yes |
+| language server | **no** (permanent maintenance cost) |
+| ABI / FFI export | grows with every target language |
 
-言語サーバは「常に未完成」であることを前提に、初期機能を絞る。
+The language server is planned on the premise that it is permanently
+unfinished; its initial feature set is kept narrow.

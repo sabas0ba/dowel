@@ -41,8 +41,14 @@ dotfiles 側の `nix/packages.nix` に追記して取得する。
 
 ## 名称
 
-`dowel` は仮称である（[docs/adr/0006-naming.md](docs/adr/0006-naming.md)）。
-確定していないため、識別子やパス名として広範に埋め込む変更は行わない。
+`dowel` は正式名称である（[docs/adr/0014-name-final.md](docs/adr/0014-name-final.md)）。
+経緯と調査は [docs/adr/0006-naming.md](docs/adr/0006-naming.md) を参照。
+
+## 文書の言語
+
+`docs/` と各 README は英語で記述する（[docs/50-development.md](docs/50-development.md) 5節）。
+コード中のコメントと doc コメントは日本語のままとする。
+ADR は記録であり、書かれた当時の言語のまま保持する。
 
 ## 作業
 

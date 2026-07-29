@@ -1,0 +1,191 @@
+# How-to guides
+
+Task-oriented how-tos. Everything described here is implemented. Installation
+and the first build are in [62-getting-started.md](62-getting-started.md), the
+complete option list in [60-cli.md](60-cli.md), and the manifest syntax in
+[12-build-reference.md](12-build-reference.md).
+
+## 1. Building
+
+```sh
+dowel build                      # build every bin / test
+dowel build app                  # by name: <target> or <package>:<target>
+dowel build --config=release
+```
+
+- Switch configurations with `--config` (`debug` / `release`; default
+  `debug`). Build directories are separated per configuration, so switching
+  never clobbers the other's outputs
+- The default executor is ninja. Where ninja is unavailable,
+  `--executor=direct` runs actions sequentially
+- `-j/--jobs` is the parallelism passed to ninja
+- `compile_commands.json` is written on every build; suppress with
+  `--no-compdb`
+
+## 2. Running tests
+
+```sh
+dowel test                       # every test target
+dowel test app:unit              # by name
+dowel test --nocapture           # pass output through (default shows failures only)
+dowel test --failed              # rerun only what failed last time
+dowel test --fail-fast           # stop at the first failure
+dowel test --test-jobs=4         # run 4 at a time (default is sequential)
+dowel test --no-run              # build only; do not run
+```
+
+- Pass/fail is the exit status (0 = success). The working directory is the
+  package root
+- The default is sequential because C tests may use shared resources (the same
+  working directory, fixed ports, output files). Results are always displayed
+  in request order
+- The verdicts behind `--failed` persist in the build directory; verdicts of
+  targets that were not run are kept
+
+## 3. Switching configurations and feature flags
+
+Branching on the manifest side uses `match` / `when`
+([12-build-reference.md](12-build-reference.md) section 5). From the CLI:
+
+```sh
+dowel build --config=release
+dowel build --features=zlib,png
+dowel build --no-default-features
+```
+
+The domain of feature names is defined by `[features]` in `dowel.toml`.
+Unknown names fail with a diagnostic — both when referenced from `dowel.build`
+and when passed to `--features` — with suggestions. Switching `--config` /
+`--target` does not re-run manifest evaluation (branch resolution is deferred
+to the specialization stage).
+
+## 4. Investigating "why"
+
+Value provenance: where a propagated value came from, with source locations.
+
+```
+$ dowel why app:app includes
+
+include/                          Path
+  ← public.includes of target:foo       libfoo/dowel.build:18
+    ← deps of target:app                app/dowel.build:7
+```
+
+Graphs: the target dependency graph and the action graph, as text / dot /
+json.
+
+```sh
+dowel graph                              # target dependency graph
+dowel graph --kind=action                # action graph
+dowel graph --format=dot | dot -Tsvg -o graph.svg
+```
+
+Rebuild reasons and the actual command lines are in the log:
+
+```sh
+DOWEL_LOG=debug dowel build      # per-stage timing, graph sizes, freshness verdicts
+DOWEL_LOG=trace dowel build      # dependency edges, the full command line of every action
+```
+
+The per-source breakdown of trace output is in
+[91-implementation-status.md](91-implementation-status.md).
+
+## 5. Cross compilation and runners
+
+Declare an execution wrapper per target triple with `[runner.<triple>]`, and
+`dowel test --target=<triple>` launches through the wrapper transparently.
+
+qemu:
+
+```toml
+[runner.riscv64gc-unknown-linux-gnu]
+command = "qemu-riscv64"
+args    = ["-L", "/usr/riscv64-linux-gnu"]
+```
+
+Real hardware over SSH. When the target machine cannot see the build
+machine's file system, declare a transfer:
+
+```toml
+[runner.aarch64-unknown-linux-gnu]
+host       = "board.local"
+remote_dir = "/tmp/dowel"
+transfer   = ["scp", "-q"]
+command    = "ssh"
+args       = ["board.local"]
+```
+
+This expands to the following. Source and destination paths are not written
+in the manifest; the implementation appends them
+([ADR-0008](adr/0008-runner-transfer.md)).
+
+```
+scp -q <build>/bin/unit_test board.local:/tmp/dowel/unit_test
+ssh board.local /tmp/dowel/unit_test
+```
+
+- `transfer` and `remote_dir` are specified together
+- Pass/fail is the exit status of the launch command; with `ssh`, the target
+  machine's exit status is the verdict
+- If no runner is declared for a triple that differs from the host, the launch
+  is refused with a diagnostic beforehand (rather than surfacing as an
+  `Exec format error` reported as a test failure)
+
+## 6. Writing in an editor
+
+There are three paths; they serve different files.
+
+| Target | Path |
+|---|---|
+| `dowel.build` / `dowel.toml` | `dowel lsp` — a language server providing diagnostics and hover |
+| C sources | clangd, fed by the `compile_commands.json` that `dowel build` writes |
+| VS Code | the client in [`editors/vscode/`](../editors/vscode/README.md): launches `dowel lsp` and adds syntax highlighting |
+
+`dowel lsp` speaks LSP on stdin/stdout; the editor is the one that starts it
+(nothing stays resident). Hover shows property types and merge rules, builtin
+function signatures, and configuration key domains. Diagnostics are per open
+file; cross-file diagnostics are not produced yet.
+
+## 7. Managing the cache
+
+Memoized evaluation results live under `.dowel/cache/`.
+
+```sh
+dowel cache info                 # store size
+dowel cache gc                   # collect stores left by older formats
+```
+
+- `cache info` / `cache gc` do not read the manifests, so cleanup works even
+  when a manifest is broken
+- Deleting the store never loses correctness — only the cached speedup
+- The writer is limited to one process (`flock`); a process that cannot take
+  the lock reads only
+
+## 8. Using from CI and tools
+
+Output can be machine-readable. stdout carries artifacts and stderr carries
+progress and logs — always — so piping is safe.
+
+```sh
+dowel check --message-format=json    # one diagnostic per line, with stable codes, locations, fix suggestions
+dowel test  --message-format=json    # one test result per line
+dowel build --log-format=json        # logs as JSON too
+dowel schema dump                    # the schema and configuration vocabulary, machine-readable
+```
+
+- Exit status: 0 = success (including warnings only); anything else = an
+  error. `dowel test` returns nonzero if even one test fails
+- Diagnostic codes (`unknown-property` and so on) are a compatibility surface
+- The output of `dowel schema dump` is also intended as context for LLM agents
+  ([30-devexp.md](30-devexp.md) section 4)
+
+## 9. Reading diagnostics
+
+- Human output uses the rustc format: severity, a stable code, location
+  labels, notes, and fix suggestions
+- Unknown names (properties, functions, configuration keys, feature names,
+  `match` arms, CLI options) come with edit-distance suggestions
+- In `--message-format=json`, fix suggestions carry a span and a replacement
+  string, and can be applied mechanically
+- When stuck, close in from both sides: `dowel why` (value provenance) and
+  `DOWEL_LOG=debug` (execution reasons)

@@ -1,73 +1,103 @@
-# dowel（名称暫定）
+# dowel
 
-C/C++ を主対象とするビルドシステム。CMake / Bazel / Meson に対する代替として、
-次の3点を差別化点に置く。
+A build system for C (C++ support is planned). Positioned as an alternative to
+CMake / Bazel / Meson, differentiated on three points:
 
-1. **増分評価** — マニフェスト評価をメモ化クエリのグラフとして構成し、再構成レイテンシを削減する
-2. **型・診断・来歴** — 全ての値が型とソース位置と来歴を持ち、`why` で伝播経路を辿れる
-3. **開発体験** — 言語サーバ、qemu 等のランナー、デバッガ設定の自動生成を一体で提供する
+1. **Incremental evaluation** — manifest evaluation is structured as a graph of
+   memoized queries, cutting reconfiguration latency
+2. **Types, diagnostics, provenance** — every value carries a type, a source
+   location, and provenance; `dowel why` traces how a value propagated
+3. **Developer experience** — a language server, runners (qemu and real
+   hardware), and generated debugger configuration ship as one unit
 
-常駐デーモンを持たない。状態の正本はディスク上のストアに置き、CLI プロセスが自己完結して動作する。
+There is no resident daemon. The source of truth lives in an on-disk store,
+and the CLI process is self-contained.
 
-## 現在の状態
+## Quick start
 
-実装着手済み。[docs/90-roadmap.md](docs/90-roadmap.md) の Phase 1〜2 を、
-最小構成を先に端から端まで接続する方針で進めている。増分クエリエンジンや
-永続化ストアを完成させる前に、パーサから実際の C のコンパイルまでを一度接続し、
-そのうえで各層の実装を進める。
-
-現時点で `dowel check` / `dowel build` / `dowel test` / `dowel why` /
-`dowel graph` / `dowel schema dump` / `dowel cache` / `dowel lsp` が動く。
-複数パッケージの C を実際にコンパイルし、静的ライブラリを作り、リンクして
-実行できる。クロス実行のためのランナー（`[runner.<triple>]`）も宣言できる。
-
-マニフェスト評価は増分クエリエンジンを通っている。ターゲット単位の派生は
-スパンを含まない要約に指紋を付けており、コメントだけの編集は併合まで届かない
-（[docs/adr/0011-cutoff-and-provenance.md](docs/adr/0011-cutoff-and-provenance.md)）。
-言語サーバは診断とホバーを返す。
+There are no binary releases yet; build from source. You need a Rust
+toolchain, a C compiler, and ninja (recommended).
 
 ```sh
+git clone https://github.com/sabas0ba/dowel
+cd dowel
 cargo build --release
+export PATH="$PWD/target/release:$PATH"
 
-dowel check            # 計画まで走らせ、診断のみ出す。実行はしない
-dowel build            # ninja を生成して実行する
-dowel test             # test ターゲットをビルドして走らせる
-dowel why app:app includes
-dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
-dowel lsp              # 言語サーバ。エディタが起動する
+cd examples/hello/app
+dowel check                  # run through planning, report diagnostics only
+dowel build                  # generate ninja files and run them
+./.dowel/build/*/bin/app
 
-DOWEL_LOG=trace dowel build   # 依存グラフと各アクションのコマンドをログに出す
+cd ../libgreet
+dowel test                   # build and run the test targets
+dowel why app:app includes   # trace how a value reached a target
 ```
 
-検証はひとつの入口にまとめてある。ローカルでも CI でも同じものが走る。
+Setting up a project of your own is covered in
+[docs/62-getting-started.md](docs/62-getting-started.md).
+To pin or switch versions of dowel itself, use `dowelup`
+([docs/61-acquisition.md](docs/61-acquisition.md)).
+
+## Documentation
+
+User-facing documentation comes in two kinds: how-to guides and reference.
+
+| What you want to know | Document |
+|---|---|
+| From installation to your first build | [docs/62-getting-started.md](docs/62-getting-started.md) |
+| Task-oriented how-tos (testing, cross execution, editors, CI) | [docs/63-guides.md](docs/63-guides.md) |
+| The manifest model (`dowel.toml` / `dowel.build`) | [docs/10-manifest.md](docs/10-manifest.md) |
+| The `dowel.build` syntax and every configurable property | [docs/12-build-reference.md](docs/12-build-reference.md) |
+| How declared values behave (merging, propagation, planning) | [docs/13-semantics.md](docs/13-semantics.md) |
+| The command reference | [docs/60-cli.md](docs/60-cli.md) |
+| What works today and what doesn't | [docs/91-implementation-status.md](docs/91-implementation-status.md) |
+
+The full index, including the design documents (motivation, internals,
+decision records), is at [docs/README.md](docs/README.md). The documentation
+can be browsed as a site by publishing this repository on GitHub Pages
+(`main` branch, `/ (root)`; configuration in [`_config.yml`](_config.yml)).
+
+## Current state
+
+Under active development. `dowel check` / `build` / `test` / `why` / `graph` /
+`schema dump` / `cache` / `lsp` work today. It compiles C across multiple
+packages, produces static libraries, links, and runs the result. Runners for
+cross execution (`[runner.<triple>]`), incremental evaluation, persisted
+evaluation results, and the language server (diagnostics and hover) all work.
+
+The main things not implemented yet: dependency fetching (only local `path`
+dependencies work) and `dowel.lock`, C++, `dowel debug`, and migration tooling
+for existing build systems. See
+[docs/91-implementation-status.md](docs/91-implementation-status.md) for the
+full list and measurements, and [docs/90-roadmap.md](docs/90-roadmap.md) for
+the implementation plan.
+
+Verification has a single entry point; local runs and CI run the same thing.
 
 ```sh
-make verify      # 全段階を実行し、結果を .work/verify/ に残す
+make verify      # run every stage, leaving results in .work/verify/
 ```
 
-実装状況と計測結果は
-[docs/91-implementation-status.md](docs/91-implementation-status.md) を参照。
+## Development
 
-## 文書
+Development happens inside the Nix / direnv environment defined by
+[sabas0ba/dotfiles](https://github.com/sabas0ba/dotfiles), or inside the
+container environment built from it. Tools are not installed directly on the
+host.
 
-一覧は [docs/README.md](docs/README.md) にある。主な参照先は以下のとおり。
+See [docs/50-development.md](docs/50-development.md) for setup,
+[docs/51-testing.md](docs/51-testing.md) for the test-suite design, and
+[CLAUDE.md](CLAUDE.md) for instructions aimed at Claude Code.
 
-- **何をするものか** — [docs/00-overview.md](docs/00-overview.md)
-- **何が動くか** — [docs/91-implementation-status.md](docs/91-implementation-status.md)
-- **コマンド** — [docs/60-cli.md](docs/60-cli.md)
-- **決定と根拠** — [docs/adr/](docs/adr/README.md)
+## About the name
 
-## 開発
+A dowel is a woodworking fastener — the name reflects the project's focus on
+joining: FFI and dependencies. `dowel` is the official name
+([ADR-0014](docs/adr/0014-name-final.md)); the selection criteria, other
+candidates, and the namespace/trademark survey are recorded in
+[ADR-0006](docs/adr/0006-naming.md).
 
-開発は [sabas0ba/dotfiles](https://github.com/sabas0ba/dotfiles) が定義する
-Nix / direnv 環境、およびそこから構築する同一内容のコンテナ環境の上で行う。
-ホストへツールを直接導入しない。
+## License
 
-手順は [docs/50-development.md](docs/50-development.md)、
-Claude Code 向けの指示は [CLAUDE.md](CLAUDE.md) を参照。
-
-## 名称について
-
-`dowel`（木材接合用のダボ）は木工の接合具に由来し、FFI と依存の接合を
-主題に置く意図による。選定基準、他候補、名前空間と商標の調査結果は
-[docs/adr/0006-naming.md](docs/adr/0006-naming.md) を参照。
+[Apache-2.0](LICENSE)

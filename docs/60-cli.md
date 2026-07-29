@@ -1,74 +1,258 @@
-# コマンド
+# Command reference
 
-`dowel` が提供するコマンドとオプション。本文書に記載したものは実装済みである。
-未実装の項目は [91-implementation-status.md](91-implementation-status.md) に一覧がある。
+The specification of every command and option `dowel` provides. Everything in
+this document is implemented; the not-yet-implemented list is in
+[91-implementation-status.md](91-implementation-status.md). Task-oriented
+how-tos are in [63-guides.md](63-guides.md).
 
-## 一覧
+## Invocation
 
-```sh
-cargo build --release            # target/release/dowel
-
-dowel check                      # 計画まで走らせ、診断のみ出す。実行はしない
-dowel build                      # 実際にビルドする
-dowel build --config=release
-dowel test                       # test ターゲットをビルドして走らせる
-dowel test --nocapture           # テストの出力を素通しする
-dowel test --failed --fail-fast  # 前回落ちた分だけ、最初の失敗で打ち切る
-dowel test --test-jobs=4         # 同時に4本走らせる
-dowel test --target=<triple>     # 宣言されたランナー経由で起動する
-dowel why app:app includes       # 値がそこへ来た経路
-dowel graph --format=dot         # 依存グラフ
-dowel graph --kind=action        # アクショングラフ
-dowel schema dump                # スキーマと構成語彙（機械可読）
-dowel cache info                 # ストアの規模
-dowel cache gc                   # 古い形式のストアを回収する
-dowel lsp                        # 標準入出力で LSP を話す（エディタが起動する）
+```
+dowel <command> [options] [args]
 ```
 
-デバッグ時の観測は環境変数か `--log-level` で行う。
+- Options accept both `--name value` and `--name=value`
+- Unknown commands and options come with edit-distance suggestions
+  (`--confg` → `did you mean --config?`)
+- Running with no arguments prints usage
 
-```sh
-DOWEL_LOG=debug dowel build      # 段階ごとの所要時間、グラフの規模
-DOWEL_LOG=trace dowel build      # 依存グラフの辺、各アクションのコマンド
-dowel check --log-format=json    # 1行1オブジェクト
-```
+## Contract shared by every command
 
-解析が受け付ける値の入れ子は既定で 64 段までであり、超えた位置に
-`nesting-too-deep` が出る。生成されたマニフェストが超える場合は
-`--max-nesting=<n>` で上げられる（上限 512。スタックが尽きる深さを
-受け付けると、診断の代わりに abort が戻ってくるため）。
+### Output streams
 
-出力先を分ける。stdout は成果物（JSON 診断、グラフ、スキーマ、`why` の結果）、
-stderr は進行とログである。この分担により `dowel graph --format=dot | dot -Tsvg` は
-ログ水準に依らず動作する。
-
-動く例は [`examples/hello`](../examples/hello) にある。
-`crates/dowel-cli/tests/example.rs` が現物をビルドして検査しているため、
-構文や意味論を変えた際の更新漏れは検出される。
-
-
-## ストア
-
-`.dowel/cache/<形式版>/` にメモを保持する（[20-architecture.md](20-architecture.md) 5節）。
-`cache info` と `cache gc` はマニフェストを読まない。マニフェストが壊れている
-状態でも掃除できる必要があるためである。
-
-書き手は1プロセスに限る。取得できない場合は読み込みのみを行い、結果を書かない。
-計算はプロセス内で完結するため、失うのはキャッシュの利得だけであり、結果は変わらない。
-
-## 終了状態
-
-| 状態 | 意味 |
+| Stream | Contents |
 |---|---|
-| 0 | 成功。診断が警告のみの場合も含む |
-| それ以外 | 誤りがあった。診断は上の約束どおり stdout / stderr に分かれて出る |
+| stdout | Artifacts: JSON diagnostics, graphs, the schema, `why` results |
+| stderr | Progress and logs |
 
-`dowel test` は、テストが1件でも落ちれば 0 以外を返す。
-`--fail-fast` で打ち切った場合、走らせなかった件数を要約に出す。
+Because of this split, `dowel graph --format=dot | dot -Tsvg` works at any
+log level.
 
-## 診断の機械可読形式
+### Exit status
 
-`--message-format=json` で1行1診断の JSON を stdout に出す。
-各診断は安定コード（`unknown-property` 等）を持つ。コードは互換性の対象とする。
-コードの一覧と、各コードを発生させる最小の入力は
-`crates/dowel-cli/tests/diagnostics.rs` の事例表に定義してある。
+| Status | Meaning |
+|---|---|
+| 0 | Success, including runs whose diagnostics are warnings only |
+| anything else | An error occurred; diagnostics appear on stdout / stderr per the split above |
+
+`dowel test` returns nonzero if even one test fails. When `--fail-fast` cut
+the run short, the summary reports how many tests were not run.
+
+### Common options
+
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `-C, --directory <path>` | path | `.` | operate on the package in this directory |
+| `--config <name>` | `debug` / `release` | `debug` | build configuration |
+| `--target <triple>` | target triple | host | cross-compilation target ([63-guides.md](63-guides.md) section 5) |
+| `--features <a,b>` | comma-separated | — | feature flags to enable; may be repeated |
+| `--no-default-features` | — | — | do not pull in `default` from `[features]` |
+| `--message-format <fmt>` | `human` / `json` | `human` | diagnostic format |
+| `-v, --verbose` | — | — | more logging; once for info, twice or more for debug |
+| `--log-level <level>` | `off` / `error` / `warn` / `info` / `debug` / `trace` | — | log level; an explicit value overrides `-v` |
+| `--log-format <fmt>` | `text` / `json` | `text` | log format (one object per line) |
+| `--max-nesting <n>` | number | 64 | maximum value-nesting depth the parser accepts (see below) |
+| `--color <when>` | `auto` / `always` / `never` | `auto` | color; `auto` currently resolves to no color (no terminal detection), so pass `always` explicitly when needed |
+| `-h, --help` | — | — | print usage |
+| `-V, --version` | — | — | print the version |
+
+### Nesting limit
+
+Parsing accepts value nesting up to 64 levels by default; anything deeper
+gets a `nesting-too-deep` diagnostic at the offending position. If a
+generated manifest exceeds this, raise it with `--max-nesting=<n>` (capped
+at 512 — accepting stack-exhausting depth would return an abort instead of a
+diagnostic).
+
+### Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `DOWEL_LOG` | same as `--log-level`; `DOWEL_LOG=trace dowel build` |
+
+What each log level shows (debug: per-stage timing and graph sizes; trace:
+dependency edges and the full command line of every action) is broken down in
+[91-implementation-status.md](91-implementation-status.md).
+
+## `dowel check`
+
+```
+dowel check [common options]
+```
+
+Runs through the planning stage and reports diagnostics only. Nothing is
+compiled, linked, or executed. Because it covers glob expansion, path
+resolution, and toolchain existence, the configuration diagnostics that
+`build` would report also come out of `check` (the scope is set by
+[ADR-0010](adr/0010-check-scope.md)). It is faster than a build and intended
+to run on every save.
+
+## `dowel build`
+
+```
+dowel build [target...] [common options] [build options]
+```
+
+Generates ninja files and runs them. With no targets named, builds every
+`bin` and `test`. Naming accepts `<target>` or `<package>:<target>`.
+
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `--executor <name>` | `ninja` / `direct` | `ninja` when available | executor; `direct` runs sequentially (mtime-based freshness reading depfiles) |
+| `-j, --jobs <n>` | number | ninja's default | parallelism, passed to ninja |
+| `--no-compdb` | — | — | do not write `compile_commands.json` |
+
+- Build directories are separated per configuration, under `.dowel/`.
+  Executables land in its `bin/` (`./.dowel/build/*/bin/<name>`)
+- The compiler comes from `[toolchain]` in `dowel.toml` (default: `cc` on
+  PATH). Toolchain fetching is not implemented; whatever is named must be on
+  PATH
+
+## `dowel test`
+
+```
+dowel test [target...] [common options] [test options]
+```
+
+Builds the `test` targets, runs them, and judges pass/fail by exit status
+(0 = success). No test harness is imposed; the C convention applies. The
+working directory is the package root. By default only the output of failing
+tests is shown.
+
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `--no-run` | — | — | build only; do not run |
+| `--nocapture` | — | — | pass test output through |
+| `--fail-fast` | — | keep going | stop at the first failure; the summary reports how many were not run |
+| `--failed` | — | — | rerun only what failed last time; verdicts persist in the build directory, and verdicts of targets not run are kept |
+| `--test-jobs <n>` | number | 1 (sequential) | how many tests run at once; display is always in request order |
+
+- The default is sequential because C tests may use shared resources (working
+  directory, fixed ports, output files)
+- When `--target=<triple>` differs from the host, launch goes through the
+  declared runner (`[runner.<triple>]` in
+  [12-build-reference.md](12-build-reference.md)). If no runner is declared,
+  the launch is refused with a diagnostic beforehand
+- `--message-format=json` emits one result per line on stdout
+
+## `dowel why`
+
+```
+dowel why <target> <property> [--format <text|json>]
+```
+
+Shows the path a value took to reach the target, down to its origin, with
+source locations.
+
+```
+$ dowel why app:app includes
+
+include/                          Path
+  ← public.includes of target:foo       libfoo/dowel.build:18
+    ← deps of target:app                app/dowel.build:7
+```
+
+| Option | Values | Default |
+|---|---|---|
+| `--format <fmt>` | `text` / `json` | `text` |
+
+## `dowel graph`
+
+```
+dowel graph [--kind <target|action>] [--format <text|dot|json>]
+```
+
+Dumps a graph to stdout.
+
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `--kind <kind>` | `target` / `action` | `target` | target dependency graph / action graph |
+| `--format <fmt>` | `text` / `dot` / `json` | `text` | output format; `dot` can be fed straight to Graphviz |
+
+## `dowel schema dump`
+
+```
+dowel schema dump
+```
+
+Prints the schema and configuration vocabulary to stdout in machine-readable
+form: every `kind`, each property's type and merge rule, and the domains of
+the configuration keys (`cfg` / `host` / `feature` / `tc`). This is the same
+table the language server's hover and diagnostics read; it is not duplicated.
+The output is also intended as context for LLM agents
+([30-devexp.md](30-devexp.md) section 4).
+
+## `dowel cache`
+
+```
+dowel cache info
+dowel cache gc
+```
+
+| Subcommand | Meaning |
+|---|---|
+| `info` | report the size and record count of the on-disk store |
+| `gc` | remove stores left by older formats |
+
+Neither reads the manifests: cleanup must work even when a manifest is
+broken. The store's contents and guarantees are described under "The store"
+below.
+
+## `dowel lsp`
+
+```
+dowel lsp
+```
+
+Speaks LSP on stdin and stdout. The editor is the process that starts it, and
+it exits with the editor (it is not a resident daemon —
+[ADR-0002](adr/0002-no-daemon.md)). The CLI never depends on the language
+server's existence.
+
+- Diagnostics: full-document sync; `publishDiagnostics` in response to
+  changes. The unit is the single open file; cross-file diagnostics are not
+  produced yet (`dowel_lsp::UNSUPPORTED` lists them with reasons)
+- Hover: property types and merge rules, builtin function signatures,
+  configuration key domains
+- `dowel.toml` is recognized by name and held to strict TOML validation
+
+The VS Code client lives in [`editors/vscode/`](../editors/vscode/README.md).
+
+## Machine-readable diagnostics
+
+`--message-format=json` emits one JSON diagnostic per line on stdout. Each
+diagnostic carries:
+
+- A severity and a stable code (`unknown-property`, …). Codes are a
+  compatibility surface
+- Source locations (multiple labels) and notes
+- Mechanically applicable fix suggestions (span + replacement string)
+
+The list of codes, with the minimal input that produces each, is defined in
+the case table of `crates/dowel-cli/tests/diagnostics.rs`.
+
+## The store
+
+Memos are kept under `.dowel/cache/<format-version>/`
+([20-architecture.md](20-architecture.md) section 5).
+
+The writer is limited to one process. A process that cannot take the lock
+reads only and writes nothing back. Computation completes within the process
+either way, so all that is lost is the cached speedup — results never change.
+Deleting, truncating, or externally modifying the store likewise changes
+nothing but speed.
+
+## Examples
+
+```sh
+dowel check --message-format=json
+dowel build --config=release
+dowel test --failed --fail-fast
+dowel why app:app includes
+dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
+DOWEL_LOG=debug dowel build
+```
+
+A working example lives at [`examples/hello`](../examples/hello).
+`crates/dowel-cli/tests/example.rs` builds and checks it for real, so a
+change to syntax or semantics that misses the example is detected.

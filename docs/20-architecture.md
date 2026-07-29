@@ -1,147 +1,185 @@
-# アーキテクチャ
+# Architecture
 
-## 1. 単一コア、複数フロントエンド
+> This is a design document about internals. As a user, the behavior you can
+> rely on is covered by [60-cli.md](60-cli.md) (commands and the output
+> contract) and [63-guides.md](63-guides.md) (working with the cache).
 
-増分評価・型と来歴・言語サーバは別個の機能ではなく、**同一コアの3つの側面**である。
-rust-analyzer が rustc と同じクエリ基盤（Salsa）の上に載っているのと同じ構造をとる。
+## 1. One core, multiple frontends
 
-- 増分評価エンジン ＝ 言語サーバが必要とするもの（打鍵ごとの部分再評価）
-- 値に型と来歴を持たせること ＝ 言語サーバが必要とするもの（定義参照、ホバー、診断）
-- `dowel build` と言語サーバは、同じクエリグラフに別の問い合わせを投げる
+Incremental evaluation, typed values with provenance, and the language server
+are not separate features but **three aspects of the same core** — the same
+structure as rust-analyzer sitting on the same query foundation (Salsa) as
+rustc.
 
-したがって「まずビルドを作り、後で言語サーバを足す」という順序は成立しない。
-後付け不可能な制約を最初に確定させ、言語サーバの出荷自体は後回しにする。
+- The incremental evaluation engine = what the language server needs
+  (partial re-evaluation per keystroke)
+- Typed values with provenance = what the language server needs
+  (go-to-definition, hover, diagnostics)
+- `dowel build` and the language server pose different queries to the same
+  query graph
 
-## 2. 後付け不可能な4制約
+So "build the build system first, add the language server later" is not a
+viable order. The constraints that cannot be retrofitted are fixed first;
+shipping the language server itself is deferred.
 
-評価器を素朴なツリーウォーク型インタプリタとして書くと、以下は取り返しがつかない。
+## 2. The four constraints that cannot be retrofitted
 
-1. **誤り耐性のある構文解析** — 構文エラーで停止せず部分木を保持して評価を継続する。
-   ロスレス CST を正本とし、AST はその射影とする
-2. **スパンの全面保持** — 全ての値がソース位置を持つ。文字列展開や変換を経ても失わない
-3. **キャンセル可能性** — 打鍵ごとに前の問い合わせを中断する。評価器の全階層が
-   キャンセルを伝播できること
-4. **停止性の保証** — 非チューリング完全にする理由は記述の単純化ではなく、
-   言語サーバが常に応答することの保証にある
+Write the evaluator as a naive tree-walking interpreter and the following
+become unrecoverable:
 
-## 3. クエリ目録（初期案）
+1. **Error-tolerant parsing** — do not stop at syntax errors; keep partial
+   trees and continue evaluating. The lossless CST is the source of truth;
+   the AST is a projection of it
+2. **Spans everywhere** — every value carries a source location, surviving
+   string expansion and transformation
+3. **Cancellability** — every keystroke cancels the previous query; every
+   layer of the evaluator must propagate cancellation
+4. **Guaranteed termination** — the reason for non-Turing-completeness is not
+   simplicity of authoring but guaranteeing the language server always
+   responds
 
-| クエリ | 入力 | 出力 |
+## 3. Query catalog (initial draft)
+
+| Query | Input | Output |
 |---|---|---|
-| `parse(file)` | ファイル内容 | CST |
-| `eval(module)` | CST、親スコープ | 値の環境 |
-| `resolve(target)` | 名前 | ターゲット定義 |
-| `interface(target)` | ターゲット | 伝播プロパティの併合結果 |
-| `probe(toolchain, check)` | ツールチェーンハッシュ、検査内容 | 事実 |
-| `plan(target, config)` | ターゲット、構成 | アクショングラフ |
+| `parse(file)` | file contents | CST |
+| `eval(module)` | CST, parent scope | value environment |
+| `resolve(target)` | name | target definition |
+| `interface(target)` | target | merged propagated properties |
+| `probe(toolchain, check)` | toolchain hash, check contents | fact |
+| `plan(target, config)` | target, configuration | action graph |
 
-### 必須の最適化
+### Required optimizations
 
-- **early cutoff** — 再評価結果が前回と同一なら依存側を無効化しない。
-  コメント編集がアクショングラフ再生成に波及しないのはこの機構による。
-  Salsa 系実装で最も効果が大きい
-- **耐久度の階層化** — マニフェストは頻繁に変わり、ツールチェーンの事実はほぼ変わらない。
-  層ごとに耐久度を持たせ、安定層の再検証自体を省略する
-- **並列評価とキャンセル**
+- **Early cutoff** — if re-evaluation produces the same result as before, do
+  not invalidate dependents. This is why a comment edit does not cascade into
+  action-graph regeneration; it is the highest-value optimization in
+  Salsa-style implementations
+- **Durability layering** — manifests change often; toolchain facts almost
+  never. Layers carry durability levels, and re-validation of stable layers
+  is skipped entirely
+- **Parallel evaluation and cancellation**
 
-## 4. 値の表現
+## 4. Value representation
 
 ```
 Value = { type, data, provenance }
 ```
 
-来歴を副次情報ではなく値の構成要素として持つ。来歴はクエリグラフの射影であるため、
-増分評価エンジンがあれば追加コストはほぼ発生しない。
+Provenance is a constituent of the value, not side-band data. Since
+provenance is a projection of the query graph, it costs almost nothing extra
+once the incremental engine exists.
 
-## 5. 永続化（常駐なし）
+## 5. Persistence (no daemon)
 
-常駐デーモンを持たない（[ADR-0002](adr/0002-no-daemon.md)）。
-メモリ上のグラフをプロセス間で保持できないため、以下3点で代替する。
+There is no resident daemon ([ADR-0002](adr/0002-no-daemon.md)). Since the
+in-memory graph cannot be kept across processes, three things substitute:
 
-### 5.1 復元コストを O(触れたノード) にする
+### 5.1 Make restoration cost O(touched nodes)
 
-一括直列化・一括復元は避ける。グラフが育つほど増分の利点を失うため。
+Avoid serialize-everything / restore-everything — it forfeits the incremental
+advantage as the graph grows.
 
-- **mmap 可能な固定長レコードのインデックス** + **追記専用の値ログ**
-- インデックスにはクエリキーのハッシュ、出力フィンガープリント、依存辺のオフセットのみを置く
-- ノードの実体は必要になるまで読まない。検証はフィンガープリント比較のみで済むため、
-  大半のノードは値本体を読まずに「変化なし」と判定できる
-- mmap と OS ページキャッシュの組み合わせが、実質的に常駐の代替となる。
-  常駐を避けることの代償の大部分はこの一点で回収される
+- An **mmap-able fixed-length record index** + an **append-only value log**
+- The index holds only query-key hashes, output fingerprints, and offsets of
+  dependency edges
+- Node bodies are not read until needed. Validation is fingerprint comparison
+  only, so most nodes are judged "unchanged" without reading their values
+- mmap plus the OS page cache is the effective substitute for residency; most
+  of the cost of avoiding a daemon is recovered right here
 
-### 5.2 変更検出
+### 5.2 Change detection
 
-ファイル監視を使えないため、既知の入力集合に対する `stat` 走査で判定する。
+File watching is unavailable, so changes are judged by a `stat` sweep over
+the known input set.
 
-- キーは `(mtime, size, inode, ctime)`。差異が出た場合のみ内容ハッシュを取る
-- 数千ファイル規模なら並列 `stat` で数ミリ秒。ninja が実証済みの範囲
-- mtime 粒度とネットワーク FS の時刻ずれにはハッシュへのフォールバックで対処
-- 検証は遅延伝播とする。葉の変更を印付けするのみで、依存側は問い合わせが
-  到達したときに初めて検証する
+- The key is `(mtime, size, inode, ctime)`; content is hashed only when they
+  differ
+- At a few thousand files, parallel `stat` takes single-digit milliseconds —
+  the territory ninja has already proven
+- mtime granularity and clock skew on network file systems are handled by
+  falling back to hashing
+- Validation propagates lazily: leaf changes are only marked, and dependents
+  are validated when a query actually reaches them
 
-### 5.3 複数プロセスからの同時アクセス
+### 5.3 Concurrent access from multiple processes
 
-CLI と言語サーバが同じストアを触るため必須。
+Required because the CLI and the language server touch the same store.
 
-- 値ログは追記専用。書き込み中の内容は誰にも見えない
-- インデックス更新はテンポラリへの書き出し + `rename` による原子的差し替え
-- 書き手は単一に制限（`flock`）。取得できなければ自プロセスのメモリ内でのみ計算し、
-  結果を書かない。**正しさは失われず、キャッシュの利得のみを失う**
-- 任意の時点でプロセスが落ちてもストアが壊れないことを不変条件とする
+- The value log is append-only; in-progress writes are invisible to everyone
+- Index updates are written to a temporary file and swapped in with an atomic
+  `rename`
+- The writer is limited to one (`flock`). A process that cannot take the lock
+  computes in its own memory and writes nothing back. **Correctness is never
+  lost — only the cached speedup**
+- Invariant: a process dying at any point never corrupts the store
 
-### 5.4 付随して必要になるもの
+### 5.4 What this drags in
 
-- **起動時間の予算化** — 無操作時 10ms 以下を目標とする。常駐なしでは起動時間が
-  毎回課金されるため、実装言語の選択、動的リンクの回避、起動時に読むファイル数の抑制が効く
-- **ストアの GC** — 追記専用のため肥大する。`.dowel/cache/` 配下（gitignore 対象）に置き、
-  世代数または容量上限で回収する `dowel cache gc` を用意する
-- **プローブ事実 DB の分離** — ツールチェーン依存の事実はプロジェクト間で共有したいため、
-  ユーザキャッシュ領域に内容アドレスで置く。耐久度階層の最上位
+- **A startup-time budget** — target: under 10ms when there is nothing to do.
+  Without a daemon, startup is paid on every run, so implementation-language
+  choice, avoiding dynamic linking, and limiting files read at startup all
+  matter
+- **Store GC** — append-only means growth. The store lives under
+  `.dowel/cache/` (gitignored) and `dowel cache gc` collects by generation
+  count or size cap
+- **A separate probe-fact DB** — toolchain-dependent facts should be shared
+  across projects, so they live in the user cache area, content-addressed;
+  the top of the durability hierarchy
 
-## 6. 言語サーバの位置づけ
+## 6. Where the language server stands
 
-「常駐なし」と言語サーバは矛盾しない。区別は起動主体と寿命にある。
+"No daemon" and a language server do not conflict. The distinction is who
+starts it and how long it lives.
 
-| | 起動主体 | 寿命 | 利用者の認識 |
+| | Started by | Lifetime | User's perception |
 |---|---|---|---|
-| デーモン | 暗黙 | プロジェクトを跨いで残存 | 存在を意識しない・落とし方が分からない |
-| 言語サーバ | エディタ | エディタと共に終了 | 明示的に起動されたもの |
+| daemon | implicit | outlives projects | unaware it exists; unclear how to stop it |
+| language server | the editor | ends with the editor | something explicitly started |
 
-不変条件:
+Invariants:
 
-- **CLI は言語サーバの存在に一切依存しない**。起動していなくても全機能が同じ結果を出す
-- 言語サーバのメモリ上グラフはディスクストアの派生物。正本は常にディスク側
-- 言語サーバは書き手ロックを保持し続けない。未保存バッファ由来の結果はストアに書かない
+- **The CLI never depends on the language server's existence.** Every feature
+  produces the same result whether or not it is running
+- The language server's in-memory graph is derived from the disk store; the
+  disk is always the source of truth
+- The language server does not hold the writer lock persistently, and results
+  derived from unsaved buffers are never written to the store
 
-## 7. 想定規模と限界
+## 7. Intended scale and limits
 
-常駐なしの構成は極端な規模で不利になる。Bazel / Buck2 がデーモンを採るのは、
-数十万ノード規模でインデックス検証コスト自体が支配的になるためである。
+A daemonless design loses at extreme scale. Bazel / Buck2 adopt daemons
+because at hundreds of thousands of nodes, index validation itself dominates.
 
-想定規模はターゲット数 10^3〜10^4。モノレポ全体を単一グラフに載せる用途は目標に含めない。
+The intended scale is 10^3–10^4 targets. Whole-monorepo single-graph usage is
+not a goal.
 
-## 8. 将来の実行層との関係
+## 8. Relation to a future execution layer
 
-内容アドレス、追記ログ、フィンガープリント検証という機構は、
-将来アクションキャッシュへ拡張した際にそのまま再利用される。二重に作る部分はない。
+Content addressing, append-only logs, and fingerprint validation are exactly
+the machinery an action cache needs; extending to one later reuses them
+as-is. Nothing gets built twice.
 
-## 9. cold configure の削減
+## 9. Reducing cold configure
 
-configure 時間は次の3項に分解される。
+Configure time decomposes into three terms:
 
-1. **プローブ実行** — `try_compile` 等。1件ごとにコンパイラとリンカをプロセス起動する
-2. **探索の走査** — `find_package` / pkg-config によるファイルシステム走査
-3. **マニフェスト評価とファイル書き出し**
+1. **Probe execution** — `try_compile` and friends; each one launches a
+   compiler and linker process
+2. **Discovery sweeps** — file-system walking by `find_package` / pkg-config
+3. **Manifest evaluation and file writing**
 
-体感的な遅さの主因は 1 と 2 であり、実装言語に依存しない。
-3 が支配的になるのはターゲット数が数千規模の場合。
+The felt slowness comes mostly from 1 and 2, independent of implementation
+language. 3 dominates only at thousands of targets.
 
-対策として、プローブ結果を暗黙のキャッシュ（`CMakeCache.txt` 相当）ではなく
-**独立した事実データベース**として扱う。
+The countermeasure: treat probe results not as an implicit cache
+(`CMakeCache.txt`-style) but as an **independent fact database**.
 
-- キーは `toolchain のハッシュ + プローブのソース + フラグ`
-- プロジェクト間・マシン間で共有可能。同じコンパイラを使う限り、
-  同一プローブは一度しか実行されない
-- クロスコンパイル時は事実 DB を差し替えるだけになり、cross file の手書き記述が縮む
-- 再現性の観点でも意味がある。現状のプローブは「実行したホストの状態」という
-  記録されない入力に依存しており、これを明示的な入力へ格上げできる
+- Keyed by toolchain hash + probe source + flags
+- Shareable across projects and machines; as long as the same compiler is
+  used, the same probe runs once
+- Cross compilation becomes swapping the fact DB, shrinking hand-written
+  cross files
+- It also matters for reproducibility: today's probes depend on "the state of
+  the host they ran on", an unrecorded input, which this promotes to an
+  explicit one

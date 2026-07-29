@@ -1,0 +1,34 @@
+# GitHub Pages configuration. Publishing the main branch at `/ (root)` turns
+# the repository into the documentation site as-is
+# (Settings → Pages → Deploy from a branch → main / root).
+# The plugins listed here are the ones GitHub Pages enables by default; they
+# are spelled out so a local preview (jekyll serve) behaves the same way.
+title: dowel
+description: A build system for C (under development)
+lang: en
+theme: jekyll-theme-primer
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+plugins:
+  - jekyll-optional-front-matter # serve .md files without front matter as pages
+  - jekyll-relative-links        # resolve relative links to .md into .html
+  - jekyll-readme-index          # make each directory's README.md its index
+  - jekyll-default-layout        # apply the theme default to pages without a layout
+  - jekyll-titles-from-headings  # use the leading heading as the page title
+
+relative_links:
+  enabled: true
+  collections: true
+
+readme_index:
+  enabled: true
+
+# Excluded from the site. Sources linked from the documents (crates/ etc.)
+# stay included.
+exclude:
+  - target
+  - .work
+  - vendor

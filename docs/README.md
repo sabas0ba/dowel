@@ -1,81 +1,135 @@
-# 文書一覧
+# dowel documentation
 
-## 目的別の参照先
+The index of user-facing documents (how-to and reference) and internal
+documents (design, development, planning).
 
-| 目的 | 文書 |
+## How-to
+
+| Document | Contents |
 |---|---|
-| 目標と非目標 | [00-overview.md](00-overview.md) |
-| 実装済みの機能 | [91-implementation-status.md](91-implementation-status.md) |
-| コマンドの仕様 | [60-cli.md](60-cli.md) |
-| マニフェストの記述方法 | [10-manifest.md](10-manifest.md) |
-| 内部構造（増分エンジン、ストア） | [20-architecture.md](20-architecture.md) |
-| エディタ・ランナー・デバッガ | [30-devexp.md](30-devexp.md) |
-| 既存プロジェクトからの移行 | [40-migration.md](40-migration.md) |
-| 開発への参加 | [50-development.md](50-development.md) → [51-testing.md](51-testing.md) |
-| 今後の計画 | [90-roadmap.md](90-roadmap.md) |
-| ある決定の根拠 | [adr/](adr/README.md) |
-| 決まっていないこと | [99-open-questions.md](99-open-questions.md) |
+| [62-getting-started.md](62-getting-started.md) | From installation to building, testing, and running your first project |
+| [63-guides.md](63-guides.md) | Task-oriented how-tos: building, testing, configurations and feature flags, tracing provenance, cross execution, editors, the cache, CI integration |
+| [61-acquisition.md](61-acquisition.md) | Acquiring dowel itself and switching versions (`dowelup`) |
 
-## 番号の規約
+A working example lives at [`examples/hello`](../examples/hello).
 
-十の位が主題を、一の位が同一主題内の分冊を表す。
+## Reference
 
-| 帯 | 主題 |
+| Document | Contents |
 |---|---|
-| `0x` | 全体の位置づけ |
-| `1x` | マニフェスト言語の仕様 |
-| `2x` | 内部構造 |
-| `3x` | 開発体験（ランナー、デバッガ、エディタ） |
-| `4x` | 既存ビルドシステムからの移行 |
-| `5x` | 本リポジトリの開発 |
-| `6x` | 利用者向けのリファレンス |
-| `9x` | 計画と現況 |
-| `99` | 未決事項 |
+| [10-manifest.md](10-manifest.md) | The manifest model: the two files, the evaluation pipeline in one pass |
+| [11-toml-reference.md](11-toml-reference.md) | `dowel.toml`: every table and key that is read, and how it is validated |
+| [12-build-reference.md](12-build-reference.md) | `dowel.build`: the complete syntax, every target/runner property, the configuration vocabulary |
+| [13-semantics.md](13-semantics.md) | How declared values behave: specialization, propagation and merging, planning, execution |
+| [60-cli.md](60-cli.md) | The command reference: every option, output contract, exit status, machine-readable diagnostics |
+| [91-implementation-status.md](91-implementation-status.md) | What works today: the not-yet-implemented list, measurements, divergences from the design documents |
 
-新しい文書は、既存の帯に収まるならその帯に追加する。収まらない主題が生じた場合に
-新しい帯を追加する。番号の再割り当ては行わない。文書番号は Markdown のリンクと
-ソースコード中のコメントの双方から参照されており、変更すると参照が解決しなくなる。
+The reference includes the full design, so parts of it are not implemented
+yet. Unimplemented items are marked in place and listed in 91. Where the two
+disagree, 91 describes the current state.
 
-## 一覧
+## Design (background and internals)
 
-| 文書 | 内容 |
+| Document | Contents |
 |---|---|
-| [00-overview.md](00-overview.md) | 目標・非目標、既存システムに対する位置づけ |
-| [10-manifest.md](10-manifest.md) | マニフェスト仕様（`dowel.toml` / `dowel.build`）、型と併合意味論 |
-| [20-architecture.md](20-architecture.md) | 増分クエリエンジン、永続化ストア、言語サーバの内部構造 |
-| [30-devexp.md](30-devexp.md) | ランナー抽象、デバッガ連携、エディタ連携 |
-| [40-migration.md](40-migration.md) | 既存ビルドシステムからの移行 |
-| [50-development.md](50-development.md) | 開発環境（Nix / コンテナ）と規約 |
-| [51-testing.md](51-testing.md) | テストスイートの設計。層ごとの責務と、テストを足すときの判断 |
-| [60-cli.md](60-cli.md) | コマンド、出力の約束、ログとデバッグ |
-| [61-acquisition.md](61-acquisition.md) | dowel 自体の取得と版の切り替え（`dowelup`） |
-| [90-roadmap.md](90-roadmap.md) | 実装順序と検証計画 |
-| [91-implementation-status.md](91-implementation-status.md) | 実装状況、計測、設計文書との差異 |
-| [99-open-questions.md](99-open-questions.md) | 未決事項 |
-| [adr/](adr/README.md) | 決定事項とその根拠 |
+| [00-overview.md](00-overview.md) | Goals, non-goals, positioning against existing systems |
+| [20-architecture.md](20-architecture.md) | The incremental query engine, the persistent store, language-server internals |
+| [30-devexp.md](30-devexp.md) | The design of runners, debugger integration, editor integration |
+| [40-migration.md](40-migration.md) | Migration from existing build systems (design; the commands are not implemented) |
+| [adr/](adr/README.md) | Decisions and their rationale (ADRs) |
+| [90-roadmap.md](90-roadmap.md) | Implementation order and verification plan |
+| [99-open-questions.md](99-open-questions.md) | Open questions |
 
-## 文書の扱い
+## Developing this repository
 
-- 決定は [ADR](adr/README.md) に記録する。決定を覆す場合は当該 ADR を Superseded とし、
-  新しい ADR を追加する。既存の ADR は書き換えない
-- 未決事項は [99-open-questions.md](99-open-questions.md) に集約する。
-  決定したものは ADR へ移し、当該項目を削除する
-- 計画と現況を分離する。[90-roadmap.md](90-roadmap.md) は計画、
-  [91-implementation-status.md](91-implementation-status.md) は現況を記述する。
-  両者が食い違う場合は後者を現況とみなす
-- 実装が仕様と異なる場合は、91 の「設計文書との差異」節に記録する
-
-## 検査されるもの
-
-文書の不整合はビルドにもテストにも影響しないため、検査しない限り検出されない。
-`crates/dowel-cli/tests/docs.rs` が機械的に判定できる範囲を見る。
-
-| 対象 | 落ちる条件 |
+| Document | Contents |
 |---|---|
-| 相対リンク | 指す先が存在しない |
-| ソースとスクリプトが参照する文書 | 文書番号を変えてリンク以外の参照が残った |
-| 本一覧 | 文書を追加して記載しなかった。記載を消さずに文書を消した |
-| [adr/README.md](adr/README.md) の表 | ADR を追加して記載しなかった。その逆 |
-| [91-implementation-status.md](91-implementation-status.md) のクレート表 | クレートを追加して記載しなかった。その逆 |
+| [50-development.md](50-development.md) | The development environment (Nix / container) and conventions |
+| [51-testing.md](51-testing.md) | Test-suite design: what each layer answers, and where a new test belongs |
 
-記述内容の妥当性は検査しない。設計は [51-testing.md](51-testing.md) にある。
+## Publishing with GitHub Pages
+
+This repository can be published as-is with GitHub Pages
+(Settings → Pages → Deploy from a branch → `main` / `/ (root)`).
+The configuration lives in [`_config.yml`](../_config.yml). When published,
+relative links between Markdown files resolve to HTML, and each directory's
+README becomes that directory's index page. Documents are written with
+relative links only, so they read the same on the repository and on the site
+without a separate build step.
+
+## Numbering convention
+
+The tens digit is the subject; the ones digit distinguishes documents within
+a subject.
+
+| Band | Subject |
+|---|---|
+| `0x` | Overall positioning |
+| `1x` | The manifest language reference |
+| `2x` | Internals |
+| `3x` | Developer experience (runners, debuggers, editors) |
+| `4x` | Migration from existing build systems |
+| `5x` | Developing this repository |
+| `6x` | User-facing documents (reference and how-to) |
+| `9x` | Planning and current state |
+| `99` | Open questions |
+
+A new document goes into an existing band when it fits; a new band is added
+only when a subject fits none. Numbers are never reassigned: document numbers
+are referenced both from Markdown links and from comments in the source code,
+and changing one breaks those references.
+
+## Index
+
+| Document | Contents |
+|---|---|
+| [00-overview.md](00-overview.md) | Goals, non-goals, positioning against existing systems |
+| [10-manifest.md](10-manifest.md) | The manifest model and the index of the language references |
+| [11-toml-reference.md](11-toml-reference.md) | `dowel.toml` reference: tables, keys, validation |
+| [12-build-reference.md](12-build-reference.md) | `dowel.build` reference: syntax, properties, configuration vocabulary |
+| [13-semantics.md](13-semantics.md) | Semantics: specialization, propagation and merging, planning, execution |
+| [20-architecture.md](20-architecture.md) | The incremental query engine, the persistent store, language-server internals |
+| [30-devexp.md](30-devexp.md) | Runners, debugger integration, editor integration |
+| [40-migration.md](40-migration.md) | Migration from existing build systems |
+| [50-development.md](50-development.md) | The development environment (Nix / container) and conventions |
+| [51-testing.md](51-testing.md) | Test-suite design: what each layer answers, and where a new test belongs |
+| [60-cli.md](60-cli.md) | The command reference, output contract, logging and debugging |
+| [61-acquisition.md](61-acquisition.md) | Acquiring dowel itself and switching versions (`dowelup`) |
+| [62-getting-started.md](62-getting-started.md) | How-to: from installation to your first build |
+| [63-guides.md](63-guides.md) | Task-oriented how-to guides |
+| [90-roadmap.md](90-roadmap.md) | Implementation order and verification plan |
+| [91-implementation-status.md](91-implementation-status.md) | Implementation status, measurements, divergences from the design documents |
+| [99-open-questions.md](99-open-questions.md) | Open questions |
+| [adr/](adr/README.md) | Decisions and their rationale |
+
+## Document conventions
+
+- Decisions are recorded as [ADRs](adr/README.md). To overturn a decision,
+  mark its ADR as Superseded and add a new one; existing ADRs are never
+  rewritten
+- Open questions are collected in [99-open-questions.md](99-open-questions.md).
+  Once decided, an item moves to an ADR and is deleted from the list
+- Planning and current state are kept separate: [90-roadmap.md](90-roadmap.md)
+  is the plan, [91-implementation-status.md](91-implementation-status.md) is
+  the current state. Where they disagree, the latter wins
+- When the implementation diverges from a design document, the divergence is
+  recorded in the "Divergences from the design documents" section of 91
+- User-facing documents (10 / 6x) describe what works; anything not yet
+  implemented is marked as such in place
+
+## What is machine-checked
+
+Documentation inconsistencies break neither the build nor the tests, so they
+go undetected unless checked. `crates/dowel-cli/tests/docs.rs` covers what can
+be judged mechanically.
+
+| Target | Failure condition |
+|---|---|
+| Relative links | The target does not exist |
+| Documents named from sources and scripts | A document number changed while a non-link reference remained |
+| The index above | A document was added but not listed, or removed while its entry remained |
+| The table in [adr/README.md](adr/README.md) | An ADR was added but not listed, or the reverse |
+| The crate table in [91-implementation-status.md](91-implementation-status.md) | A crate was added but not listed, or the reverse |
+
+The correctness of the prose itself is not checked. The design is described in
+[51-testing.md](51-testing.md).

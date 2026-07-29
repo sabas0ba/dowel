@@ -1,21 +1,25 @@
-# 開発環境
+# Development environment
 
-本プロジェクトの開発は、[sabas0ba/dotfiles](https://github.com/sabas0ba/dotfiles) が
-定義する Nix / direnv 環境、およびそこから構築する同一内容のコンテナ環境の上で行う。
+Development happens inside the Nix / direnv environment defined by
+[sabas0ba/dotfiles](https://github.com/sabas0ba/dotfiles), or inside the
+container environment built from it with identical contents.
 
-ホストへツールを直接導入しない。`apt install` / `brew install` / `npm install -g` /
-`pip install --user` 等は再現性を損なうため用いない。
+Tools are not installed directly on the host. `apt install` / `brew install` /
+`npm install -g` / `pip install --user` and the like undermine
+reproducibility and are not used.
 
-## 1. 前提
+## 1. Prerequisites
 
-- [Nix](https://nixos.org/download/)（flakes を有効化すること）
-- [direnv](https://direnv.net/)（任意。導入すると `cd` のみで環境に入る）
-- Docker（任意。コンテナ環境を使用する場合のみ）
+- [Nix](https://nixos.org/download/) (with flakes enabled)
+- [direnv](https://direnv.net/) (optional; with it, `cd` alone enters the
+  environment)
+- Docker (optional; only if you use the container environment)
 
-導入手順、バージョン固定の方針、チェックサム検証の手順は dotfiles の README を参照する。
-インストーラを検証せず直接実行する方式（`curl ... | sh`）は用いない。
+Installation steps, the version-pinning policy, and checksum verification are
+covered by the dotfiles README. Running installers unverified
+(`curl ... | sh`) is not done.
 
-## 2. 環境の構築
+## 2. Setting up
 
 ```sh
 git clone https://github.com/sabas0ba/dotfiles.git ~/repos/dotfiles
@@ -24,127 +28,140 @@ nix develop
 scripts/check-env.sh
 ```
 
-direnv を使用する場合の設定、および home-manager によるホームディレクトリ構成の
-適用手順（`make hm-dry` / `make hm-switch`）も dotfiles の README に従う。
+direnv setup and applying the home-manager configuration (`make hm-dry` /
+`make hm-switch`) also follow the dotfiles README.
 
-作業は開発シェルの内部で行う。環境変数 `DOTFILES_ENV` が `nix-develop` であれば
-開発シェル内である。
+Work is done inside the development shell. If the environment variable
+`DOTFILES_ENV` is `nix-develop`, you are inside it.
 
-## 3. コンテナ環境
+## 3. The container environment
 
-ホストと同一の環境をコンテナ内に構築できる。Dockerfile はツール一覧を持たず、
-dotfiles の `flake.nix` を評価するため、内容はホストと一致する。
-
-```sh
-make docker-build   # イメージの構築
-make docker-shell   # コンテナ内の開発シェルに入る
-make docker-check   # コンテナ内でのスモークテスト
-```
-
-CI を `--network none` のコンテナ内で回すことは、CI 環境をホストおよびコンテナと
-別の環境にしないための方針である。
-
-**当面はこの形を採らない。** CI は GitHub Actions の実行機で回す
-（[`.github/workflows/verify.yml`](../.github/workflows/verify.yml)）。
-dotfiles の flake を本リポジトリの CI から評価する経路が未整備であり、
-現時点でそこに手を入れる必要はないと判断した。
-
-移行が要るようになった場合の費用を小さく保つため、**検査の内容は実行環境から
-切り離してある**。ローカルも CI も `scripts/verify.sh` という同じ入口を叩き、
-ワークフローがするのはそれを起動することだけである。実行環境を移す際は
-ワークフローの中身が入れ替わるだけで、検査の定義は動かない。
-
-## 3.1 検証
-
-検証の入口は1つである。
+An environment identical to the host can be built inside a container. The
+Dockerfile carries no tool list of its own — it evaluates the dotfiles
+`flake.nix` — so the contents match the host.
 
 ```sh
-make verify      # 全段階を実行して結果を .work/verify/ に残す
+make docker-build   # build the image
+make docker-shell   # enter the development shell inside the container
+make docker-check   # smoke test inside the container
 ```
 
-途中の段階が失敗しても止まらず、最後まで進んでから落ちる。「どこで落ちたか」
-だけでなく「他は通っていたか」が同じ実行で分かる方が、修復の反復が速いため。
+Running CI inside a `--network none` container is the policy that keeps CI
+from becoming a third environment distinct from host and container.
 
-| 生成物 | 内容 |
+**For now this is not in effect.** CI runs on GitHub Actions runners
+([`.github/workflows/verify.yml`](../.github/workflows/verify.yml)). The path
+for evaluating the dotfiles flake from this repository's CI is not set up,
+and there is no present need to build it.
+
+To keep the eventual migration cheap, **what is checked is decoupled from
+where it runs**: local runs and CI both invoke the same entry point,
+`scripts/verify.sh`, and the workflow does nothing but launch it. Moving the
+execution environment later swaps the workflow's internals only; the
+definition of the checks does not move.
+
+## 3.1 Verification
+
+Verification has a single entry point.
+
+```sh
+make verify      # run every stage, leaving results in .work/verify/
+```
+
+A failing stage does not stop the run; everything executes and the run fails
+at the end. Knowing "what else passed" in the same run — not just "where it
+failed" — makes the repair loop faster.
+
+| Output | Contents |
 |---|---|
-| `.work/verify/summary.md` | 段階ごとの結果、通過数、所要時間、起動時間の計測 |
-| `.work/verify/results.json` | 同じ内容の機械可読な形 |
-| `.work/verify/logs/<段階>.log` | 各段階の出力そのまま |
-| `.work/verify/startup.json` | 起動時間の計測 |
+| `.work/verify/summary.md` | per-stage results, pass counts, timing, startup measurements |
+| `.work/verify/results.json` | the same, machine-readable |
+| `.work/verify/logs/<stage>.log` | each stage's raw output |
+| `.work/verify/startup.json` | startup-time measurements |
 
-CI はこの `.work/verify/` を成果物として保存し、`summary.md` をジョブの要約に
-出す。失敗した実行の結果こそ残るようにしてある。
+CI stores `.work/verify/` as an artifact and prints `summary.md` into the job
+summary. Results of failing runs, especially, are preserved.
 
-段階は次の通り。`fmt` / `clippy` / クレートごとの単体テスト /
-パーサの頑健性 / モデルの統合と増分 / e2e / シナリオ / 実物フィクスチャ /
-診断と網羅 / 例 / リリースビルド / 起動時間の計測。
-起動時間だけは参考扱いとし、実行機の揺れで全体を落とさない
-（明らかな退行のみ拾う緩い上限を置いてある）。
+The stages: `fmt` / `clippy` / per-crate unit tests / parser robustness /
+model integration and incrementality / e2e / scenarios / real-shaped fixtures /
+diagnostics and coverage / examples / release build / startup measurement.
+Startup measurement alone is informational and does not fail the run on
+machine noise (a loose cap catches only clear regressions).
 
-各層が答える問いと、テストを足すときにどこへ置くかは
-[51-testing.md](51-testing.md) にある。
+What each layer answers, and where a new test belongs, is in
+[51-testing.md](51-testing.md).
 
-一部だけ回したい場合は段階を飛ばせる。
+To run a subset, stages can be skipped:
 
 ```sh
 DOWEL_VERIFY_SKIP="e2e example" make verify
 ```
 
-`make check`（整形検査 + 静的解析 + テスト）は素早い確認用であり、記録は残らない。
+`make check` (formatting check + lints + tests) is for quick iteration and
+leaves no records.
 
-## 4. ツールの追加
+## 4. Adding tools
 
-本プロジェクトの実装に必要なツール（コンパイラ、リンカ、qemu、ninja 等）は、
-dotfiles 側の `nix/packages.nix` に追記して取得する。手順は以下。
+Tools the implementation needs (compilers, linkers, qemu, ninja, …) are added
+to `nix/packages.nix` on the dotfiles side:
 
-1. `nix/packages.nix` にパッケージ名を追記する
-2. コマンドとして使用するものは `scripts/check-env.sh` の `required_commands` にも追記する
-3. `make check` が成功することを確認する
+1. Add the package name to `nix/packages.nix`
+2. If it is used as a command, also add it to `required_commands` in
+   `scripts/check-env.sh`
+3. Confirm `make check` passes
 
-`Dockerfile` にツール名を追記しない。定義が重複し不整合が生じるため。
+Do not add tool names to the `Dockerfile`; duplicated definitions drift.
 
-依存パッケージが増えること自体を事前に確認する。
+Adding a dependency at all is confirmed in advance.
 
-## 5. 規約
+## 5. Conventions
 
-dotfiles の README が規約の所在である。本プロジェクト固有の事項のみ以下に記す。
-記載のない事項は dotfiles の規約に従う。
+The dotfiles README is where the conventions live. Only project-specific
+items are listed here; anything unlisted follows dotfiles.
 
-### 継承する事項
+### Inherited
 
-- コミットは Conventional Commits。1 コミット 1 目的
-- 機能追加は branch または worktree で行う
-- 一時ファイルはリポジトリ内の git ignore された `.work/` に置く。
-  `/tmp` 等リポジトリ外部に作成しない
-- 外部の成果物はすべて一意に固定する。タグやブランチ名のみによる参照は固定とみなさない
-- 秘密情報をコミットしない。マシン固有の設定は `.envrc.local`（git 管理外）に置く
-- 整形は手作業ではなく `make fmt` で行う
-- コメントは実装内容ではなく、その選択の理由を記述する
+- Commits follow Conventional Commits; one purpose per commit
+- Feature work happens on a branch or worktree
+- Temporary files go in the gitignored `.work/` inside the repository, never
+  outside it (`/tmp` etc.)
+- External artifacts are pinned uniquely; a reference by tag or branch name
+  alone does not count as pinned
+- No secrets in commits; machine-specific settings go in `.envrc.local`
+  (outside git)
+- Formatting is done by `make fmt`, not by hand
+- Comments explain why a choice was made, not what the code does
 
-### 本プロジェクト固有
+### Project-specific
 
-- 実装言語は Rust（[ADR-0007](adr/0007-implementation-language.md)）。
-  コアは標準ライブラリのみに依存する。外部 crate の追加は都度合意する
-- **プログラムが扱う言語は英語**とする。識別子（テスト名を含む）、文字列リテラル、
-  診断・ログ・CLI の出力、生成物（`build.ninja` 等）、メタデータ
-  （`Cargo.toml` の `description`、ワークフローの step 名）が対象。
-  例外は、非 ASCII の扱いそのものを検査するテストデータのみ。
-  **コメントと doc コメント、および `docs/` は日本語**とする。
-  「コメントは実装内容ではなく、その選択の理由を記述する」という規約は、
-  母語で書いたほうが密度が上がる
-- 整形は `make fmt`（`cargo fmt`）、静的解析は `make lint`（`cargo clippy -D warnings`）
-- 提出前に `make check`（整形検査 + 静的解析 + テスト）を通す
-- 設計上の決定は `docs/adr/` に ADR として記録する。
-  決定を覆す場合は当該 ADR を Superseded とし、新しい ADR を追加する
+- The implementation language is Rust
+  ([ADR-0007](adr/0007-implementation-language.md)). The core depends on the
+  standard library only; adding an external crate requires agreement each
+  time
+- **The language of the program is English**: identifiers (including test
+  names), string literals, diagnostics / logs / CLI output, generated files
+  (`build.ninja` etc.), and metadata (`description` in `Cargo.toml`, workflow
+  step names). The only exception is test data that exercises non-ASCII
+  handling itself.
+  **Documentation (`docs/` and the READMEs) is written in English.**
+  Code comments and doc comments are in Japanese — the convention that
+  comments record the reason for a choice benefits from the density of the
+  native language
+- Formatting is `make fmt` (`cargo fmt`); lints are `make lint`
+  (`cargo clippy -D warnings`)
+- Run `make check` (formatting check + lints + tests) before submitting
+- Design decisions are recorded as ADRs in `docs/adr/`. To overturn one, mark
+  it Superseded and add a new ADR
 
-## 6. Claude Code に作業を引き継ぐ場合
+## 6. Handing work to Claude Code
 
-以下を明示すること。
+State explicitly:
 
-- dotfiles の環境（Nix 開発シェルまたはコンテナ）の内部で作業すること
-- dotfiles の [`CLAUDE.md`](https://github.com/sabas0ba/dotfiles/blob/main/CLAUDE.md)
-  および README を参照すること
-- 本リポジトリの `CLAUDE.md` はリポジトリ固有の指示であり、
-  共通規約より優先されること
+- Work inside the dotfiles environment (Nix development shell or container)
+- Refer to the dotfiles
+  [`CLAUDE.md`](https://github.com/sabas0ba/dotfiles/blob/main/CLAUDE.md)
+  and README
+- This repository's `CLAUDE.md` contains repository-specific instructions and
+  takes precedence over the shared conventions
 
-リポジトリルートの [`CLAUDE.md`](../CLAUDE.md) にこの旨を記載してある。
+The repository-root [`CLAUDE.md`](../CLAUDE.md) records the same.

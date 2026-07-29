@@ -1,20 +1,23 @@
 # Architecture Decision Records
 
-検討の過程で確定した決定と、その根拠を記録する。
-決定を覆す場合は、当該 ADR を Superseded とし、新しい ADR を追加する。
+Decisions made along the way, recorded together with their rationale.
+To overturn a decision, mark its ADR as Superseded and add a new one;
+existing ADRs are never rewritten. Each record is kept in the language it
+was originally written in.
 
-| ADR | 決定 | 状態 |
+| ADR | Decision | Status |
 |---|---|---|
-| [0001](0001-toolchain-vs-supply.md) | ツールチェーンは所有、依存供給は委譲する | Accepted |
-| [0002](0002-no-daemon.md) | 常駐デーモンを持たない | Accepted |
-| [0003](0003-manifest-split.md) | マニフェストを `dowel.toml` と `dowel.build` に分離する | Accepted |
-| [0004](0004-syntax.md) | 記述構文は TOML 風方言とし、意味論が同じ要素は既存言語から借用する | Accepted |
-| [0005](0005-migration.md) | 移行は動的抽出のみ。静的翻訳は行わない | Accepted |
-| [0006](0006-naming.md) | 名称は `dowel` とする（一次調査は未了） | Accepted |
-| [0007](0007-implementation-language.md) | 実装言語は Rust とし、コアは標準ライブラリのみで書く | Accepted |
-| [0008](0008-runner-transfer.md) | ランナーの転送先パスは位置で決め、文字列補間を導入しない | Accepted |
-| [0009](0009-file-identity.md) | `FileId` は正規化したパスのハッシュとする | Accepted |
-| [0010](0010-check-scope.md) | `check` は計画段まで走らせる | Accepted |
-| [0011](0011-cutoff-and-provenance.md) | 派生の指紋はスパンを含まず、来歴を読む経路はメモを経由しない | Accepted |
-| [0012](0012-store-contents.md) | ストアへ格納するのは評価結果のみとし、診断を持つファイルは格納しない | Accepted |
-| [0013](0013-self-acquisition.md) | dowel 自体の取得は別バイナリが担い、参照は commit sha に固定する | Accepted |
+| [0001](0001-toolchain-vs-supply.md) | Own the toolchain, delegate dependency supply | Accepted |
+| [0002](0002-no-daemon.md) | No resident daemon | Accepted |
+| [0003](0003-manifest-split.md) | Split the manifest into `dowel.toml` and `dowel.build` | Accepted |
+| [0004](0004-syntax.md) | The syntax is a TOML-style dialect; borrow elements whose semantics match existing languages | Accepted |
+| [0005](0005-migration.md) | Migration is dynamic extraction only; no static translation | Accepted |
+| [0006](0006-naming.md) | Use `dowel` as a provisional name | Superseded by [0014](0014-name-final.md) |
+| [0007](0007-implementation-language.md) | Implement in Rust; the core uses the standard library only | Accepted |
+| [0008](0008-runner-transfer.md) | Runner transfer paths are positional; no string interpolation | Accepted |
+| [0009](0009-file-identity.md) | `FileId` is the hash of the normalized path | Accepted |
+| [0010](0010-check-scope.md) | `check` runs through the planning stage | Accepted |
+| [0011](0011-cutoff-and-provenance.md) | Derived fingerprints exclude spans; provenance reads bypass the memo | Accepted |
+| [0012](0012-store-contents.md) | The store holds evaluation results only; files with diagnostics are not stored | Accepted |
+| [0013](0013-self-acquisition.md) | dowel acquires itself via a separate binary; references are pinned to commit shas | Accepted |
+| [0014](0014-name-final.md) | Adopt `dowel` as the official name | Accepted |

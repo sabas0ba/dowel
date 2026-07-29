@@ -1,361 +1,416 @@
-# 実装状況
+# Implementation status
 
-[90-roadmap.md](90-roadmap.md) はフェーズ単位の計画である。本文書は
-実装済みの機能を記録する。両者が食い違う場合、本文書を現況とみなす。
+[90-roadmap.md](90-roadmap.md) is the phase-level plan. This document records
+what is implemented. Where the two disagree, this document describes the
+current state.
 
-コマンドの使い方は [60-cli.md](60-cli.md) にある。
+The command reference is [60-cli.md](60-cli.md); task-oriented how-tos are in
+[63-guides.md](63-guides.md).
 
-## 方針: 最小構成を端から端まで先に通す
+## Approach: connect a minimal build end to end first
 
-ロードマップは Phase 1（コア）を完成させてから Phase 2（生成）へ進む順序を
-示しているが、実装ではこの順序を一度だけ変更した。パーサ → 評価 → ターゲットグラフ →
-アクショングラフ → ninja 生成 → 実際のコンパイル までを、各段階を最小限の実装で先に接続した。
+The roadmap orders Phase 1 (core) to completion before Phase 2 (generation),
+but the implementation deviated from that order exactly once: parser →
+evaluation → target graph → action graph → ninja generation → actual C
+compilation were connected first, each in minimal form.
 
-理由は2つ。
+Two reasons:
 
-- e2e 検証を初期から実施できる。「実際に C をコンパイルして実行し、
-  期待した出力が得られる」というテストが存在する状態を、以後の全ての変更の前提にできる
-- 後付けできない制約（docs/20-architecture.md 2節）の検証を早期に行える。
-  ロスレス CST とスパンの保持は、下流のアクション生成まで接続してはじめて検証できる
+- e2e verification becomes available from the start. "Compile real C, run it,
+  and check the output" exists as a test, and every later change builds on
+  that premise
+- The constraints that cannot be retrofitted (docs/20-architecture.md
+  section 2) get validated early. Lossless CSTs and span retention can only
+  be validated once things connect all the way down to action generation
 
-接続後に増分クエリエンジンと永続化ストアを組み込む。組み込み先は
-`dowel_model::session::Session` に閉じてある。どちらも差し込み済みである（下記）。
+The incremental query engine and the persistent store were then plugged in
+afterward. The insertion point is confined to
+`dowel_model::session::Session`; both are in place (below).
 
-## クレート構成
+## Crate layout
 
-| クレート | 責務 |
+| Crate | Responsibility |
 |---|---|
-| `dowel-support` | スパン、ソースマップ、診断、構造化ログ、JSON 出力 |
-| `dowel-syntax` | 字句解析、ロスレス CST、誤り耐性のあるパーサ |
-| `dowel-query` | メモ化、依存追跡、early cutoff、耐久度階層、キャンセル |
-| `dowel-store` | ディスク上のストア。追記専用の値ログ、固定長インデックス、単一書き手 |
-| `dowel-eval` | 型つき値と来歴、式評価、スキーマと併合意味論、構成の具体化、値の直列化 |
-| `dowel-model` | パッケージ読み込み、ターゲット、依存グラフ、インタフェース併合、`why` |
-| `dowel-build` | glob 展開、アクショングラフ、ninja 生成、`compile_commands.json`、実行 |
-| `dowel-lsp` | 言語サーバ。JSON-RPC の枠付け、診断の通知、ホバー |
-| `dowel-cli` | `dowel` バイナリ |
-| `dowel-up` | `dowelup` バイナリ。dowel 自体の取得・固定・切り替え |
+| `dowel-support` | spans, source maps, diagnostics, structured logging, JSON output |
+| `dowel-syntax` | lexing, lossless CST, error-tolerant parser |
+| `dowel-query` | memoization, dependency tracking, early cutoff, durability layers, cancellation |
+| `dowel-store` | the on-disk store: append-only value log, fixed-length index, single writer |
+| `dowel-eval` | typed values with provenance, expression evaluation, schema and merge semantics, configuration specialization, value serialization |
+| `dowel-model` | package loading, targets, the dependency graph, interface merging, `why` |
+| `dowel-build` | glob expansion, the action graph, ninja generation, `compile_commands.json`, execution |
+| `dowel-lsp` | the language server: JSON-RPC framing, diagnostics publishing, hover |
+| `dowel-cli` | the `dowel` binary |
+| `dowel-up` | the `dowelup` binary: acquiring, pinning, and switching dowel itself |
 
-検証用の現物は `tests/projects/`（実物フィクスチャ）と `examples/`（文書の例）に置く。
+Real-world test material lives in `tests/projects/` (realistic fixtures) and
+`examples/` (the documented examples).
 
-## 実装済み
+## Implemented
 
-### 構文（`dowel-syntax`）
+### Syntax (`dowel-syntax`)
 
-- 全バイトがちょうど1トークンに属する字句解析。空白・改行・コメントも残す
-- ロスレス CST。木を辿って連結すると入力に戻る（テストで常時検査）
-- 誤り耐性。構文誤りで停止せず `Error` ノードを残して継続する。
-  復帰は必ず1トークン以上を消費し、ループの前進を保証する
-- テーブル見出し、配列テーブル、key-value、配列、インラインテーブル、
-  関数呼び出し、`match`、後置 `when`、名前空間参照
-- 頑健性テスト: 実マニフェストの全接頭辞・1文字削除・区切り記号の挿入に対し、
-  パニックせずロスレス性が保たれること
+- Lexing in which every byte belongs to exactly one token; whitespace,
+  newlines, and comments are retained
+- A lossless CST: walking the tree and concatenating reproduces the input
+  (checked continuously by tests)
+- Error tolerance: syntax errors do not stop parsing; an `Error` node is left
+  and parsing continues. Recovery always consumes at least one token,
+  guaranteeing loop progress
+- Table headers, array tables, key-values, arrays, inline tables, function
+  calls, `match`, postfix `when`, namespace references
+- Robustness tests: over every prefix of real manifests, single-character
+  deletions, and delimiter insertions, no panics and losslessness holds
 
-### 増分（`dowel-query`）
+### Incrementality (`dowel-query`)
 
-- メモ化と依存追跡。クエリ実行中のフレームに読んだ鍵を積む
-- early cutoff。再計算の結果が前回と同じ指紋なら依存側を無効化しない
-- 耐久度の階層（`Low` / `Medium` / `High`）。安定層は依存の走査自体を省く
-- キャンセル。クエリ境界で判定し `Result` で伝播する。
-  リリース構成が `panic = "abort"` であるためアンワインドは使わない
-- 入力の同一内容での再設定は版を進めない（内容で判定し、更新時刻を見ない）
-- 計算手続きをメモが保持する。導出が連なった経路でも検証だけで済ませられる。
-  副作用として、手続きは `Db` からしか値を読めず、純粋性が型で強制される
+- Memoization and dependency tracking; keys read during a query are pushed
+  onto the running frame
+- Early cutoff: if recomputation fingerprints the same as before, dependents
+  are not invalidated
+- Durability layers (`Low` / `Medium` / `High`); stable layers skip
+  dependency traversal entirely
+- Cancellation, checked at query boundaries and propagated via `Result`.
+  The release profile is `panic = "abort"`, so unwinding is not used
+- Re-setting an input to identical content does not advance the version
+  (judged by content, not by mtime)
+- Memos retain the computation procedure, so chains of derivations can be
+  revalidated without recomputation. As a side effect, procedures can read
+  values only through `Db`, and purity is enforced by types
 
-`Session` はこのエンジンを通してファイルを読む（`dowel_model::query`）。
-`Session::reload` はディスクを読み直すが、内容の変わらなかったファイルは
-字句解析からやり直さない。再利用の度合いは `Session::query_stats` で観測できる。
+`Session` reads files through this engine (`dowel_model::query`).
+`Session::reload` re-reads the disk, but files whose contents did not change
+are not re-lexed. The degree of reuse is observable via
+`Session::query_stats`.
 
-ファイル単位のクエリでは early cutoff は原理的に効かない（値がスパンを含むため、
-本文が変われば必ず値も変わる）。効くのはターゲット単位の派生
-（`interface` と `compile_env`）であり、その指紋はスパンを含まない要約から導く
-（[ADR-0011](adr/0011-cutoff-and-provenance.md)）。コメントだけの編集は併合に
-届かない。来歴のスパンを表示する経路（`dowel why`）はメモを経由せず、
-その場で併合をやり直す。
+Early cutoff cannot help on per-file queries in principle (values contain
+spans, so any change to the text changes the value). Where it does apply is
+the per-target derivations (`interface` and `compile_env`), whose
+fingerprints come from span-free summaries
+([ADR-0011](adr/0011-cutoff-and-provenance.md)). A comment-only edit never
+reaches merging. The path that displays provenance spans (`dowel why`)
+bypasses the memo and redoes the merge on the spot.
 
-### 永続化（`dowel-store`）
+### Persistence (`dowel-store`)
 
-`.dowel/cache/<形式版>/` に `lock` / `values` / `index` を置く。
+`.dowel/cache/<format-version>/` holds `lock` / `values` / `index`.
 
-- 追記専用の値ログと、固定長レコードのインデックス。インデックスは走査に
-  解析を要さず、値の実体は必要になるまで読まない
-- インデックスの差し替えは一時ファイル + `rename`。同一ディレクトリ内の
-  `rename` は原子的であり、読み手は古いか新しいかのどちらかを見る
-- 書き手は `flock`（`std::fs::File::try_lock`）で1つに制限する。
-  取得できない場合は読み込みのみを行い、結果を書かない
-- 読み込み時、値ログの外を指すレコードと端数を捨てる。切り詰めや
-  途中終了の後でも、開けること自体は失敗しない
-- 入力の変更検出は `(mtime, size, inode, ctime)` の比較で行い、
-  差異が出た場合にのみ内容の指紋を取る
+- An append-only value log and a fixed-length record index. The index needs
+  no parsing to scan, and value bodies are not read until needed
+- Index replacement is a temporary file + `rename`. A same-directory `rename`
+  is atomic; readers see either the old or the new
+- The writer is restricted to one via `flock`
+  (`std::fs::File::try_lock`). A process that cannot take the lock reads
+  only and writes nothing
+- On load, records pointing outside the value log — and any trailing
+  fragment — are discarded. After truncation or a mid-write crash, opening
+  never fails
+- Input change detection compares `(mtime, size, inode, ctime)` and takes a
+  content fingerprint only when they differ
 - `dowel cache info` / `dowel cache gc`
 
-`Session` は読み込んだファイルをストアへ記録し、次のプロセスがその記録と
-突き合わせて変更を判定する。`--log-level=trace` に判定結果
-（`UnchangedByStat` / `UnchangedByContent` / `Changed`）が出る。
+`Session` records the files it read into the store, and the next process
+checks against that record to judge changes. The verdicts
+(`UnchangedByStat` / `UnchangedByContent` / `Changed`) appear at
+`--log-level=trace`.
 
-格納するのは評価結果（`Evaluated`）だけである。ターゲット単位の派生は
-プロセス内のメモに留める。理由は [ADR-0012](adr/0012-store-contents.md) にある。
-格納の対象は、診断を1件も出さずに評価できたファイルに限る。
+Only evaluation results (`Evaluated`) are stored; per-target derivations stay
+in the in-process memo. The reasons are in
+[ADR-0012](adr/0012-store-contents.md). Storage is limited to files that
+evaluated without emitting a single diagnostic.
 
-復元の判定は本文の指紋の一致による。一致した場合、そのファイルは字句解析も
-構文解析も評価も行わない。`--log-level=debug` に実行ごとの要約が出る。
+Restoration is keyed on a matching content fingerprint. On a match, the file
+is neither lexed, parsed, nor evaluated. A per-run summary appears at
+`--log-level=debug`:
 
 ```
 store: wrote 1 values, restored 3, skipped 0 with diagnostics
 ```
 
-`FileId` は正規化したパスのハッシュであり、プロセスを跨いでも同じファイルは
-同じ識別子を持つ（[ADR-0009](adr/0009-file-identity.md)）。格納した値を
-復元する際に識別子を振り直す走査が要らない。復元した文書は自身の `FileId` を
-持つため、鍵の衝突を値の側で検出できる。
+`FileId` is the hash of the normalized path, so the same file has the same
+identifier across processes ([ADR-0009](adr/0009-file-identity.md)).
+Restoring stored values requires no renumbering pass, and a restored document
+carries its own `FileId`, so key collisions are detectable on the value side.
 
-直列化は `dowel_eval::codec` にある。長さ前置のバイト列で、`Document` の
-全ての型を扱う。復元に失敗した場合は `None` を返し、ストアは読めない値を
-無いものとして扱う。形式の版が合わない場合、切り詰められた場合、
-外部から書き換えられた場合のいずれでも、結果は変わらず速度のみを失う。
+Serialization lives in `dowel_eval::codec`: length-prefixed bytes covering
+every type in `Document`. A failed restore returns `None`, and the store
+treats unreadable values as absent. Whether the format version mismatches,
+the file was truncated, or something external rewrote it — the result never
+changes, only the speed.
 
-### 評価（`dowel-eval`）
+### Evaluation (`dowel-eval`)
 
-- `Value = { type, data, provenance }`。来歴は値の構成要素であり根まで辿れる
-- `Path` は `Str` と別型。文字列連結によるパス構築を言語として提供しない
-- `Cfg<T>`。`match` と後置 `when` の解決は具体化段階まで遅らせる。
-  `--release` や `--target` の切り替えでマニフェスト評価をやり直さない
-- `glob` の展開も評価では行わない。評価時に走査すると、その時点の
-  ファイルシステムという記録されない入力が結果に混ざる
-- 併合規則を型に属させる: `union` / `append` / `error_on_conflict` /
+- `Value = { type, data, provenance }`. Provenance is a constituent of the
+  value and traceable to the root
+- `Path` is a distinct type from `Str`; the language provides no string
+  concatenation for building paths
+- `Cfg<T>`: resolution of `match` and postfix `when` is deferred to
+  specialization, so switching `--release` or `--target` does not re-run
+  manifest evaluation
+- `glob` is not expanded during evaluation either: scanning at evaluation
+  time would mix in the current file system — an unrecorded input
+- Merge rules belong to types: `union` / `append` / `error_on_conflict` /
   `must_equal` / `replace`
-- `match` の網羅性検査。値域が閉じた `cfg` は列挙を要求し、
-  値域が開いた `cfg.target` は `_` を要求する
-- `dowel.toml` の厳密性は構文ではなく検証で課す
+- Exhaustiveness checking of `match`: closed-domain `cfg` keys require full
+  enumeration, and open-domain `cfg.target` requires `_`
+- The strictness of `dowel.toml` is imposed by validation, not by a separate
+  grammar
 
-### モデル（`dowel-model`）
+### Model (`dowel-model`)
 
-- `path` 依存を辿った複数パッケージの読み込み
-- スキーマに照らした未知プロパティ・型不一致の診断（候補提示つき）
-- `interface(T)` と `compile_env(T)` の分離。`private` の依存は
-  自分のコンパイルには効くが依存元へは伝播しない
-- 機能フラグによって依存グラフの辺が現れ／消える
-- 有効でない任意の依存（`optional = true`）は読み込まない。辺だけでなく節点も
-  現れない。機能フラグの選択は `Session` の読み込みより前に決まる
-- 閉路の検出（反復深さ優先、経路を注記に出す）
-- `dowel why` — 伝播経路の表示（text / json）
+- Loading multiple packages by following `path` dependencies
+- Diagnostics for unknown properties and type mismatches against the schema
+  (with suggestions)
+- The `interface(T)` / `compile_env(T)` split: `private` dependencies affect
+  one's own compilation but do not propagate to dependents
+- Feature flags make dependency-graph edges appear and disappear
+- Optional dependencies (`optional = true`) that are not enabled are not
+  loaded — not just the edge but the node is absent. Feature selection is
+  fixed before `Session` loads
+- Cycle detection (iterative DFS, the path shown in a note)
+- `dowel why` — propagation-path display (text / json)
 
-### ビルド（`dowel-build`）
+### Build (`dowel-build`)
 
-- `glob` 展開（`*` / `**` / `?`）。走査順に依存しないよう辞書順に並べる
-- アクショングラフ（コンパイル / アーカイブ / リンク）
-- ninja ファイル生成と `compile_commands.json`（`arguments` 配列形式）
-- 実行器2種。ninja（既定）と direct（逐次、depfile を読む mtime 判定）
-- 構成ごとに分けたビルドディレクトリ
-- `[runner.<triple>]` の転送（`transfer` / `remote_dir` / `host`）。
-  対象機がビルド機のファイルシステムを参照できない場合に、起動前に成果物を運ぶ。
-  パスはマニフェストに書かせず実装が付け足す（[ADR-0008](adr/0008-runner-transfer.md)）
-- `[runner.<triple>]` — ターゲットトリプルごとの実行ラッパ。
-  `dowel test --target=<triple>` が透過的にラッパ経由で起動する。
-  ホストと異なるトリプルでランナーが宣言されていない場合は、起動前に
-  診断で拒む。起動後では `Exec format error` になり、構成の誤りが
-  テストの失敗として報告されるため
-- `dowel test` — test ターゲットを起動して終了状態で合否を判定する。
-  テストハーネスは持たず、「終了状態 0 なら成功」という C の慣習に従う。
-  作業ディレクトリはパッケージルート。失敗したものだけ出力を見せる
-  - `--fail-fast` で最初の失敗で打ち切る。既定は打ち切らない（全体像が要るため）。
-    打ち切った場合は「走らせなかった件数」を要約に出す
-  - `--failed` で前回落ちた分だけ再実行する。判定はビルドディレクトリに残す。
-    走らせなかったターゲットの判定は消えない
-  - `--test-jobs=<n>` で並列実行する。既定は逐次。C のテストは共有資源
-    （同じ作業ディレクトリ、固定のポート、書き出し先）を用いる場合があり、
-    並列を既定にすると順序に依存する失敗が発生する。表示は常に要求順
-  - `--no-run` / `--nocapture`、`--message-format=json` で1件1行の結果
+- `glob` expansion (`*` / `**` / `?`), sorted lexicographically to be
+  independent of traversal order
+- The action graph (compile / archive / link)
+- ninja file generation and `compile_commands.json` (`arguments` array form)
+- Two executors: ninja (default) and direct (sequential, mtime-based
+  freshness reading depfiles)
+- Per-configuration build directories
+- Transfer for `[runner.<triple>]` (`transfer` / `remote_dir` / `host`):
+  when the target machine cannot see the build machine's file system,
+  artifacts are carried over before launch. Paths are not written in the
+  manifest; the implementation appends them
+  ([ADR-0008](adr/0008-runner-transfer.md))
+- `[runner.<triple>]` — an execution wrapper per target triple.
+  `dowel test --target=<triple>` launches through the wrapper transparently.
+  If the triple differs from the host and no runner is declared, launch is
+  refused with a diagnostic beforehand — afterward it would surface as
+  `Exec format error`, reporting a configuration mistake as a test failure
+- `dowel test` — launches test targets and judges pass/fail by exit status.
+  There is no test harness; the C convention ("exit status 0 means success")
+  applies. The working directory is the package root. Only failing tests'
+  output is shown
+  - `--fail-fast` stops at the first failure. The default keeps going (the
+    full picture matters); when cut short, the summary reports how many were
+    not run
+  - `--failed` reruns only what failed last time. Verdicts persist in the
+    build directory; verdicts of targets not run are kept
+  - `--test-jobs=<n>` runs tests in parallel. The default is sequential: C
+    tests may use shared resources (the same working directory, fixed ports,
+    output files), and a parallel default produces order-dependent failures.
+    Display is always in request order
+  - `--no-run` / `--nocapture`, and `--message-format=json` for one result
+    per line
 
-### 言語サーバ（`dowel-lsp`）
+### Language server (`dowel-lsp`)
 
-`dowel lsp` が標準入出力で LSP を話す。エディタが起動主体であり、
-[ADR-0002](adr/0002-no-daemon.md) が退けた常駐デーモンとは区別される。
+`dowel lsp` speaks LSP on stdin/stdout. The editor is the starting party,
+which distinguishes it from the resident daemon rejected by
+[ADR-0002](adr/0002-no-daemon.md).
 
-- 全文同期。`didOpen` / `didChange` / `didSave` / `didClose` に応じて
-  `publishDiagnostics` を返す
-- 診断は構文解析・評価に加え、開いている1ファイルで決まる型検査
-  （`unknown-property` / `type-mismatch` / `unknown-kind` 等）を CLI と
-  同じ実装で出す。事例表の各コードが「エディタに届く」か
-  「`dowel_lsp::UNSUPPORTED` に理由がある」かのどちらかであることは
-  検査が強制する
-- `textDocument/hover`。プロパティの型と併合規則、表の見出しの各段、
-  組み込み関数の署名、構成キーの値域。出所は `dowel schema dump` と同じ表
-- 診断の範囲は 0 始まりの行と UTF-16 単位の桁。注記と修正提案の説明は
-  本文に畳む
-- `dowel.toml` は名前で判別し、厳密な TOML の検証（[ADR-0003](adr/0003-manifest-split.md)）を課す
-- JSON-RPC の枠付けと本文の読み取りは自前（[ADR-0007](adr/0007-implementation-language.md)）。
-  読めない本文は捨てて次を読み、1件の不正で接続を落とさない
+- Full-document sync: `publishDiagnostics` in response to `didOpen` /
+  `didChange` / `didSave` / `didClose`
+- Beyond parsing and evaluation, diagnostics include the type checking
+  decidable from the single open file (`unknown-property` / `type-mismatch` /
+  `unknown-kind`, …), produced by the same implementation as the CLI. A check
+  enforces that every code in the case table either reaches the editor or has
+  a reason in `dowel_lsp::UNSUPPORTED`
+- `textDocument/hover`: property types and merge rules, each level of a table
+  header, builtin function signatures, configuration key domains. The source
+  is the same table `dowel schema dump` reads
+- Diagnostic ranges are 0-based lines and UTF-16 columns; notes and
+  fix-suggestion text are folded into the body
+- `dowel.toml` is recognized by name and held to strict TOML validation
+  ([ADR-0003](adr/0003-manifest-split.md))
+- JSON-RPC framing and body reading are in-house
+  ([ADR-0007](adr/0007-implementation-language.md)); an unreadable body is
+  discarded and the next one read, so one bad message does not drop the
+  connection
 
-見ているのは開いているファイル1つである。ファイルを跨ぐ診断は
-`dowel_lsp::UNSUPPORTED` に理由とともに列挙してある。
+What it sees is the single open file. Cross-file diagnostics are listed with
+reasons in `dowel_lsp::UNSUPPORTED`.
 
-### VS Code 拡張（`editors/vscode`）
+### VS Code extension (`editors/vscode`)
 
-`dowel lsp` を起動して診断とホバーをエディタへ渡す。`dowel.build` の
-構文強調（TextMate 文法）つき。実行時依存はゼロで、枠付けと JSON-RPC の
-対応付けは自前に持つ（設計は `editors/vscode/README.md`）。開発は
-`editors/vscode/dev.sh` 経由でコンテナに閉じて行い、検査には実物の
-`dowel lsp` と話す統合テストを含む。名称が仮（[ADR-0006](adr/0006-naming.md)）の
-ため市場へは公開しない。
+Starts `dowel lsp` and relays diagnostics and hover to the editor, with
+syntax highlighting for `dowel.build` (a TextMate grammar). Zero runtime
+dependencies; framing and JSON-RPC correlation are in-house (the design is in
+`editors/vscode/README.md`). Development happens inside the container via
+`editors/vscode/dev.sh`, and the checks include an integration test that
+talks to the real `dowel lsp`. It is not yet published to the marketplace.
 
-### 取得（`dowel-up`）
+### Acquisition (`dowel-up`)
 
-`dowelup` が dowel 自体を取得し、プロジェクトごとに版を固定する
-（[ADR-0013](adr/0013-self-acquisition.md)、使い方は
-[61-acquisition.md](61-acquisition.md)）。
+`dowelup` acquires dowel itself and pins a version per project
+([ADR-0013](adr/0013-self-acquisition.md); usage in
+[61-acquisition.md](61-acquisition.md)).
 
-- 指定子（`stable` / `nightly` / `nightly-<日付>` / `X.Y.Z` / `branch:` /
-  `tag:` / sha）を commit sha に解決し、mirror からの checkout を
-  `cargo build --release` でビルドして `$DOWELUP_HOME/versions/<sha>/` に置く。
-  履歴とネットワークの操作は `git` に、ビルドは `cargo` に委譲する
-- `.dowel-version`（pin）と既定による選択。`dowel` の名で起動されると
-  shim として働き、選んだ版へ exec する。先頭の `+<指定子>` で
-  インストール済みの版を直接選べる。選択はネットワークに触れない
-- pin に書かれるのは解決済みの sha のみ。名前を手書きした場合は解決せず、
-  `dowelup pin` での解決へ誘導する
-- `stable` は上流に release タグが現れるまで解決できない。
-  prebuilt バイナリの配布は未着手（Q10）
+- Resolves specifiers (`stable` / `nightly` / `nightly-<date>` / `X.Y.Z` /
+  `branch:` / `tag:` / sha) to a commit sha, builds a mirror checkout with
+  `cargo build --release`, and places it under
+  `$DOWELUP_HOME/versions/<sha>/`. History and network operations are
+  delegated to `git`, building to `cargo`
+- Selection via `.dowel-version` (pin) and the default. Launched under the
+  name `dowel` it acts as a shim and execs the selected version; a leading
+  `+<specifier>` picks directly among installed versions. Selection never
+  touches the network
+- Pins contain only resolved shas. A hand-written name is not resolved; the
+  error points to `dowelup pin`
+- `stable` cannot resolve until a release tag appears upstream. Prebuilt
+  binary distribution is not started (Q10)
 
-### 診断とログ
+### Diagnostics and logging
 
-- 重大度・安定コード・複数ラベル・注記・機械適用可能な修正提案
-- 人間向け描画（rustc 書式）と `--message-format=json`（1行1診断）
-- 未知の名前には編集距離で候補を出す（プロパティ、関数、構成キー、機能名、
-  `match` のアーム、CLI のオプションとコマンド）
-- 機能名の値域は `dowel.toml` の `[features]` が決める。`dowel.build` からの
-  参照と `--features` の双方を照合する。判定はマニフェストを読んだ後でしか
-  行えないため、評価にも引数解析にも置けない
-- 段階ごとの所要時間、依存グラフの辺、アクションのコマンド列をログに出す
-- `check` は計画段まで走らせる（[ADR-0010](adr/0010-check-scope.md)）。glob 展開、
-  パス解決、ツールチェーンの実在は評価では判定できず、`build` と同じ診断を出す
+- Severity, stable codes, multiple labels, notes, mechanically applicable fix
+  suggestions
+- Human rendering (rustc format) and `--message-format=json` (one diagnostic
+  per line)
+- Unknown names get edit-distance suggestions (properties, functions,
+  configuration keys, feature names, `match` arms, CLI options and commands)
+- The domain of feature names is defined by `[features]` in `dowel.toml`,
+  checked both for references from `dowel.build` and for `--features`. The
+  judgment is only possible after reading the manifest, so it lives in
+  neither evaluation nor argument parsing
+- Per-stage timing, dependency-graph edges, and action command lines go to
+  the log
+- `check` runs through the planning stage
+  ([ADR-0010](adr/0010-check-scope.md)): glob expansion, path resolution, and
+  toolchain existence cannot be judged during evaluation, and `check` emits
+  the same diagnostics `build` would
 
-`--log-level=trace` で出るもの（デバッグ時に「なぜこの引数になったのか」を追う材料）。
+What `--log-level=trace` shows (the material for tracing "why did this
+argument end up like this" when debugging):
 
-| 出所 | 内容 |
+| Source | Contents |
 |---|---|
-| `session` | 読み込んだファイルと大きさ、評価したテーブルとキーの値、ターゲットへ割り当てたプロパティ |
-| `input` | 前回の実行と突き合わせた入力ごとの判定 |
-| `query` | 入力の変化と版の進行、解析／評価したファイル、メモの検証と再計算の別 |
-| `graph` | 辺の解決、トポロジカル順 |
-| `interface` | プロパティごとに到達した値の件数と併合結果（`interface` と `compile_env` の双方） |
-| `specialize` | `match` が選んだアーム、`when` が落とした要素 |
-| `glob` | 走査したファイルと一致／不一致、走査から外したディレクトリ、一致件数 |
-| `plan` | 解決済みのソース・インクルード・定義・フラグ、各アクションの完全なコマンド列 |
-| `exec` | 最新と判定した理由、再実行の理由（どの入力が新しいか） |
-| `test` | 起動したテストの一覧（起動前）と、その作業ディレクトリ・コマンド |
-| `runner` | 宣言されたラッパと、構成に対して選ばれたコマンド |
+| `session` | files read and their sizes, tables and key values evaluated, properties assigned to targets |
+| `input` | per-input verdicts against the previous run |
+| `query` | input changes and version advancement, files parsed/evaluated, memo validation vs recomputation |
+| `graph` | edge resolution, topological order |
+| `interface` | per-property counts of arriving values and merge results (both `interface` and `compile_env`) |
+| `specialize` | which arm `match` chose, which elements `when` dropped |
+| `glob` | files scanned with match/no-match, directories pruned, match counts |
+| `plan` | resolved sources, includes, defines, flags; the full command line of every action |
+| `exec` | why something was judged fresh; why something re-ran (which input was newer) |
+| `test` | the list of tests to launch (before launching), their working directories and commands |
+| `runner` | the declared wrappers and the command chosen for the configuration |
 
-## 検証
+## Verification
 
-入口は1つ。ローカルでも CI でも同じものを実行する。層ごとの責務と、
-テストを足すときの判断は [51-testing.md](51-testing.md) にある。
+One entry point; local runs and CI execute the same thing. What each layer
+answers, and where a new test belongs, is in [51-testing.md](51-testing.md).
 
 ```sh
-make verify      # 全段階を実行し、結果を .work/verify/ に残す
+make verify      # run every stage, leaving results in .work/verify/
 ```
 
-途中で失敗しても止まらず、最後まで進んでから落ちる。結果は
-`summary.md`（人間と GitHub の要約向け）、`results.json`（機械可読）、
-`logs/<段階>.log` に残る。CI（`.github/workflows/verify.yml`）はこれを
-成果物として保存し、要約をジョブのサマリに出す。詳細は
-[50-development.md](50-development.md) 3.1 節。
+A mid-run failure does not stop the run; it proceeds to the end and fails
+afterward. Results land in `summary.md` (for humans and the GitHub summary),
+`results.json` (machine-readable), and `logs/<stage>.log`. CI
+(`.github/workflows/verify.yml`) stores these as artifacts and prints the
+summary into the job summary. Details in
+[50-development.md](50-development.md) section 3.1.
 
-現在の内訳（テスト 363 件）。
+Current breakdown (363 tests):
 
-| 段階 | 内容 | 件数 |
+| Stage | Contents | Count |
 |---|---|---|
-| `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 242 |
-| `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
-| `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
-| `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 10 |
-| `e2e` | 実際に C をコンパイルして実行し出力を検査 | 42 |
-| `scenario` | 時間をまたぐ操作列（編集して再ビルド、構成の切り替え、プロセスを跨いだ変更検出と評価結果の復元） | 23 |
-| `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 11 |
-| `diagnostics` | 診断が CLI まで届くこと（47 事例）、修正提案の適用、位置の有無、`check` の守備範囲、網羅の追跡 | 10 |
-| `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
-| `up` | 上流のフィクスチャに対する `dowelup` の解決・取得・切り替え | 2 |
-| `docs` | 文書のリンクと索引の整合 | 5 |
-| `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
+| `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
+| `unit-*` | per-crate unit tests | 242 |
+| `syntax-robustness` | no panics and losslessness on broken input | 5 |
+| `model-integration` | manifest loading through interface merging | 10 |
+| `model-incremental` | counting what a reload did not recompute | 10 |
+| `e2e` | compile real C, run it, check the output | 42 |
+| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 23 |
+| `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
+| `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 10 |
+| `example` | build the real `examples/hello` and run its tests | 3 |
+| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 2 |
+| `docs` | link resolution and index consistency | 5 |
+| `startup` | startup-time measurement (informational; machine noise does not fail the run) | — |
 
-`scenario` / `fixture` / `diagnostics` の3層は後から足した。足した最初の実行で
-以下の4件が出ており、いずれも既存の層では原理的に現れないものだった。
+The `scenario` / `fixture` / `diagnostics` layers were added later. Their
+first runs surfaced the following four defects, none of which could appear in
+the pre-existing layers:
 
-| 欠陥 | なぜ既存の層で出なかったか |
+| Defect | Why the existing layers could not catch it |
 |---|---|
-| 併合が相対パスだけで重複を判定し、依存が2段を超えると別パッケージの `include/` が消える | 合成プロジェクトは依存が1段しかない |
-| direct 実行器がコマンド列を最新性判定に入れず、フラグ変更を取りこぼす | 単発の実行では2回目が見えない |
-| `sources` にディレクトリを書くとリンカの `input file unused` になる | `invalid-source` は一度も到達していなかった |
-| 存在しないソースを書くと ninja の `no known rule` になる | `unresolved-path` は一度も到達していなかった |
+| merging deduplicated by relative path only, dropping another package's `include/` once dependencies exceeded two levels | the synthetic project has only one dependency level |
+| the direct executor omitted the command line from freshness, missing flag changes | a single run never sees the second execution |
+| a directory in `sources` surfaced as the linker's `input file unused` | `invalid-source` had never been reached |
+| a nonexistent source surfaced as ninja's `no known rule` | `unresolved-path` had never been reached |
 
-## 計測
+## Measurements
 
-起動時間の予算は無操作時 10ms 以下（docs/20-architecture.md 5.4）。
-リリースビルド、2パッケージ・2ターゲットの構成、20回の最小値／中央値。
-`make measure` で単独に取れる。
+The startup budget is under 10ms with nothing to do
+(docs/20-architecture.md 5.4). Release build, a 2-package / 2-target
+configuration, min/median of 20 runs. `make measure` produces these on their
+own.
 
-| 実行 | 最小 | 中央 |
+| Run | Min | Median |
 |---|---|---|
 | `dowel --version` | 1.6ms | 1.7ms |
 | `dowel check` | 2.3ms | 2.5ms |
 | `dowel graph --format=json` | 2.0ms | 2.2ms |
 
-バイナリ 1.2MB、動的リンクは libc 等 4 件。現時点では予算内にある。
-前回の値（`--version` 1.2/1.4ms、`check` 1.5/1.7ms、`graph` 1.4/1.6ms）とは
-実行機が異なるため、直接は比べられない。同一機で測った `check` の変化は
-[ADR-0010](adr/0010-check-scope.md) にある。
+Binary 1.2MB; 4 dynamic links (libc and friends). Currently inside budget.
+The previous figures (`--version` 1.2/1.4ms, `check` 1.5/1.7ms, `graph`
+1.4/1.6ms) were taken on a different machine and are not directly
+comparable. The same-machine change in `check` is recorded in
+[ADR-0010](adr/0010-check-scope.md).
 
-### 評価結果の格納による変化
+### The effect of storing evaluation results
 
-[ADR-0012](adr/0012-store-contents.md) の前後を同一機で測った `check` の
-最小／中央。マニフェストを変更しない実行（復元が起きる側）と、
-変更した実行（格納が起きる側）を分けて示す。
+`check` min/median measured on one machine before and after
+[ADR-0012](adr/0012-store-contents.md), separated into runs without manifest
+changes (where restores happen) and with changes (where stores happen).
 
-| 対象 | 変更なし・前 | 変更なし・後 | 変更あり・前 | 変更あり・後 |
+| Subject | unchanged, before | unchanged, after | changed, before | changed, after |
 |---|---|---|---|---|
 | `examples/hello` | 2.35/2.70ms | 2.24/2.44ms | 2.36/2.53ms | 5.21/7.22ms |
 | `tests/projects/layered` | 3.48/3.71ms | 3.28/3.60ms | 3.70/4.22ms | 7.48/9.35ms |
 
-現在のフィクスチャの規模では、復元による短縮は 0.1〜0.2ms である。
-マニフェストが数百バイトであり、字句解析・構文解析・評価の合計が
-固定の起動費用に対して小さい。
+At the current fixture sizes, restoring saves 0.1–0.2ms: manifests are a few
+hundred bytes, and lexing + parsing + evaluation together are small next to
+the fixed startup cost.
 
-格納が起きる実行は 3〜5ms 増える。全量は `Writer::commit` の
-`sync_data` 2回である（同じ計測を同期なしで取ると増加は消える）。この費用は
-マニフェストを変更した実行にのみ生じ、その実行は続けてビルドを走らせる側である。
-変更しない実行は書くものが無いため同期を行わない。
+Runs that store gain 3–5ms, all of it the two `sync_data` calls in
+`Writer::commit` (measuring without sync makes the increase vanish). The cost
+falls only on runs that changed a manifest — the runs that proceed to a
+build anyway. Unchanged runs have nothing to write and skip the sync.
 
-短縮の側は規模に比例し、同期の費用は規模によらない。両者が釣り合う規模は
-現在のフィクスチャでは測れない。規模のフィクスチャ
-（[51-testing.md](51-testing.md)「今後」）が要る。
+The savings scale with size; the sync cost does not. The break-even size
+cannot be measured with the current fixtures; the scale fixture
+([51-testing.md](51-testing.md), "Future") is needed.
 
-## 未実装（意識的に後回しにしているもの）
+## Not implemented (deliberately deferred)
 
-| 項目 | 位置づけ |
+| Item | Standing |
 |---|---|
-| インデックスの mmap 化（現状は読み切り） | Phase 1。数千レコード規模までは読み切りで足りる |
-| 読み込みと名前解決のクエリ化（`Declared` / `Deps` を導出にする） | Phase 1。現状は `Session` が組み上げ、入力として渡す |
-| プローブ事実 DB | Phase 2 |
-| `bench` / `template` / `toolchain` の各種別 | Phase 2 / 4 |
-| 移行（`migrate verify` / `import`） | Phase 3 |
+| mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
+| making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
+| the probe-fact DB | Phase 2 |
+| the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
+| migration (`migrate verify` / `import`) | Phase 3 |
 | `dowel debug` | Phase 4 |
-| 言語サーバのファイルを跨ぐ診断 | Phase 4。診断はファイル単位まで実装済み（`dowel_lsp::UNSUPPORTED`） |
-| 対象機に残した成果物の掃除、転送の省略判定 | Phase 4。転送は毎回行う |
-| 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
-| `dowelup` の prebuilt 取得 | Q10。現状はソースビルドのみ |
-| ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |
-| C++（`tc.cxx`、拡張子によるコンパイラ選択、C++ を含むターゲットのリンカ選択） | 未定。`README.md` は「C/C++ を主対象とする」と述べているが、現状は C のみ。C++ のソースは `unsupported-language` で拒む |
+| cross-file language-server diagnostics | Phase 4; per-file diagnostics are implemented (`dowel_lsp::UNSUPPORTED`) |
+| cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
+| dependency fetching (registry / git / tarball), `dowel.lock` | Phase 5; today only `path` dependencies |
+| prebuilt acquisition for `dowelup` | Q10; today source builds only |
+| automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi` |
+| C++ (`tc.cxx`, compiler selection by extension, linker selection for targets containing C++) | undecided. Today C only; C++ sources are rejected with `unsupported-language`. The user-facing documents say "for C (C++ planned)" |
 
-## 設計文書との差異
+## Divergences from the design documents
 
-実装の都合で文書の記述から外れた点を明示する。文書側を書き換えるかは別途判断する。
+Points where the implementation departed from the documents, made explicit.
+Whether to amend the documents is decided separately.
 
-| 箇所 | 文書 | 実装 | 理由 |
+| Where | Document | Implementation | Reason |
 |---|---|---|---|
-| [ADR-0003](adr/0003-manifest-split.md) の帰結 | 「パーサが2系統になる」 | パーサは1系統。`dowel.toml` の厳密性は検証で課す | ADR の根拠（第三者ツールが独自パーサなしで読める）は検証で同じく満たされる。木が1つの方が来歴と診断の経路が単純 |
-| [10-manifest.md](10-manifest.md) 3節 | `includes` は「トポロジカル順」 | 自分が先、依存が後 | インクルード探索でもリンク順でも依存元が先に来るのが期待される挙動。トポロジカル順の向きを実装で確定させた |
-| 型 | `defines : Map<Ident, Val>` | `Val` を型として実装 | 文書の記法をそのまま型にした |
-| `abi` | ABI ラベルは算出される | 現状は文字列で手書き | 算出は Phase 6。`must_equal` の経路だけ先に通してある |
-| [30-devexp.md](30-devexp.md) 1節 | `args = ["-L", sysroot()]` | `args : List<Str>`。`sysroot()` は書けない | `sysroot` 基点のパスは Phase 4（`unimplemented-path-base`）。先に文字列で書けるようにし、基点が入った段で `List<Val>` へ広げる |
-| [50-development.md](50-development.md) 3節 | CI は dotfiles から構築した `--network none` のコンテナ内 | GitHub Actions の実行機（当面はこのままとする） | dotfiles の flake を本リポジトリの CI から評価する経路が未整備であり、現時点で手を入れる必要はないと判断した。検査の定義は `scripts/verify.sh` に一本化してあるため、移行が要るようになった際はワークフローの中身が入れ替わるだけで済む |
+| the consequence in [ADR-0003](adr/0003-manifest-split.md) | "there will be two parsers" | one parser; `dowel.toml` strictness is imposed by validation | the ADR's rationale (third-party tools read it without a custom parser) is equally satisfied by validation, and a single tree keeps provenance and diagnostics paths simpler |
+| types | `defines : Map<Ident, Val>` | `Val` implemented as a type | the document's notation was adopted as-is |
+| `abi` | ABI labels are computed | currently a hand-written string | computation is Phase 6; only the `must_equal` path is wired up |
+| [30-devexp.md](30-devexp.md) section 1 | `args = ["-L", sysroot()]` | `args : List<Str>`; `sysroot()` cannot be written | sysroot-based paths are Phase 4 (`unimplemented-path-base`); strings work first, widening to `List<Val>` when bases land |
+| [50-development.md](50-development.md) section 3 | CI runs in a `--network none` container built from dotfiles | GitHub Actions runners (staying so for now) | the path for evaluating the dotfiles flake from this repository's CI is not set up, and there is no present need. The checks are defined solely in `scripts/verify.sh`, so a migration later swaps only the workflow's internals |

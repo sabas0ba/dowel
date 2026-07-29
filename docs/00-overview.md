@@ -1,88 +1,107 @@
-# 概要
+# Overview
 
-## 1. 動機
+> This is a design document covering the project's motivation and
+> positioning. For usage, see [62-getting-started.md](62-getting-started.md);
+> for the feature reference, see [10-manifest.md](10-manifest.md) and
+> [60-cli.md](60-cli.md).
 
-Cargo の使用感が成立しているのは、単一コンパイラ・単一言語・単一レジストリ・単一 ABI という
-前提があるためである。C/C++ はこの4つすべてを欠く。
+## 1. Motivation
 
-| 欠落 | 具体的な現れ方 |
+Cargo's usability rests on four premises: a single compiler, a single
+language, a single registry, and a single ABI. C/C++ lacks all four.
+
+| Missing premise | How it shows up |
 |---|---|
-| 単一コンパイラの不在 | gcc / clang / msvc、および同一系列内のバージョン差 |
-| 単一言語の不在 | C / C++ / asm / Fortran / 生成コード / 他言語 FFI |
-| 単一レジストリの不在 | apt, vcpkg, Conan, システム配置, tarball |
-| 単一 ABI の不在 | `_GLIBCXX_USE_CXX11_ABI`, MSVC `/MD` vs `/MT`, サニタイザ有無, C++ 標準バージョン |
+| No single compiler | gcc / clang / msvc, plus version differences within one lineage |
+| No single language | C / C++ / asm / Fortran / generated code / cross-language FFI |
+| No single registry | apt, vcpkg, Conan, system layouts, tarballs |
+| No single ABI | `_GLIBCXX_USE_CXX11_ABI`, MSVC `/MD` vs `/MT`, sanitizers on/off, C++ standard version |
 
-このうち ABI の欠落が最も重い。同一ヘッダを異なるフラグでコンパイルした翻訳単位を
-リンクすると ODR 違反となるが、**リンクは成功し、実行時に破綻する**。
-既存システムはこの不整合を検出しない。
+The missing ABI weighs the most. Linking translation units that compiled the
+same header under different flags is an ODR violation — yet **the link
+succeeds and the program breaks at run time**. Existing systems do not detect
+the mismatch.
 
-## 2. 目標
+## 2. Goals
 
-- **再構成レイテンシの削減** — マニフェスト1ファイルの変更で全評価をやり直さない
-- **記述性と診断性** — 型付き値、位置つき診断、来歴の追跡
-- **ABI 不整合の検出** — 伝播ではなく失敗として扱う
-- **再現性** — ツールチェーンを含めてロックし、記録されない入力を排除する
-- **開発体験** — 言語サーバ、クロス実行、デバッガ設定を一体で提供する
-- **段階的採用** — 既存パッケージ供給源をそのまま利用でき、ターゲット単位で移行できる
+- **Cut reconfiguration latency** — a change to one manifest file must not
+  re-run the whole evaluation
+- **Expressiveness and diagnosability** — typed values, located diagnostics,
+  provenance tracking
+- **Detect ABI mismatches** — treat them as failures, not as something to
+  propagate
+- **Reproducibility** — lock the toolchain too, and eliminate unrecorded
+  inputs
+- **Developer experience** — a language server, cross execution, and debugger
+  configuration as one unit
+- **Incremental adoption** — existing package sources keep working, and
+  migration proceeds target by target
 
-## 3. 非目標
+## 3. Non-goals
 
-- 既存 CMake プロジェクトの完全な自動移行（[ADR-0005](adr/0005-migration.md)）
-- モノレポ全体を単一グラフに載せる規模（想定はターゲット数 10^3〜10^4）
-- 任意ビルド手順の埋め込み。エスケープハッチは宣言された sandbox 付きカスタムルールに限定する
-- 新言語の同伴設計
+- Fully automatic migration of existing CMake projects
+  ([ADR-0005](adr/0005-migration.md))
+- Monorepo scale, where the whole repository is one graph (the assumption is
+  10^3–10^4 targets)
+- Embedding arbitrary build steps. The escape hatch is limited to declared,
+  sandboxed custom rules
+- Designing a companion programming language
 
-## 4. 既存システムの分類
+## 4. A classification of existing systems
 
-| 系 | toolchain | 依存供給 | ABI 整合 | 実行隔離 |
+| System | toolchain | dependency supply | ABI consistency | execution isolation |
 |---|---|---|---|---|
-| CMake | 委譲（発見） | 委譲 | 伝播のみ・検証なし | なし |
-| Meson | 委譲（cross file） | 委譲 + wrap 補完 | 伝播のみ | なし |
-| Bazel / Buck2 | 所有（登録制） | 所有（再記述） | configuration をキーに含む | sandbox + CAS |
-| vcpkg | 委譲 | 所有（port） | triplet + ABI ハッシュ | バイナリキャッシュのみ |
-| Conan | 半所有（profile） | 所有（recipe） | package_id で明示 | なし |
-| Spack | 所有（DAG ノード） | 所有 | variant を完全展開 | prefix 分離 |
-| Nix | 所有（libc から） | 所有 | 入力ハッシュに全包含 | 隔離 + CAS |
-| Cargo | 所有（rustup） | 所有 | 言語が単一に固定 | なし |
+| CMake | delegated (discovery) | delegated | propagation only, no verification | none |
+| Meson | delegated (cross file) | delegated + wrap supplement | propagation only | none |
+| Bazel / Buck2 | owned (registered) | owned (re-declared) | configuration in the key | sandbox + CAS |
+| vcpkg | delegated | owned (ports) | triplet + ABI hash | binary cache only |
+| Conan | half-owned (profiles) | owned (recipes) | explicit via package_id | none |
+| Spack | owned (DAG nodes) | owned | variants fully expanded | prefix separation |
+| Nix | owned (from libc up) | owned | everything in the input hash | isolation + CAS |
+| Cargo | owned (rustup) | owned | language fixed to one | none |
 
-空白なのは、**Bazel 級の実行モデルと ABI 意識を、Cargo 級の使用感で提供する象限**である。
-Bazel の導入コストが高い主因は実行モデルではなく、全依存を BUILD ファイルに
-再記述させる点にある。これは依存供給を外部へ委譲することで回避しうる。
+The empty quadrant is **Bazel-class execution modeling and ABI awareness at
+Cargo-class usability**. The main cost of adopting Bazel is not its execution
+model but re-declaring every dependency in BUILD files — avoidable by
+delegating dependency supply externally.
 
-## 5. 位置づけ
+## 5. Positioning
 
-構想は3つの独立した部分を含む。それぞれ単独でも成立する。
+The concept contains three independent parts; each stands on its own.
 
-| # | 部分 | 実現手段 | 既存との差 |
+| # | Part | Realizable as | Difference from existing work |
 |---|---|---|---|
-| A | 依存解決 + ロック + サプライチェーン施策 + toolchain 取得 | 既存の上位層としても実装可能 | Conan / vcpkg と競合。cooldown と承認フローは未実装領域 |
-| B | ABI ラベルをキーに含む隔離実行 + CAS キャッシュ | 全置換が必要 | Bazel / Buck2 の象限。Cargo 級 UX は未実装領域 |
-| C | ABI 境界の IDL と双方向 FFI 輸出 | 単独ツール化も可能 | 部分的に既存（meson-python, pybind11, cbindgen, abidiff） |
+| A | dependency resolution + locking + supply-chain policy + toolchain acquisition | possible as a layer on top of existing systems | competes with Conan / vcpkg; cooldown and approval flows are unclaimed territory |
+| B | isolated execution keyed by ABI labels + CAS caching | requires full replacement | the Bazel / Buck2 quadrant; Cargo-class UX is unclaimed |
+| C | an IDL for ABI boundaries and bidirectional FFI export | possible as a standalone tool | partially exists (meson-python, pybind11, cbindgen, abidiff) |
 
-A のみでは既存システムのフロントエンドにとどまり、再現性は下位システムの挙動に依存し続ける。
-B が全置換を要求する唯一の部分である。
+A alone stays a frontend over existing systems, with reproducibility bound to
+the lower system's behavior. B is the only part demanding full replacement.
 
-## 6. FFI に関する補足
+## 6. A note on FFI
 
-Python 方向の FFI は Meson + meson-python により既に実用水準にある（SciPy / NumPy が実運用）。
-したがって「Python から呼べる」ことは差別化点にならない。
+FFI toward Python is already practical with Meson + meson-python (SciPy /
+NumPy run it in production), so "callable from Python" is not a
+differentiator.
 
-差別化しうるのは以下である。
+What can differentiate:
 
-- **ABI 境界の宣言と差分検査** — 前バージョンとの比較により破壊的変更を検出し、
-  バージョン規則違反を失敗させる
-- **シンボル可視性の自動生成** — version script / `.def` を ABI 宣言から導出し、
-  意図しない公開シンボルを防ぐ
-- **複数言語への一様な輸出** — C ABI, CPython 拡張, N-API, JVM Panama
+- **Declared ABI boundaries with diff checking** — detect breaking changes by
+  comparison against the previous version, and fail on versioning-rule
+  violations
+- **Generated symbol visibility** — derive version scripts / `.def` files
+  from the ABI declaration, preventing unintended public symbols
+- **Uniform export to multiple languages** — C ABI, CPython extensions,
+  N-API, JVM Panama
 
-## 7. 参照すべき先行例
+## 7. Prior art worth studying
 
-| 対象 | 参照する点 |
+| Subject | What to take from it |
 |---|---|
-| Salsa (rust-analyzer) | 増分クエリ、early cutoff |
-| Buck2 (DICE) / Bazel (Skyframe) | クエリグラフ、configuration の第一級化 |
-| Meson | 非チューリング完全 DSL、wrap によるソース補完、pkg-config 優先 |
-| Conan `package_id` | ABI 空間の明示化と互換性規則 |
-| Zig | ツールチェーン同梱、`build.zig.zon` の割り切り |
-| podman | daemonless 構成、非特権実行 |
-| ninja | 実行層としてそのまま利用する |
+| Salsa (rust-analyzer) | incremental queries, early cutoff |
+| Buck2 (DICE) / Bazel (Skyframe) | query graphs, configurations as first-class |
+| Meson | non-Turing-complete DSL, wrap-based source supplement, pkg-config first |
+| Conan `package_id` | making the ABI space explicit, compatibility rules |
+| Zig | bundled toolchain, the pragmatism of `build.zig.zon` |
+| podman | daemonless architecture, unprivileged execution |
+| ninja | used as-is for the execution layer |

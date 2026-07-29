@@ -1,71 +1,84 @@
-# 既存ビルドシステムからの移行
+# Migration from existing build systems
 
-決定は [ADR-0005](adr/0005-migration.md)。要旨は「静的翻訳は行わない、動的抽出を行う」。
+> This is a design document. `dowel migrate verify` / `import` are not
+> implemented ([91-implementation-status.md](91-implementation-status.md)).
 
-## 1. 静的翻訳が成立しない理由
+The decision is [ADR-0005](adr/0005-migration.md). In short: no static
+translation; dynamic extraction only.
 
-Node 系の移行ツールが機能するのは、正本が `package.json` やロックファイルという
-**宣言的データ**だからである。CMake の正本はプログラムであり、実際の構成は
-特定の環境で実行して初めて確定する。
+## 1. Why static translation cannot work
 
-`CMakeLists.txt` を構文的に読んで変換する試みは、`if(WIN32)`、`find_package`、
-ユーザ定義マクロで必ず破綻し、修正コストが書き直しを上回る。
+Migration tools in the Node ecosystem work because the source of truth is
+**declarative data** — `package.json` and lock files. CMake's source of truth
+is a program, and the actual configuration exists only after running it in a
+particular environment.
 
-## 2. 動的抽出の経路
+Attempts to read `CMakeLists.txt` syntactically and translate it break down
+without exception on `if(WIN32)`, `find_package`, and user-defined macros;
+the cost of fixing the output exceeds a rewrite.
 
-実行結果を構造化データとして取り出す口は既に存在する。
+## 2. Dynamic extraction paths
 
-| 元 | 抽出口 | 得られるもの |
+The hooks for extracting execution results as structured data already exist.
+
+| Source | Extraction point | What you get |
 |---|---|---|
-| CMake | File API（codemodel v2, JSON） | ターゲット、ソース、include、define、リンク、構成ごと |
-| Meson | `meson introspect` | 同等、より整理された形 |
-| Bazel | `aquery --output=proto` | アクショングラフそのもの |
-| autotools | なし（`compile_commands.json` のみ） | 翻訳単位ごとのフラグ列。ターゲット構造は失われる |
+| CMake | File API (codemodel v2, JSON) | targets, sources, includes, defines, links, per configuration |
+| Meson | `meson introspect` | the same, in tidier form |
+| Bazel | `aquery --output=proto` | the action graph itself |
+| autotools | none (`compile_commands.json` only) | per-translation-unit flag lists; target structure is lost |
 
-CMake File API は IDE が実際に使用している一級のインターフェースであり、
-ここから読むのが唯一妥当な経路。
+The CMake File API is the first-class interface IDEs actually use; reading
+from it is the only sensible path.
 
-## 3. 本質的な限界
+## 3. The essential limitation
 
-抽出できるのは**プログラムの一射影**である。特定 OS・特定構成・特定の依存解決結果での
-スナップショットであり、条件分岐は失われる。出力は成果物ではなく下書きとして扱う。
+What can be extracted is **one projection of a program**: a snapshot under a
+specific OS, configuration, and dependency-resolution result. Conditionals
+are lost. The output is a draft, not a finished artifact.
 
-さらに、本システムは既存システムが許していたものを意図的に拒否する（ABI 不整合を
-失敗にする等）。忠実に移行した結果、正当に受け付けないマニフェストが生成される場合があり、
-その扱いを UX として決めておく必要がある。
+Moreover, this system deliberately rejects things existing systems allowed
+(ABI mismatches become failures, and so on). A faithful migration can
+therefore produce a manifest that is legitimately rejected, and how that is
+handled needs to be settled as UX.
 
-## 4. 機能の重心を `verify` に置く
+## 4. Put the weight on `verify`
 
-粗い移行結果は害になりうる。全フラグが平坦化され意図が失われたマニフェストが生成され、
-そのままコミットされて保守対象になる、という経路が最悪である。
+A crude migration result can do harm. The worst path: a manifest is generated
+with every flag flattened and intent lost, gets committed as-is, and becomes
+a maintenance burden.
 
 ```
-dowel migrate import   # File API から下書きを生成（未検証マークつき）
-dowel migrate verify   # 既存システムの compile_commands.json と
-                       # 自システムのアクション集合を比較し、差分を報告
+dowel migrate import   # generate a draft from the File API (marked unverified)
+dowel migrate verify   # compare the existing system's compile_commands.json
+                       # against our action set, and report the differences
 ```
 
-`verify` はアクショングラフを既に持っているため実装コストが低く、価値が高い。
-移行を一度きりの変換ではなく、**段階的移植中の継続的な等価性検査**として提供できる。
+`verify` is cheap to implement — the action graph already exists — and high
+value. Migration becomes not a one-shot conversion but **a continuous
+equivalence check during incremental porting**.
 
-「このターゲットは移植済みで、元の環境と同一のコンパイル引数を生成している」が
-機械的に確認できる状態は、移行の心理的障壁を大きく下げる。
+Being able to confirm mechanically that "this target is ported and generates
+compile arguments identical to the original environment" removes much of the
+psychological barrier to migrating.
 
-## 5. 移行の単位
+## 5. The unit of migration
 
-依存供給を外部へ委譲する方針（[ADR-0001](adr/0001-toolchain-vs-supply.md)）により、
-未移植部分は既存システムのまま外部依存として取り込める。
+Because dependency supply is delegated externally
+([ADR-0001](adr/0001-toolchain-vs-supply.md)), unported parts remain on the
+existing system and are consumed as external dependencies.
 
-移行の単位はプロジェクト全体ではなく**ターゲット**となり、これが段階性を担保する。
+The unit of migration is therefore the **target**, not the whole project —
+which is what makes it incremental.
 
-## 6. 優先度
+## 6. Priorities
 
-| 対象 | 実装コスト | 価値 |
+| Item | Cost | Value |
 |---|---|---|
-| `verify`（compile_commands 比較） | 低 | 高 |
-| CMake File API 取り込み | 中 | 高 |
-| Meson introspect 取り込み | 低 | 中（Meson 利用者は移行動機が弱い） |
-| Bazel aquery 取り込み | 高 | 低（移行動機はあるが規模前提が異なる） |
-| 静的翻訳 | 高 | 負 |
+| `verify` (compile_commands comparison) | low | high |
+| CMake File API import | medium | high |
+| Meson introspect import | low | medium (Meson users have weak motivation to migrate) |
+| Bazel aquery import | high | low (motivation exists but the scale assumptions differ) |
+| Static translation | high | negative |
 
-`verify` から着手し、`import` は CMake のみに絞る。
+Start with `verify`; limit `import` to CMake.
