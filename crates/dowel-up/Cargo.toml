@@ -1,0 +1,12 @@
+[package]
+name = "dowel-up"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Fetches, pins, and switches versions of the dowel binary."
+
+[[bin]]
+name = "dowelup"
+path = "src/main.rs"

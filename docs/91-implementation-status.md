@@ -34,6 +34,7 @@
 | `dowel-model` | パッケージ読み込み、ターゲット、依存グラフ、インタフェース併合、`why` |
 | `dowel-build` | glob 展開、アクショングラフ、ninja 生成、`compile_commands.json`、実行 |
 | `dowel-cli` | `dowel` バイナリ |
+| `dowel-up` | `dowelup` バイナリ。dowel 自体の取得・固定・切り替え |
 
 検証用の現物は `tests/projects/`（実物フィクスチャ）と `examples/`（文書の例）に置く。
 
@@ -176,6 +177,24 @@
 見ているのは開いているファイル1つである。ファイルを跨ぐ診断は
 `dowel_lsp::UNSUPPORTED` に理由とともに列挙してある。
 
+### 取得（`dowel-up`）
+
+`dowelup` が dowel 自体を取得し、プロジェクトごとに版を固定する
+（[ADR-0012](adr/0012-self-acquisition.md)、使い方は
+[61-acquisition.md](61-acquisition.md)）。
+
+- 指定子（`stable` / `nightly` / `nightly-<日付>` / `X.Y.Z` / `branch:` /
+  `tag:` / sha）を commit sha に解決し、mirror からの checkout を
+  `cargo build --release` でビルドして `$DOWELUP_HOME/versions/<sha>/` に置く。
+  履歴とネットワークの操作は `git` に、ビルドは `cargo` に委譲する
+- `.dowel-version`（pin）と既定による選択。`dowel` の名で起動されると
+  shim として働き、選んだ版へ exec する。先頭の `+<指定子>` で
+  インストール済みの版を直接選べる。選択はネットワークに触れない
+- pin に書かれるのは解決済みの sha のみ。名前を手書きした場合は解決せず、
+  `dowelup pin` での解決へ誘導する
+- `stable` は上流に release タグが現れるまで解決できない。
+  prebuilt バイナリの配布は未着手（Q10）
+
 ### 診断とログ
 
 - 重大度・安定コード・複数ラベル・注記・機械適用可能な修正提案
@@ -220,12 +239,12 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 319 件）。
+現在の内訳（テスト 329 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 208 |
+| `unit-*` | クレートごとの単体テスト | 216 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 10 |
@@ -234,6 +253,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 11 |
 | `diagnostics` | 診断が CLI まで届くこと（47 事例）、修正提案の適用、位置の有無、`check` の守備範囲、網羅の追跡 | 10 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
+| `up` | 上流のフィクスチャに対する `dowelup` の解決・取得・切り替え | 2 |
 | `docs` | 文書のリンクと索引の整合 | 4 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
 
@@ -278,6 +298,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | 言語サーバのファイルを跨ぐ診断、ホバー | Phase 4。診断はファイル単位まで実装済み（`dowel_lsp::UNSUPPORTED`） |
 | 対象機に残した成果物の掃除、転送の省略判定 | Phase 4。転送は毎回行う |
 | 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
+| `dowelup` の prebuilt 取得 | Q10。現状はソースビルドのみ |
 | ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |
 | C++（`tc.cxx`、拡張子によるコンパイラ選択、C++ を含むターゲットのリンカ選択） | 未定。`README.md` は「C/C++ を主対象とする」と述べているが、現状は C のみ。C++ のソースは `unsupported-language` で拒む |
 
