@@ -27,6 +27,7 @@ Commands:
     schema dump        Print the schema and configuration vocabulary in machine-readable form.
     cache info         Report the size and record count of the on-disk store.
     cache gc           Remove stores left by older formats.
+    lsp                Speak LSP on stdin and stdout. Editors start this; it is not a daemon.
 
 Common options:
     -C, --directory <path>   Operate on the package in this directory (default: .)
@@ -75,13 +76,22 @@ Examples:
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Command {
     Check,
-    Build { targets: Vec<String> },
-    Test { targets: Vec<String> },
-    Why { target: String, property: String },
+    Build {
+        targets: Vec<String>,
+    },
+    Test {
+        targets: Vec<String>,
+    },
+    Why {
+        target: String,
+        property: String,
+    },
     Graph,
     SchemaDump,
     CacheInfo,
     CacheGc,
+    /// 言語サーバ。標準入出力で LSP を話す（docs/30-devexp.md 3.2）
+    Lsp,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -160,7 +170,7 @@ pub enum Parsed {
     Version,
 }
 
-const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema", "cache"];
+const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema", "cache", "lsp"];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -334,6 +344,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
         "build" => Command::Build { targets: positional },
         "test" => Command::Test { targets: positional },
         "graph" => Command::Graph,
+        "lsp" => Command::Lsp,
         "why" => {
             if positional.len() != 2 {
                 return Err("`why` takes two arguments: <target> <property>".into());

@@ -64,6 +64,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     if opts.command == Command::CacheInfo {
         return cache_info(&opts.directory);
     }
+    // 言語サーバはマニフェストを要さない。開いている緩衝が正本であり、
+    // 起動時に読むものは無い（docs/30-devexp.md 3.2）。
+    if opts.command == Command::Lsp {
+        let stdin = std::io::stdin();
+        let stdout = std::io::stdout();
+        dowel_lsp::serve(&mut stdin.lock(), &mut stdout.lock())
+            .map_err(|e| format!("the language server stopped: {e}"))?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if opts.command == Command::CacheGc {
         let removed = dowel_store::Store::gc(&opts.directory)
             .map_err(|e| format!("cannot clean the store: {e}"))?;
@@ -97,7 +106,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     sess.diagnostics.extend(idiags);
 
     match &opts.command {
-        Command::SchemaDump | Command::CacheInfo | Command::CacheGc => {
+        Command::SchemaDump | Command::CacheInfo | Command::CacheGc | Command::Lsp => {
             unreachable!("handled above")
         }
 

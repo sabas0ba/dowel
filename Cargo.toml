@@ -8,6 +8,7 @@ members = [
     "crates/dowel-eval",
     "crates/dowel-model",
     "crates/dowel-build",
+    "crates/dowel-lsp",
     "crates/dowel-cli",
 ]
 
@@ -26,6 +27,7 @@ dowel-store = { path = "crates/dowel-store" }
 dowel-eval = { path = "crates/dowel-eval" }
 dowel-model = { path = "crates/dowel-model" }
 dowel-build = { path = "crates/dowel-build" }
+dowel-lsp = { path = "crates/dowel-lsp" }
 
 # 起動時間の予算（無操作時 10ms 以下、docs/20-architecture.md 5.4）は
 # リリースビルドの構成に依存する。動的リンクを増やさないため LTO を有効にする。

@@ -1,21 +1,15 @@
 [package]
-name = "dowel-cli"
+name = "dowel-lsp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The dowel command line."
-
-[[bin]]
-name = "dowel"
-path = "src/main.rs"
+description = "Language server for the dowel manifest language."
 
 [dependencies]
 dowel-support.workspace = true
 dowel-syntax.workspace = true
 dowel-eval.workspace = true
 dowel-model.workspace = true
-dowel-build.workspace = true
-dowel-lsp.workspace = true
-dowel-store.workspace = true
+dowel-query.workspace = true

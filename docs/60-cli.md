@@ -22,6 +22,7 @@ dowel graph --kind=action        # アクショングラフ
 dowel schema dump                # スキーマと構成語彙（機械可読）
 dowel cache info                 # ストアの規模
 dowel cache gc                   # 古い形式のストアを回収する
+dowel lsp                        # 標準入出力で LSP を話す（エディタが起動する）
 ```
 
 デバッグ時の観測は環境変数か `--log-level` で行う。

@@ -18,6 +18,7 @@ version = "0.0.1"
 dependencies = [
  "dowel-build",
  "dowel-eval",
+ "dowel-lsp",
  "dowel-model",
  "dowel-store",
  "dowel-support",
@@ -28,6 +29,17 @@ dependencies = [
 name = "dowel-eval"
 version = "0.0.1"
 dependencies = [
+ "dowel-support",
+ "dowel-syntax",
+]
+
+[[package]]
+name = "dowel-lsp"
+version = "0.0.1"
+dependencies = [
+ "dowel-eval",
+ "dowel-model",
+ "dowel-query",
  "dowel-support",
  "dowel-syntax",
 ]

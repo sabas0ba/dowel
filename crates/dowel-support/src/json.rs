@@ -1,8 +1,12 @@
-//! 最小の JSON 直列化。
+//! 最小の JSON。
 //!
-//! 対象は「本システムが出力する側」に限る。読む側（CMake File API 等）は
-//! Phase 3 で必要になった時点で別に用意する。
-//! ここで自前に持つ理由は [ADR-0007](../../../docs/adr/0007-implementation-language.md)。
+//! 書き出しは診断とグラフの機械可読出力が、読み取りは言語サーバが受け取る
+//! 要求が使う。自前に持つ理由は
+//! [ADR-0007](../../../docs/adr/0007-implementation-language.md)。
+
+mod read;
+
+pub use read::{parse, Json};
 
 use std::fmt::Write as _;
 
