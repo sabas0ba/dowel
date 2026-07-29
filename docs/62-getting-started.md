@@ -86,10 +86,11 @@ speedup (see the store section of [60-cli.md](60-cli.md)).
 
 ## 4. Split out a library and depend on it
 
-Dependencies between packages are declared in `dowel.toml` (currently local
-paths only; fetching from registries / git / tarballs is not implemented —
-[91-implementation-status.md](91-implementation-status.md)). Which target uses
-a dependency is written in `dowel.build`.
+Dependencies between packages are declared in `dowel.toml` — as a local
+`path`, or as a `git` URL pinned to a full commit sha
+([11-toml-reference.md](11-toml-reference.md); registry fetching is not
+implemented yet). Which target uses a dependency is written in
+`dowel.build`.
 
 `app/dowel.toml`:
 

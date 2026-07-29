@@ -31,10 +31,18 @@ Two consequences worth knowing:
 
 ## 2. Loading and the dependency graph
 
-Loading starts at the package in `--directory` and follows `path`
-dependencies transitively. For each package, `dowel.toml` is read
+Loading starts at the package in `--directory` and follows dependencies
+transitively. For each package, `dowel.toml` is read
 ([11-toml-reference.md](11-toml-reference.md)), then `dowel.build` defines
 its targets.
+
+- `path` dependencies resolve relative to the declaring package
+- `git` dependencies are fetched during loading (so `check` fetches too —
+  it needs the dependency's manifests). Fetching delegates to the `git`
+  command and lands in `.dowel/deps/<name>-<rev12>/`, marked complete
+  atomically; because the rev pins the content, later runs reuse the
+  checkout without touching the network. Deleting `.dowel/deps` is safe but,
+  unlike the cache, rebuilding it needs the network again
 
 - Feature flags are resolved first (requested `--features`, plus `default`
   unless `--no-default-features`, transitively closed). An inactive

@@ -51,8 +51,12 @@ pub struct Dependency {
 
 #[derive(Clone, Debug)]
 pub enum DepKind {
-    /// ローカルパス依存。現時点で唯一取得を要さない形態
+    /// ローカルパス依存。取得を要さない形態
     Path(PathBuf),
+    /// git 依存。`rev` はフル 40 桁の commit sha（読み取り時に検証済み）。
+    /// ブランチ・タグでの解決は許さない。名前だけの参照は固定とみなさない
+    /// （docs/11-toml-reference.md）
+    Git { url: String, rev: String },
     /// 未実装の供給形態。診断済みで、下流はターゲットを見つけられない
     Unsupported(&'static str),
 }
@@ -190,9 +194,20 @@ pub fn from_document(
                     DepKind::Unsupported("path")
                 }
             }
-        } else if t.entry("git").is_some() {
-            unsupported(diags, manifest_file, t.site, "git dependencies");
-            DepKind::Unsupported("git")
+        } else if let Some(e) = t.entry("git") {
+            match e.value.as_str() {
+                Some(url) => match pinned_rev(t) {
+                    Ok(rev) => DepKind::Git { url: url.to_string(), rev },
+                    Err(found) => {
+                        unpinned(diags, manifest_file, t, &name, found);
+                        DepKind::Unsupported("git")
+                    }
+                },
+                None => {
+                    type_err(diags, e.site, "dependencies.git", "a string");
+                    DepKind::Unsupported("git")
+                }
+            }
         } else if t.entry("version").is_some() {
             unsupported(diags, manifest_file, t.site, "registry dependencies");
             DepKind::Unsupported("registry")
@@ -217,6 +232,47 @@ pub fn from_document(
     pkg
 }
 
+/// `rev` がフル 40 桁の commit sha であることを確かめる。
+///
+/// 短縮形やブランチ名を受けると、同じマニフェストが時間や環境で別の内容に
+/// 解決されうる。「名前だけの参照は固定とみなさない」（docs/50-development.md
+/// 5節）を依存にも課す。
+fn pinned_rev(t: &dowel_eval::Table) -> Result<String, Option<String>> {
+    let Some(e) = t.entry("rev") else { return Err(None) };
+    let Some(s) = e.value.as_str() else { return Err(Some(String::new())) };
+    let rev = s.to_ascii_lowercase();
+    if rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(rev)
+    } else {
+        Err(Some(s.to_string()))
+    }
+}
+
+fn unpinned(
+    diags: &mut Vec<Diagnostic>,
+    file: FileId,
+    t: &dowel_eval::Table,
+    name: &str,
+    found: Option<String>,
+) {
+    let what = match &found {
+        None => "has no `rev`".to_string(),
+        Some(s) if s.is_empty() => "has a non-string `rev`".to_string(),
+        Some(s) => format!("pins `rev = {s:?}`, which is not a full commit sha"),
+    };
+    let site = t.entry("rev").map(|e| e.site).unwrap_or(t.site);
+    diags.push(
+        Diagnostic::error("unpinned-dependency", format!("git dependency `{name}` {what}"))
+            .with_label(Label::primary(
+                file,
+                site.span,
+                "a full 40-digit commit sha is required",
+            ))
+            .note("branches, tags, and abbreviated shas resolve differently over time; they do not count as pinned")
+            .note("take the sha with `git rev-parse HEAD` in the dependency's repository"),
+    );
+}
+
 fn type_err(diags: &mut Vec<Diagnostic>, site: Site, field: &str, expected: &str) {
     diags.push(Diagnostic::error("type-mismatch", format!("`{field}` must be {expected}")).at(
         site.file,
@@ -229,8 +285,8 @@ fn unsupported(diags: &mut Vec<Diagnostic>, file: FileId, site: Site, what: &str
     diags.push(
         Diagnostic::error("unsupported-dependency", format!("{what} cannot be fetched yet"))
             .with_label(Label::primary(file, site.span, "this dependency cannot be resolved yet"))
-            .note("only `path` dependencies are implemented; fetching is Phase 5 (docs/90-roadmap.md)")
-            .note("replacing it with a `path` dependency lets the build proceed"),
+            .note("only `path` and pinned `git` dependencies are implemented; the registry is Phase 5 (docs/90-roadmap.md)")
+            .note("replacing it with a `path` or `git` dependency lets the build proceed"),
     );
 }
 

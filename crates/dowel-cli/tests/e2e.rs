@@ -1055,3 +1055,95 @@ fn the_declared_cxx_toolchain_is_used_for_compile_and_link() {
     std::fs::remove_file(p.path("app/src/main.cpp")).unwrap();
     p.run("app", &["check"]).success();
 }
+
+/// git 依存の「上流」として使うリポジトリを作り、その commit sha を返す。
+///
+/// 内容は C の静的ライブラリ1つ。取得側はこれを `git = <パス>` と
+/// フル 40 桁の `rev` で固定する。
+fn git_remote(p: &Project) -> String {
+    p.write("remote/dowel.toml", "[package]\nname    = \"liblen\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "remote/dowel.build",
+        "[lib.len]\nsources = glob(\"src/*.c\")\n\n[lib.len.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("remote/include/len.h", "#pragma once\nint len_of(const char *s);\n");
+    p.write(
+        "remote/src/len.c",
+        "#include \"len.h\"\nint len_of(const char *s) { int n = 0; while (s[n]) n++; return n; }\n",
+    );
+    let dir = p.path("remote");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("cannot run git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    git(&["init", "--quiet"]);
+    git(&["add", "."]);
+    git(&["commit", "--quiet", "-m", "initial"]);
+    git(&["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// app の `dowel.toml` を、上流を rev で固定する形で書く。
+fn write_git_manifest(p: &Project, rev: &str) {
+    p.write(
+        "app/dowel.toml",
+        &format!(
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"liblen\"\ngit  = \"{}\"\nrev  = \"{rev}\"\n",
+            p.path("remote").display()
+        ),
+    );
+}
+
+/// 取得からビルド・実行までと、取得済み checkout のオフライン再利用。
+#[test]
+fn a_pinned_git_dependency_is_fetched_and_reused_offline() {
+    let p = Project::new("git-dep");
+    let rev = git_remote(&p);
+    write_git_manifest(&p, &rev);
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"liblen\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"len.h\"\nint main(void) { printf(\"n=%d\\n\", len_of(\"abc\")); return 0; }\n",
+    );
+
+    p.run("app", &["build"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "n=3\n");
+
+    // checkout は `.dowel/deps/<name>-<rev12>/` に置かれ、完了印を持つ。
+    let checkout = p.path("app/.dowel/deps").join(format!("liblen-{}", &rev[..12]));
+    assert!(checkout.join(".dowel-rev").exists(), "missing {}", checkout.display());
+
+    // 上流を消しても再ビルドできる。rev が固定されているため、
+    // 2回目以降の解決はネットワーク（ここでは上流のパス）に触れない。
+    std::fs::remove_dir_all(p.path("remote")).unwrap();
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"len.h\"\nint main(void) { printf(\"n=%d\\n\", len_of(\"abcde\")); return 0; }\n",
+    );
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&bin), "n=5\n");
+}
+
+/// 実在する上流でも、そこに無い rev は取得の診断で拒まれる。
+#[test]
+fn an_unknown_rev_is_refused_with_a_diagnostic() {
+    let p = Project::new("git-dep-bad-rev");
+    let _ = git_remote(&p);
+    write_git_manifest(&p, "0123456789abcdef0123456789abcdef01234567");
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("unfetchable-dependency");
+    r.stderr_contains("liblen");
+}

@@ -1,6 +1,7 @@
 //! モデル層。マニフェストをパッケージとターゲットの網に組み上げる。
 
 pub mod dump;
+pub mod fetch;
 pub mod graph;
 pub mod interface;
 pub mod package;

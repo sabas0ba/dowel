@@ -323,6 +323,24 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unpinned-dependency",
+        why: "a git dependency without a full 40-digit `rev` is not pinned",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"libfoo\"\ngit  = \"https://example.invalid/libfoo\"\nrev  = \"main\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "unfetchable-dependency",
+        why: "the pinned rev cannot be fetched from the given URL",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"libfoo\"\ngit  = \"/nonexistent/no-such-repo\"\nrev  = \"0123456789abcdef0123456789abcdef01234567\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "undeclared-dependency",
         why: "`dep(\"libfoo\")` is used without declaring it in `dowel.toml`",
         files: &[(
