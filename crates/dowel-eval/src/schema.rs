@@ -235,6 +235,18 @@ pub fn block_props() -> Vec<PropDef> {
     ]
 }
 
+/// 組み込み関数の署名と説明。
+///
+/// `dowel schema dump` と言語サーバのホバーが同じ表を読む。二重に持つと、
+/// 片方だけを直したときに黙って食い違う。
+pub const FUNCTIONS: &[(&str, &str, &str)] = &[
+    ("glob", "(Str) -> List<Path>", "files matching the pattern; expanded at plan time"),
+    ("dir", "(Str) -> Path", "a directory relative to the package root"),
+    ("file", "(Str) -> Path", "a file relative to the package root"),
+    ("dep", "(Str) -> DepRef", "a reference to a dependency declared in dowel.toml"),
+    ("target", "(Str) -> TargetRef", "a reference to a target in the same package"),
+];
+
 pub fn lookup(block: Block, name: &str) -> Option<PropDef> {
     let props = if block == Block::Root { root_props() } else { block_props() };
     props.into_iter().find(|p| p.name == name)
