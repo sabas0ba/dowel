@@ -170,6 +170,8 @@ pub fn plan(
         let includes = collect_includes(sess, &env, &build_dir, &mut diags);
         let defines = collect_defines(&env);
         let flags = collect_flags(&env, "flags");
+        let c_flags = collect_flags(&env, "c_flags");
+        let cxx_flags = collect_flags(&env, "cxx_flags");
         let link_flags = collect_flags(&env, "link_flags");
 
         log_debug!(
@@ -193,6 +195,12 @@ pub fn plan(
         if !flags.is_empty() {
             log_trace!("  flags   {}", flags.join(" "));
         }
+        if !c_flags.is_empty() {
+            log_trace!("  cflags  {}", c_flags.join(" "));
+        }
+        if !cxx_flags.is_empty() {
+            log_trace!("  cxxflags {}", cxx_flags.join(" "));
+        }
         if !link_flags.is_empty() {
             log_trace!("  ldflags {}", link_flags.join(" "));
         }
@@ -211,6 +219,9 @@ pub fn plan(
             let mut args: Vec<String> = Vec::new();
             args.extend(default_compile_flags(cfg));
             args.extend(flags.iter().cloned());
+            // 言語別のフラグは共通の `flags` の後。後勝ちの慣習により、
+            // 言語別の指定が共通の指定を上書きできる向きにする
+            args.extend(if is_cxx(src) { &cxx_flags } else { &c_flags }.iter().cloned());
             for inc in &includes {
                 args.push(format!("-I{}", inc.display()));
             }

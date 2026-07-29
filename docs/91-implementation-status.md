@@ -186,6 +186,9 @@ changes, only the speed.
   translation unit uses the C++ driver, so the C++ runtime is linked even
   when the binary itself is pure C. The C++ toolchain is only required — and
   only probed — when C++ sources are present
+- Per-language flags: `flags` applies to every language, `c_flags` /
+  `cxx_flags` follow it and reach only their own language (the place for
+  `-std=...`)
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
   freshness reading depfiles)
@@ -325,7 +328,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (382 tests):
+Current breakdown (383 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -334,7 +337,7 @@ Current breakdown (382 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 47 |
+| `e2e` | compile real C and C++, run it, check the output | 48 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -412,7 +415,7 @@ cannot be measured with the current fixtures; the scale fixture
 | registry / tarball dependencies, `dowel.lock` | Phase 5; today `path` and sha-pinned `git` work, neither of which needs a lock |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi` |
-| per-language flags (`cxx_flags`, C++ standard selection) | undecided; today `flags` applies to both C and C++ translation units |
+| a typed C/C++ standard property (`cxx_std = "c++20"`) | undecided; today the standard is written through `cxx_flags = ["-std=c++20"]`. A typed property would feed the ABI label (Q2) |
 
 ## Divergences from the design documents
 

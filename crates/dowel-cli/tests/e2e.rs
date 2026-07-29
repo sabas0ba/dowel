@@ -1147,3 +1147,61 @@ fn an_unknown_rev_is_refused_with_a_diagnostic() {
     r.stderr_contains("unfetchable-dependency");
     r.stderr_contains("liblen");
 }
+
+/// 言語別フラグ。`flags` は両言語、`c_flags` / `cxx_flags` は各言語にのみ効く。
+///
+/// 漏れの検査はフィクスチャ側の `#error` で行う（51-testing の方針どおり、
+/// 期待値をハーネスに二重に持たない）。`-std=c++11` が実際に届いたことは
+/// `__cplusplus` の static_assert が確かめる。
+#[test]
+fn per_language_flags_reach_only_their_language() {
+    let p = Project::new("lang-flags");
+    p.write("app/dowel.toml", "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "app/dowel.build",
+        r#"
+[bin.app]
+sources = glob("src/*.c*")
+
+[bin.app.private]
+includes  = [dir("src")]
+flags     = ["-DCOMMON=1"]
+c_flags   = ["-DFROM_C=1"]
+cxx_flags = ["-std=c++11", "-DFROM_CXX=1"]
+"#,
+    );
+    p.write(
+        "app/src/greet.h",
+        "#pragma once\n#ifdef __cplusplus\nextern \"C\"\n#endif\nint cxx_part(void);\n",
+    );
+    p.write(
+        "app/src/greet.cpp",
+        r#"#include "greet.h"
+static_assert(__cplusplus == 201103L, "cxx_flags did not reach the C++ compile");
+#ifdef FROM_C
+#error "c_flags leaked into a C++ translation unit"
+#endif
+#ifndef COMMON
+#error "flags did not reach the C++ compile"
+#endif
+extern "C" int cxx_part(void) { return FROM_CXX; }
+"#,
+    );
+    p.write(
+        "app/src/main.c",
+        r#"#include <stdio.h>
+#include "greet.h"
+#ifdef FROM_CXX
+#error "cxx_flags leaked into a C translation unit"
+#endif
+#ifndef COMMON
+#error "flags did not reach the C compile"
+#endif
+int main(void) { printf("c=%d cxx=%d\n", FROM_C, cxx_part()); return 0; }
+"#,
+    );
+
+    p.run("app", &["build"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "c=1 cxx=1\n");
+}
