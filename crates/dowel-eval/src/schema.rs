@@ -346,9 +346,19 @@ fn same_item(a: &Value, b: &Value) -> bool {
     true
 }
 
+/// 列の値なら要素へ、そうでなければ自身を1要素として返す。
+///
+/// 入れ子は最後まで解く。列の要素に `match` を書くと、具体化した結果は
+/// 列の中の列になる。1段しか解かないと、その値は併合の結果に残ったまま
+/// 下流で読み飛ばされ、`check` も `why` も通るのにコンパイル引数にだけ
+/// 現れないという状態になる。
+///
+/// 要素型はいずれもスカラであり（`List<Str>` / `List<Path>` / `List<DepRef>`）、
+/// 入れ子そのものに意味は無い。評価は全域で再帰を持たないため
+/// （[ADR-0004](../../../docs/adr/0004-syntax.md)）、値は有限の木である。
 fn flatten(v: &Value) -> Vec<Value> {
     match &v.data {
-        Data::List(items) => items.clone(),
+        Data::List(items) => items.iter().flat_map(flatten).collect(),
         Data::Error => Vec::new(),
         _ => vec![v.clone()],
     }
@@ -457,6 +467,24 @@ mod tests {
         assert_eq!(items[0].display(), "include");
         assert_eq!(items[1].display(), "src");
         assert_eq!(items[2].display(), "gen");
+    }
+
+    #[test]
+    fn merging_unwraps_a_list_nested_in_a_list() {
+        // 列の要素に `match` を書くと、具体化した結果は列の中の列になる。
+        // 1段しか解かないと、その値は併合の結果に残ったまま下流で読み飛ばされる。
+        let def = lookup(Block::Private, "flags").unwrap();
+        let inner = Value::list(
+            Type::Str,
+            vec![Value::str("-O0", Prov::none()), Value::str("-g", Prov::none())],
+            Prov::none(),
+        );
+        let outer =
+            Value::list(Type::Str, vec![Value::str("-Wall", Prov::none()), inner], Prov::none());
+        let mut diags = Vec::new();
+        let merged = merge_values(&def, &[outer], &mut diags);
+        let items: Vec<String> = merged.as_list().unwrap().iter().map(|v| v.display()).collect();
+        assert_eq!(items, ["\"-Wall\"", "\"-O0\"", "\"-g\""], "{items:?}");
     }
 
     #[test]

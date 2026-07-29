@@ -511,9 +511,11 @@ fn collect_flags(env: &dowel_model::PropMap, name: &str) -> Vec<String> {
     flatten(value).iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
 }
 
+/// 列の値なら要素へ、そうでなければ自身を1要素として返す。入れ子は最後まで解く。
+/// 理由は `dowel_eval::schema` の同名関数に記した。
 fn flatten(value: &Value) -> Vec<Value> {
     match &value.data {
-        Data::List(items) => items.clone(),
+        Data::List(items) => items.iter().flat_map(flatten).collect(),
         Data::Error => Vec::new(),
         _ => vec![value.clone()],
     }
