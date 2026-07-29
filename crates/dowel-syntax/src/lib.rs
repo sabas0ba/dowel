@@ -15,4 +15,4 @@ pub mod parser;
 
 pub use cst::{Child, Node, NodeKind};
 pub use lexer::{Token, TokenKind};
-pub use parser::{parse, Parsed};
+pub use parser::{parse, parse_with_max_nesting, Parsed, MAX_NESTING, MAX_NESTING_CEILING};

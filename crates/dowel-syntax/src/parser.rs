@@ -17,7 +17,7 @@ pub struct Parsed {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// 値の入れ子の深さの上限。
+/// 値の入れ子の深さの既定の上限。`--max-nesting` で変えられる。
 ///
 /// 解析は再帰下降であり、深さがそのままスタックを使う。上限が無いと
 /// 生成された入力で abort し、診断を1件も出せない（issue #33）。
@@ -26,7 +26,21 @@ pub struct Parsed {
 /// 入れ子は数段であり、64 は人が書く形に対して十分に深い。
 pub const MAX_NESTING: usize = 64;
 
+/// 指定できる上限の天井。
+///
+/// 上限は「abort しない」ことを守るための仕掛けであり、スタックが尽きる
+/// 深さまで上げられては意味を失う。観測では 6000 段のあたりで溢れた
+/// （issue #33）ため、余裕を持って1桁下に置く。
+pub const MAX_NESTING_CEILING: usize = 512;
+
 pub fn parse(src: &str, file: FileId) -> Parsed {
+    parse_with_max_nesting(src, file, MAX_NESTING)
+}
+
+/// 入れ子の上限を与えて解析する。`--max-nesting` の配管の終点。
+///
+/// 呼び手は [`MAX_NESTING_CEILING`] 以下に検証してから渡す。
+pub fn parse_with_max_nesting(src: &str, file: FileId, max_nesting: usize) -> Parsed {
     let lexed = lex(src);
     let mut p = Parser {
         src,
@@ -34,6 +48,7 @@ pub fn parse(src: &str, file: FileId) -> Parsed {
         tokens: lexed.tokens,
         pos: 0,
         depth: 0,
+        max_nesting: max_nesting.min(MAX_NESTING_CEILING),
         builder: TreeBuilder::new(),
         diagnostics: Vec::new(),
     };
@@ -67,8 +82,10 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     /// `tokens` の位置。些末部を含む生の位置である。
     pos: usize,
-    /// いま解析している値の入れ子の深さ。[`MAX_NESTING`] で打ち切る。
+    /// いま解析している値の入れ子の深さ。`max_nesting` で打ち切る。
     depth: usize,
+    /// 入れ子の上限。既定は [`MAX_NESTING`]
+    max_nesting: usize,
     builder: TreeBuilder,
     diagnostics: Vec<Diagnostic>,
 }
@@ -343,7 +360,7 @@ impl<'a> Parser<'a> {
         let opens_a_container = matches!(self.nth(0), TokenKind::LBracket | TokenKind::LBrace)
             || (self.nth(0) == TokenKind::Ident
                 && (self.at_keyword(0, "match") || self.nth(1) == TokenKind::LParen));
-        if opens_a_container && self.depth >= MAX_NESTING {
+        if opens_a_container && self.depth >= self.max_nesting {
             self.too_deep();
             return;
         }
@@ -361,10 +378,10 @@ impl<'a> Parser<'a> {
         self.diagnostics.push(
             Diagnostic::error(
                 "nesting-too-deep",
-                format!("the value is nested more than {MAX_NESTING} levels deep"),
+                format!("the value is nested more than {} levels deep", self.max_nesting),
             )
             .at(self.file, t.span, "the nesting reaches its limit here")
-            .note("such depth usually comes from a generated manifest; flatten the value"),
+            .note("such depth usually comes from a generated manifest; flatten the value, or raise the limit with `--max-nesting`"),
         );
         self.builder.start_node(NodeKind::Error, t.span.start);
         let mut open = 0usize;
@@ -815,6 +832,20 @@ mod tests {
         // 位置は上限に達した括弧を指す。
         assert_eq!(label.span.start as usize, 4 + MAX_NESTING);
         assert_lossless(&deep);
+    }
+
+    #[test]
+    fn the_limit_is_configurable() {
+        // 生成されたマニフェストが 64 を超える場合の逃げ道（PR #36 のレビュー）。
+        let deep = format!("a = {}1{}\n", "[".repeat(100), "]".repeat(100));
+        let parsed = parse_with_max_nesting(&deep, FileId(0), 128);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+        // 天井は越えられない。上限は abort させないための仕掛けであり、
+        // スタックが尽きる深さを受け付けては意味を失う。
+        let very_deep = format!("a = {}1{}\n", "[".repeat(600), "]".repeat(600));
+        let parsed = parse_with_max_nesting(&very_deep, FileId(0), usize::MAX);
+        assert!(parsed.diagnostics.iter().any(|d| d.code == "nesting-too-deep"));
     }
 
     #[test]

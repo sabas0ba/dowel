@@ -101,14 +101,14 @@ pub fn set_text(db: &Db<Key>, file: FileId, text: &str) {
 }
 
 /// 構文解析。
-pub fn parsed(db: &Db<Key>, file: FileId) -> Result<Arc<Parsed>, Cancelled> {
+pub fn parsed(db: &Db<Key>, file: FileId, max_nesting: usize) -> Result<Arc<Parsed>, Cancelled> {
     db.query(Key::Parsed(file), move |db| {
         let src =
             db.input::<String>(Key::Text(file))?.expect("the text input is set before parsing");
         log_trace!("parsing file {} ({} bytes)", file.0, src.len());
-        let parsed = dowel_syntax::parse(&src, file);
+        let parsed = dowel_syntax::parse_with_max_nesting(&src, file, max_nesting);
         log_trace!("  {} parse diagnostics", parsed.diagnostics.len());
-        Ok((parsed, fingerprint_of_source(&src)))
+        Ok((parsed, fingerprint_of_source(&src, max_nesting)))
     })
 }
 
@@ -139,18 +139,19 @@ pub fn evaluated(
     db: &Db<Key>,
     file: FileId,
     strict: bool,
+    max_nesting: usize,
     store: Option<Rc<dyn Evaluations>>,
 ) -> Result<Arc<Evaluated>, Cancelled> {
     db.query(Key::Evaluated(file), move |db| {
         let src = db.input::<String>(Key::Text(file))?.expect("the text input is set before eval");
-        let fp = fingerprint_of_source(&src);
+        let fp = fingerprint_of_source(&src, max_nesting);
         // 復元は解析の前に試す。復元できた場合、`Parsed` のメモは作られない。
         if let Some(store) = &store {
             if let Some(doc) = store.get(file, fp) {
                 return Ok((Evaluated { doc, diagnostics: Vec::new() }, fp));
             }
         }
-        let tree = parsed(db, file)?;
+        let tree = parsed(db, file, max_nesting)?;
         log_trace!("evaluating file {} (strict={strict})", file.0);
 
         let mut diagnostics = tree.diagnostics.clone();
@@ -178,9 +179,17 @@ pub fn evaluated(
 }
 
 /// 導出クエリの指紋。本モジュールの冒頭で述べた理由により、
-/// 本文の指紋をそのまま使う。
-fn fingerprint_of_source(src: &str) -> Fingerprint {
-    fingerprint_str(src)
+/// 本文の指紋から導く。
+///
+/// 入れ子の上限も混ぜる。同じ本文でも上限が違えば診断が違いうるため、
+/// 混ぜないと上限を跨いだ再実行でストアが古い結果を返す（深いマニフェストを
+/// `--max-nesting` を上げて評価・格納した後、既定で実行しても診断が出ない）。
+/// 既定の上限では本文の指紋をそのまま使い、既存のストアと互換に保つ。
+fn fingerprint_of_source(src: &str, max_nesting: usize) -> Fingerprint {
+    if max_nesting == dowel_syntax::MAX_NESTING {
+        return fingerprint_str(src);
+    }
+    dowel_query::fingerprint_of(&(fingerprint_str(src), max_nesting as u64))
 }
 
 // ---------------------------------------------------------------------------

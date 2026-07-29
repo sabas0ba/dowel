@@ -67,6 +67,8 @@ pub struct Session {
     features: Features,
     /// 根の `[features]` から解決した集合。根を読むまでは空
     active: std::collections::BTreeSet<String>,
+    /// 値の入れ子の上限（`--max-nesting`）。既定は `dowel_syntax::MAX_NESTING`
+    max_nesting: usize,
 }
 
 impl Session {
@@ -83,6 +85,14 @@ impl Session {
     /// パッケージとしても依存グラフの節点として残る。取得を伴う供給形態
     /// （Phase 5）では、選ばれていない依存を取得することになる。
     pub fn load_with(root: &Path, features: Features) -> Session {
+        Session::load_with_max_nesting(root, features, dowel_syntax::MAX_NESTING)
+    }
+
+    /// 値の入れ子の上限も与えて読み込む（`--max-nesting` の配管）。
+    ///
+    /// 上限は評価結果の指紋に混ざるため、上限を跨いだ再実行でストアが
+    /// 古い結果を返すことはない（`query::fingerprint_of_source`）。
+    pub fn load_with_max_nesting(root: &Path, features: Features, max_nesting: usize) -> Session {
         let mut sess = Session {
             sm: SourceMap::new(),
             diagnostics: Vec::new(),
@@ -97,6 +107,7 @@ impl Session {
             cache: Rc::new(Cache::open(&canonical(root))),
             features,
             active: std::collections::BTreeSet::new(),
+            max_nesting,
         };
         sess.walk();
         sess
@@ -322,8 +333,9 @@ impl Session {
         // `Session` は打ち切りを公開していないため、この `Db` が
         // 打ち切られることはない。言語サーバを載せる際は、
         // ここが `Result` の伝播点になる。
-        let out = query::evaluated(&self.db, file, strict, Some(self.cache.clone()))
-            .expect("the session never cancels its own queries");
+        let out =
+            query::evaluated(&self.db, file, strict, self.max_nesting, Some(self.cache.clone()))
+                .expect("the session never cancels its own queries");
         self.diagnostics.extend(out.diagnostics.iter().cloned());
         out
     }

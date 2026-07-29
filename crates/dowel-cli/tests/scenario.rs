@@ -465,6 +465,34 @@ fn a_diagnostic_raised_outside_the_evaluation_survives_the_restore() {
 }
 
 #[test]
+fn the_nesting_limit_is_configurable_and_is_part_of_the_store_key() {
+    // 生成されたマニフェストが既定の 64 段を超える場合の逃げ道（`--max-nesting`）。
+    // 上限は評価結果の指紋に混ざる。混ざらないと、上げた上限で評価・格納した
+    // 結果を既定の実行が復元してしまい、出るはずの診断が消える。
+    let p = Project::new("scenario-max-nesting");
+    p.write("app/dowel.toml", "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    p.write(
+        "app/dowel.build",
+        &format!(
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\nflags = {}{}\n",
+            "[".repeat(100),
+            "]".repeat(100)
+        ),
+    );
+
+    let refused = p.run("app", &["check", "--message-format=json"]);
+    assert!(refused.stdout.contains("nesting-too-deep"), "{refused}");
+
+    let raised = p.run("app", &["check", "--message-format=json", "--max-nesting=128"]);
+    assert!(!raised.stdout.contains("nesting-too-deep"), "{raised}");
+
+    // 既定へ戻した実行でも診断は出る。上げた上限で格納した結果を復元しない。
+    let back = p.run("app", &["check", "--message-format=json"]);
+    assert!(back.stdout.contains("nesting-too-deep"), "the store masked the diagnostic\n{back}");
+}
+
+#[test]
 fn removing_the_store_falls_back_to_evaluating_everything() {
     // ストアは高速化のためのものであり、無くても結果は変わらない。
     let p = project("scenario-store-removed");

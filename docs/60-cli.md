@@ -33,6 +33,11 @@ DOWEL_LOG=trace dowel build      # 依存グラフの辺、各アクションの
 dowel check --log-format=json    # 1行1オブジェクト
 ```
 
+解析が受け付ける値の入れ子は既定で 64 段までであり、超えた位置に
+`nesting-too-deep` が出る。生成されたマニフェストが超える場合は
+`--max-nesting=<n>` で上げられる（上限 512。スタックが尽きる深さを
+受け付けると、診断の代わりに abort が戻ってくるため）。
+
 出力先を分ける。stdout は成果物（JSON 診断、グラフ、スキーマ、`why` の結果）、
 stderr は進行とログである。この分担により `dowel graph --format=dot | dot -Tsvg` は
 ログ水準に依らず動作する。

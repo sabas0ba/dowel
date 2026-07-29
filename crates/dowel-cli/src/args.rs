@@ -38,6 +38,7 @@ Common options:
                              Do not pull in `default` from [features]
         --message-format <fmt>
                              human | json (default: human)
+        --max-nesting <n>    Value nesting the parser accepts (default: 64, at most 512)
     -v, --verbose            More logging. Repeat for more.
         --log-level <level>  off|error|warn|info|debug|trace (or the DOWEL_LOG variable)
         --log-format <fmt>   text | json
@@ -122,6 +123,7 @@ pub struct Options {
     pub features: Vec<String>,
     pub default_features: bool,
     pub message_format: MessageFormat,
+    pub max_nesting: usize,
     pub log_level: Option<Level>,
     pub log_format: Format,
     pub color: bool,
@@ -147,6 +149,7 @@ impl Default for Options {
             features: Vec::new(),
             default_features: true,
             message_format: MessageFormat::Human,
+            max_nesting: dowel_syntax::MAX_NESTING,
             log_level: None,
             log_format: Format::Text,
             color: false,
@@ -222,6 +225,21 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     .extend(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
             }
             "--no-default-features" => opts.default_features = false,
+            "--max-nesting" => {
+                let v = take("--max-nesting")?;
+                let n: usize = v
+                    .parse()
+                    .map_err(|_| format!("`--max-nesting` must be a number (got `{v}`)"))?;
+                // 上限は abort させないための仕掛けである。スタックが尽きる
+                // 深さを受け付けては意味を失うため、天井を越えられない。
+                if n == 0 || n > dowel_syntax::MAX_NESTING_CEILING {
+                    return Err(format!(
+                        "`--max-nesting` must be between 1 and {} (got `{v}`)",
+                        dowel_syntax::MAX_NESTING_CEILING
+                    ));
+                }
+                opts.max_nesting = n;
+            }
             "--message-format" => {
                 opts.message_format = match take("--message-format")?.as_str() {
                     "human" => MessageFormat::Human,
@@ -293,6 +311,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--target",
                     "--features",
                     "--no-default-features",
+                    "--max-nesting",
                     "--message-format",
                     "--log-level",
                     "--log-format",
@@ -466,5 +485,15 @@ mod tests {
     #[test]
     fn an_option_without_a_value_is_an_error() {
         assert!(run(&["check", "--config"]).is_err());
+    }
+
+    #[test]
+    fn max_nesting_parses_and_keeps_its_ceiling() {
+        assert_eq!(run(&["check"]).unwrap().max_nesting, dowel_syntax::MAX_NESTING);
+        assert_eq!(run(&["check", "--max-nesting=128"]).unwrap().max_nesting, 128);
+        // 天井を越えた指定は abort の再導入である。黙って丸めず、断る。
+        assert!(run(&["check", "--max-nesting=0"]).is_err());
+        assert!(run(&["check", "--max-nesting=100000"]).is_err());
+        assert!(run(&["check", "--max-nesting=x"]).is_err());
     }
 }
