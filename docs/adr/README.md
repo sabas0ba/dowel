@@ -16,3 +16,4 @@
 | [0009](0009-file-identity.md) | `FileId` は正規化したパスのハッシュとする | Accepted |
 | [0010](0010-check-scope.md) | `check` は計画段まで走らせる | Accepted |
 | [0011](0011-cutoff-and-provenance.md) | 派生の指紋はスパンを含まず、来歴を読む経路はメモを経由しない | Accepted |
+| [0012](0012-store-contents.md) | ストアへ格納するのは評価結果のみとし、診断を持つファイルは格納しない | Accepted |

@@ -360,3 +360,118 @@ fn the_recorded_inputs_show_up_in_cache_info() {
     p.run("app", &["cache", "info"]).success().stdout_contains(".dowel/cache/v1");
     assert!(!recorded_inputs(&p, "app").is_empty());
 }
+
+// --- ストアからの評価結果の復元（ADR-0012）--------------------------------
+
+/// 実行が書いた記録の要約。`store: wrote N values, restored M, skipped K …` を読む。
+fn store_counts(stderr: &str) -> (usize, usize, usize) {
+    let line = stderr
+        .lines()
+        .find(|l| l.contains("store: wrote"))
+        .unwrap_or_else(|| panic!("no store summary in the log:\n{stderr}"));
+    let n = |after: &str| -> usize {
+        let rest = line.split(after).nth(1).expect("the summary changed shape");
+        let word = rest.split_whitespace().next().unwrap_or("");
+        // 数の直後に句読点が続く位置がある（`restored 0,`）。
+        word.trim_end_matches(|c: char| !c.is_ascii_digit())
+            .parse()
+            .unwrap_or_else(|_| panic!("`{word}` after `{after}` is not a count:\n{line}"))
+    };
+    (n("wrote"), n("restored"), n("skipped"))
+}
+
+/// 成否は問わない。ストアへの書き込みは読み込み直後に行うため、
+/// 後段が失敗しても要約は出る。
+fn run_and_count(p: &Project, pkg: &str) -> (usize, usize, usize) {
+    store_counts(&p.run(pkg, &["check", "--log-level=debug"]).stderr)
+}
+
+#[test]
+fn a_first_run_stores_every_manifest_it_evaluated() {
+    let p = project("scenario-store-first");
+    // app と libfoo の dowel.toml / dowel.build の4件。
+    assert_eq!(run_and_count(&p, "app"), (4, 0, 0));
+}
+
+#[test]
+fn an_unchanged_manifest_is_restored_from_the_store() {
+    let p = project("scenario-store-restore");
+    run_and_count(&p, "app");
+    // 2回目のプロセス。本文が変わっていないため、解析も評価もしない。
+    assert_eq!(run_and_count(&p, "app"), (0, 4, 0));
+}
+
+#[test]
+fn editing_a_manifest_makes_the_store_recompute_it() {
+    // 復元の検査だけでは、そもそも評価を問い合わせていない状態でも通る。
+    let p = project("scenario-store-edit");
+    run_and_count(&p, "app");
+
+    let text = std::fs::read_to_string(p.path("app/dowel.build")).unwrap();
+    p.write("app/dowel.build", &format!("{text}\n# a comment\n"));
+
+    // 編集した1件だけを評価し直し、書き直す。残る3件は復元する。
+    assert_eq!(run_and_count(&p, "app"), (1, 3, 0));
+}
+
+#[test]
+fn a_manifest_with_diagnostics_is_not_stored() {
+    let p = project("scenario-store-diagnostics");
+    run_and_count(&p, "app");
+
+    let text = std::fs::read_to_string(p.path("app/dowel.build")).unwrap();
+    p.write("app/dowel.build", &format!("{text}\n[bin.app]\nbogus_property = 1\n"));
+    // 誤りのあるファイルは格納しない。残る3件は復元する。
+    assert_eq!(run_and_count(&p, "app"), (0, 3, 1));
+
+    // 直せば格納される。格納しない判断が誤りの残っている間だけであることを見る。
+    // 元の本文へ戻すと最初の実行の記録に当たるため、別の妥当な本文にする。
+    p.write("app/dowel.build", &format!("{text}\n# fixed\n"));
+    assert_eq!(run_and_count(&p, "app"), (1, 3, 0));
+}
+
+#[test]
+fn a_restored_run_produces_the_same_plan() {
+    // 復元は速度のためのものであり、結果を変えてはならない。
+    let p = project("scenario-store-same-plan");
+    let first = p.run("app", &["graph", "--kind=action", "--format=json"]);
+    first.success();
+    let second = p.run("app", &["graph", "--kind=action", "--format=json"]);
+    second.success();
+    assert_eq!(first.stdout, second.stdout, "the restored run produced a different plan");
+}
+
+#[test]
+fn a_diagnostic_raised_outside_the_evaluation_survives_the_restore() {
+    // 機能名の検証は評価の外で走る（`dowel.build` 単体では値域が分からない）。
+    // 評価結果に診断が無いためファイルは格納される。復元した文書が
+    // 構成参照を持たなければ、2回目の実行で診断が消える。
+    let p = project("scenario-store-outside-diagnostic");
+    // 既存のブロックへ足す。表を増やすと `duplicate-table` が出て、
+    // ファイルが格納されなくなり復元の経路を通らない。
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.private]\ndeps  = [dep(\"libfoo\")]\nflags = [\"-DX\"] when feature.nope\n",
+    );
+
+    let first = p.run("app", &["check", "--message-format=json", "--log-level=debug"]);
+    assert!(first.stdout.contains("unknown-feature"), "the first run did not report it\n{first}");
+    assert_eq!(store_counts(&first.stderr).0, 4, "the file was not stored\n{first}");
+
+    let second = p.run("app", &["check", "--message-format=json", "--log-level=debug"]);
+    assert_eq!(store_counts(&second.stderr).1, 4, "the file was not restored\n{second}");
+    assert_eq!(first.stdout, second.stdout, "the restored run lost a diagnostic");
+}
+
+#[test]
+fn removing_the_store_falls_back_to_evaluating_everything() {
+    // ストアは高速化のためのものであり、無くても結果は変わらない。
+    let p = project("scenario-store-removed");
+    let before = p.run("app", &["graph", "--kind=action", "--format=json"]);
+    before.success();
+    std::fs::remove_dir_all(p.path("app/.dowel")).expect("cannot remove the store");
+    assert_eq!(run_and_count(&p, "app"), (4, 0, 0));
+    let after = p.run("app", &["graph", "--kind=action", "--format=json"]);
+    assert_eq!(before.stdout, after.stdout, "the plan changed after the store was removed");
+}
