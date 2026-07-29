@@ -20,7 +20,12 @@ set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-image=${DOWEL_VSCODE_NODE_IMAGE:-node:22-bookworm-slim}
+
+# 基底イメージはタグではなくダイジェストで固定する。タグは中身が差し替わり
+# うるため、供給網をここで閉じる意味が薄れる。更新は意図した時だけ行う:
+#   docker pull node:22-bookworm-slim
+#   docker image inspect node:22-bookworm-slim --format '{{join .RepoDigests "\n"}}'
+image=${DOWEL_VSCODE_NODE_IMAGE:-node:22-bookworm-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3}
 
 # npm のキャッシュ等は一時ファイル置き場（.work/、git ignore 対象）へ。
 work="$root/.work/vscode-home"
