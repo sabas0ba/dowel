@@ -33,6 +33,7 @@
 | `dowel-eval` | 型つき値と来歴、式評価、スキーマと併合意味論、構成の具体化、値の直列化 |
 | `dowel-model` | パッケージ読み込み、ターゲット、依存グラフ、インタフェース併合、`why` |
 | `dowel-build` | glob 展開、アクショングラフ、ninja 生成、`compile_commands.json`、実行 |
+| `dowel-lsp` | 言語サーバ。JSON-RPC の枠付け、診断の通知、ホバー |
 | `dowel-cli` | `dowel` バイナリ |
 
 検証用の現物は `tests/projects/`（実物フィクスチャ）と `examples/`（文書の例）に置く。
@@ -222,7 +223,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 338 件）。
+現在の内訳（テスト 339 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
@@ -236,7 +237,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | `fixture` | 現実の形をしたプロジェクト（`tests/projects/`）を丸ごと通す | 11 |
 | `diagnostics` | 診断が CLI まで届くこと（47 事例）、修正提案の適用、位置の有無、`check` の守備範囲、網羅の追跡 | 10 |
 | `example` | `examples/hello` の現物をビルドし、テストを走らせる | 3 |
-| `docs` | 文書のリンクと索引の整合 | 4 |
+| `docs` | 文書のリンクと索引の整合 | 5 |
 | `startup` | 起動時間の計測（参考。実行機の揺れで全体を落とさない） | — |
 
 `scenario` / `fixture` / `diagnostics` の3層は後から足した。足した最初の実行で
