@@ -184,6 +184,15 @@ store: wrote 1 values, restored 3, skipped 0 with diagnostics
 見ているのは開いているファイル1つである。ファイルを跨ぐ診断は
 `dowel_lsp::UNSUPPORTED` に理由とともに列挙してある。
 
+### VS Code 拡張（`editors/vscode`）
+
+`dowel lsp` を起動して診断とホバーをエディタへ渡す。`dowel.build` の
+構文強調（TextMate 文法）つき。実行時依存はゼロで、枠付けと JSON-RPC の
+対応付けは自前に持つ（設計は `editors/vscode/README.md`）。開発は
+`editors/vscode/dev.sh` 経由でコンテナに閉じて行い、検査には実物の
+`dowel lsp` と話す統合テストを含む。名称が仮（[ADR-0006](adr/0006-naming.md)）の
+ため市場へは公開しない。
+
 ### 診断とログ
 
 - 重大度・安定コード・複数ラベル・注記・機械適用可能な修正提案

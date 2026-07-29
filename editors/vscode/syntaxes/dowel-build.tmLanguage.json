@@ -1,0 +1,129 @@
+{
+  "$comment": "dowel.build の強調。字句の定義は crates/dowel-syntax/src/lexer.rs、構文の決定は docs/adr/0004-syntax.md にある。ここは表示のための近似であり、正確な解析は言語サーバが行う。",
+  "name": "dowel.build",
+  "scopeName": "source.dowel-build",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#table-header" },
+    { "include": "#key" },
+    { "include": "#expression" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "include": "#block-comment" },
+        {
+          "name": "comment.line.double-slash.dowel-build",
+          "match": "//.*"
+        },
+        {
+          "name": "comment.line.number-sign.dowel-build",
+          "match": "#.*"
+        }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.dowel-build",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [{ "include": "#block-comment" }]
+    },
+    "table-header": {
+      "match": "^\\s*(\\[\\[?)\\s*([^\\]]*?)\\s*(\\]\\]?)\\s*",
+      "captures": {
+        "1": { "name": "punctuation.definition.table.begin.dowel-build" },
+        "2": { "name": "entity.name.section.dowel-build" },
+        "3": { "name": "punctuation.definition.table.end.dowel-build" }
+      }
+    },
+    "key": {
+      "match": "([A-Za-z_][A-Za-z0-9_-]*)\\s*(?==(?![=>]))",
+      "captures": {
+        "1": { "name": "support.type.property-name.dowel-build" }
+      }
+    },
+    "expression": {
+      "patterns": [
+        { "include": "#strings" },
+        { "include": "#keywords" },
+        { "include": "#namespace-ref" },
+        { "include": "#function-call" },
+        { "include": "#constants" },
+        { "include": "#operators" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.dowel-build",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            { "name": "constant.character.escape.dowel-build", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.literal.dowel-build",
+          "begin": "'''",
+          "end": "'''"
+        },
+        {
+          "name": "string.quoted.double.dowel-build",
+          "begin": "\"",
+          "end": "\"|$",
+          "patterns": [
+            { "name": "constant.character.escape.dowel-build", "match": "\\\\." }
+          ]
+        },
+        {
+          "name": "string.quoted.single.dowel-build",
+          "begin": "'",
+          "end": "'|$"
+        }
+      ]
+    },
+    "keywords": {
+      "name": "keyword.control.dowel-build",
+      "match": "\\b(match|when)\\b"
+    },
+    "namespace-ref": {
+      "match": "\\b(cfg|feature|host|tc)\\s*(\\.)\\s*([A-Za-z_][A-Za-z0-9_-]*)",
+      "captures": {
+        "1": { "name": "variable.language.namespace.dowel-build" },
+        "2": { "name": "punctuation.accessor.dowel-build" },
+        "3": { "name": "variable.other.member.dowel-build" }
+      }
+    },
+    "function-call": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.dowel-build",
+          "match": "\\b(glob|dir|dep|target)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "entity.name.function.dowel-build",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_-]*)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.dowel-build",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.numeric.dowel-build",
+          "match": "(?<![A-Za-z0-9_-])[+-]?(0[xXob][0-9A-Fa-f_]+|[0-9][0-9_]*)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.dowel-build", "match": "=>" },
+        { "name": "keyword.operator.comparison.dowel-build", "match": "==" },
+        { "name": "keyword.operator.assignment.dowel-build", "match": "=" }
+      ]
+    }
+  }
+}

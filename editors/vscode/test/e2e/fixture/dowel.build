@@ -1,0 +1,8 @@
+# 網羅漏れの match を仕込んである。E2E はこの診断が UI に届くことを見る。
+[bin.app]
+sources = glob("src/*.c")
+
+[bin.app.private]
+flags = match cfg.opt {
+    debug => ["-O0"],
+}
