@@ -107,6 +107,9 @@ pub fn resolve(home: &Home, url: &str, spec: &Spec) -> Result<String, String> {
 pub fn install(home: &Home, url: &str, spec: &Spec) -> Result<Acquired, String> {
     let sha = resolve(home, url, spec)?;
     if home.bin(&sha).is_file() {
+        // 実体は再利用するが、この指定子で解決したという記録は残す。
+        // 残さないと、成功した指定子で `+<指定子>` が選べない（issue #39）。
+        store::record_origin(home, &sha, &spec.to_string(), url)?;
         return Ok(Acquired { sha, already_installed: true });
     }
     let work = home.workdir(&sha);
@@ -140,7 +143,7 @@ pub fn install(home: &Home, url: &str, spec: &Spec) -> Result<Acquired, String> 
     }
     std::fs::copy(&built, &bin)
         .map_err(|e| format!("cannot copy the binary into {}: {e}", bin.display()))?;
-    store::write_origin(home, &sha, &spec.to_string(), url)?;
+    store::record_origin(home, &sha, &spec.to_string(), url)?;
     // 成果物を置いた後の作業木は要らない。失敗した場合は調査のために残る。
     let _ = std::fs::remove_dir_all(&work);
     Ok(Acquired { sha, already_installed: false })

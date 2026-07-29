@@ -85,7 +85,7 @@ dowelup uninstall branch:feature   # 取り除く
 |---|---|
 | `$DOWELUP_HOME`（既定 `~/.dowel`） | dowelup の状態の根 |
 | `versions/<sha>/bin/dowel` | インストール済みの実体 |
-| `versions/<sha>/origin` | どの指定子・どの上流から解決したかの記録 |
+| `versions/<sha>/origin` | どの指定子・どの上流から解決したかの記録。同じ sha への install が別の指定子で来たら追記される |
 | `upstream.git` | 解決と取得に使う mirror |
 | `default` | pin が無い場所で使う sha |
 | `tmp/<sha>` | ビルド中の作業木。成功時に消え、失敗時は調査のために残る |
