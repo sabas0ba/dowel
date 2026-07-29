@@ -1,91 +1,94 @@
-# dowel の取得と版の切り替え（dowelup）
+# Acquiring dowel and switching versions (dowelup)
 
-`dowelup` は dowel 自体を取得し、プロジェクトごとに版を固定し、透過的に
-切り替えるためのコマンドである。設計上の決定は
-[ADR-0013](adr/0013-self-acquisition.md) にある。
+`dowelup` acquires dowel itself, pins a version per project, and switches
+between versions transparently. The design decisions are in
+[ADR-0013](adr/0013-self-acquisition.md).
 
-## 導入
+## Installation
 
-リリースは未整備のため、初回は本リポジトリからビルドする。
+Releases are not set up yet, so bootstrap by building from this repository.
 
 ```sh
 cargo build --release -p dowel-up        # target/release/dowelup
-dowelup shim ~/.local/bin                # `dowel` という名前のリンクを作る
+dowelup shim ~/.local/bin                # create a link named `dowel`
 ```
 
-`dowelup shim <dir>` は `<dir>/dowel` を dowelup へのシンボリックリンクとして
-作る。この `dowel` は起動のたびに版を選び、選んだ実体へ exec する。
+`dowelup shim <dir>` creates `<dir>/dowel` as a symlink to dowelup. That
+`dowel` selects a version on every launch and execs the selected binary.
 
-## 版の指定子
+## Version specifiers
 
-| 形 | 意味 |
+| Form | Meaning |
 |---|---|
-| `stable` | 上流の最新の release タグ |
-| `nightly` | 既定ブランチの先端 |
-| `nightly-YYYY-MM-DD` | 既定ブランチに、その日（UTC）の終わりまでに入った最後のコミット |
-| `X.Y.Z` | タグ `vX.Y.Z` または `X.Y.Z` |
-| `branch:<name>` | ブランチの先端 |
-| `tag:<name>` | 任意のタグ |
-| `<sha>` | コミット。一意な接頭辞（7桁以上）でよい |
+| `stable` | the latest release tag upstream |
+| `nightly` | the tip of the default branch |
+| `nightly-YYYY-MM-DD` | the last commit on the default branch by the end of that day (UTC) |
+| `X.Y.Z` | tag `vX.Y.Z` or `X.Y.Z` |
+| `branch:<name>` | the tip of a branch |
+| `tag:<name>` | any tag |
+| `<sha>` | a commit; a unique prefix (7+ characters) suffices |
 
-いずれの形も `install` / `pin` / `default` の時点で commit sha に解決され、
-以後は sha が正本になる。上流には release タグがまだ無いため、`stable` と
-`X.Y.Z` はタグが現れるまで解決できない。
+Every form is resolved to a commit sha at `install` / `pin` / `default` time;
+from then on the sha is the source of truth. Upstream has no release tags
+yet, so `stable` and `X.Y.Z` cannot resolve until one appears.
 
-## コマンド
+## Commands
 
 ```sh
-dowelup install nightly            # 解決してビルドし、versions/<sha>/ へ置く
-dowelup install branch:feature     # 上流の特定ブランチ
-dowelup install 2915da5ab          # 特定コミット（接頭辞でよい）
-dowelup list                       # インストール済みの一覧。`*` が既定
-dowelup default nightly            # pin が無い場所で使う版。未取得なら取得する
-dowelup pin nightly                # .dowel-version に解決済みの sha を書く
-dowelup which                      # ここで実行される実体のパス
-dowelup run branch:feature -- check    # 選択を経ずに特定の版を起動する
-dowelup uninstall branch:feature   # 取り除く
+dowelup install nightly            # resolve, build, place under versions/<sha>/
+dowelup install branch:feature     # a specific upstream branch
+dowelup install 2915da5ab          # a specific commit (prefix suffices)
+dowelup list                       # what is installed; `*` marks the default
+dowelup default nightly            # the version used where no pin exists; fetches if missing
+dowelup pin nightly                # write the resolved sha to .dowel-version
+dowelup which                      # the path of the binary that would run here
+dowelup run branch:feature -- check    # run a specific version, bypassing selection
+dowelup uninstall branch:feature   # remove it
 ```
 
-解決と取得は `git` と `cargo` の起動に委譲する。両方が PATH に要る。
-上流は既定で `https://github.com/sabas0ba/dowel` であり、
-`--upstream <url>` または環境変数 `DOWELUP_UPSTREAM` で差し替えられる。
+Resolution and fetching are delegated to `git`, and building to `cargo`;
+both must be on PATH. The default upstream is
+`https://github.com/sabas0ba/dowel`, overridable with `--upstream <url>` or
+the environment variable `DOWELUP_UPSTREAM`.
 
-出力の分担は dowel 本体（[60-cli.md](60-cli.md)）と同じである。stdout は
-成果物（解決した sha、一覧、パス）、stderr は進行と誤りである。
+The output split matches dowel itself ([60-cli.md](60-cli.md)): stdout
+carries artifacts (resolved shas, listings, paths), stderr carries progress
+and errors.
 
-## 版の選択
+## Version selection
 
-`dowel`（shim）は次の順で版を選ぶ。
+`dowel` (the shim) selects a version in this order:
 
-1. 先頭引数の `+<指定子>`（例: `dowel +nightly check`）。
-   インストール済みの中から選ぶ
-2. カレントディレクトリから上へ辿って最初に見つかる `.dowel-version`
-3. `dowelup default` で設定した既定
+1. A leading `+<specifier>` argument (e.g. `dowel +nightly check`), chosen
+   from what is installed
+2. The first `.dowel-version` found walking up from the current directory
+3. The default set by `dowelup default`
 
-選択はネットワークに触れない。選ばれた sha が未取得の場合は、
-`dowelup install <sha>` を促す誤りになる。
+Selection never touches the network. If the selected sha is not installed,
+the error tells you to run `dowelup install <sha>`.
 
-## pin ファイル
+## The pin file
 
-`.dowel-version` は `dowelup pin <指定子>` が書く。中身は解決済みの sha と、
-どの指定子から解決したかのコメントである。
+`.dowel-version` is written by `dowelup pin <specifier>`. It contains the
+resolved sha and a comment recording which specifier it was resolved from.
 
 ```
 # Managed by dowelup. Resolved from "nightly".
 2915da5c1f0e3b7a9d2c4e6f8a0b1c2d3e4f5a6b
 ```
 
-チャネル名やブランチ名を手書きした場合、shim は解決せずに拒み、
-`dowelup pin` での解決を促す。ブランチ名のみの参照は固定とみなさない
-（[50-development.md](50-development.md) 5節）ための制約である。
+If a channel or branch name is written by hand, the shim refuses to resolve
+it and points to `dowelup pin`. This enforces the rule that a reference by
+branch name alone does not count as pinned
+([50-development.md](50-development.md) section 5).
 
-## 配置
+## Layout
 
-| パス | 内容 |
+| Path | Contents |
 |---|---|
-| `$DOWELUP_HOME`（既定 `~/.dowel`） | dowelup の状態の根 |
-| `versions/<sha>/bin/dowel` | インストール済みの実体 |
-| `versions/<sha>/origin` | どの指定子・どの上流から解決したかの記録 |
-| `upstream.git` | 解決と取得に使う mirror |
-| `default` | pin が無い場所で使う sha |
-| `tmp/<sha>` | ビルド中の作業木。成功時に消え、失敗時は調査のために残る |
+| `$DOWELUP_HOME` (default `~/.dowel`) | the root of dowelup's state |
+| `versions/<sha>/bin/dowel` | an installed binary |
+| `versions/<sha>/origin` | which specifier and upstream it was resolved from |
+| `upstream.git` | the mirror used for resolution and fetching |
+| `default` | the sha used where no pin exists |
+| `tmp/<sha>` | a build work tree; removed on success, kept on failure for inspection |

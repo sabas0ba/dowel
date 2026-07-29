@@ -1,18 +1,19 @@
-# はじめる
+# Getting started
 
-導入から、最初のプロジェクトのビルド・テスト・実行まで。
-タスク別の使い方は [63-guides.md](63-guides.md)、マニフェストの仕様は
-[10-manifest.md](10-manifest.md)、コマンドの仕様は [60-cli.md](60-cli.md) にある。
+From installation to building, testing, and running your first project.
+Task-oriented how-tos are in [63-guides.md](63-guides.md), the manifest
+reference in [10-manifest.md](10-manifest.md), and the command reference in
+[60-cli.md](60-cli.md).
 
-## 1. 導入
+## 1. Installation
 
-配布物はまだ無い。ソースからビルドする。必要なものは以下。
+There are no binary releases yet; build from source. You need:
 
-| もの | 用途 |
+| Requirement | Used for |
 |---|---|
-| Rust ツールチェーン（`cargo`） | `dowel` 自体のビルド |
-| C コンパイラ | プロジェクトのコンパイル。既定は PATH 上の `cc` |
-| `ninja` | 既定の実行器。無い環境では逐次実行器（`--executor=direct`）が使える |
+| A Rust toolchain (`cargo`) | building `dowel` itself |
+| A C compiler | compiling your project; the default is `cc` on PATH |
+| `ninja` | the default executor; without it, the sequential executor (`--executor=direct`) works |
 
 ```sh
 git clone https://github.com/sabas0ba/dowel
@@ -23,29 +24,29 @@ export PATH="$PWD/target/release:$PATH"
 dowel --version
 ```
 
-版の固定や切り替えが要る場合は、`dowelup` で dowel 自体を取得・管理できる
-（[61-acquisition.md](61-acquisition.md)）。
+If you need to pin or switch versions, `dowelup` acquires and manages dowel
+itself ([61-acquisition.md](61-acquisition.md)).
 
-## 2. 動く例を試す
+## 2. Try the working example
 
-[`examples/hello`](../examples/hello) は、静的ライブラリ（`libgreet`）と
-それを使う実行ファイル（`app`）の2パッケージ構成である。
+[`examples/hello`](../examples/hello) is a two-package setup: a static
+library (`libgreet`) and an executable that uses it (`app`).
 
 ```sh
 cd examples/hello/app
-dowel check                      # 診断のみ出す。ビルドしない
-dowel build                      # ninja を生成して実行する
+dowel check                      # report diagnostics only; does not build
+dowel build                      # generate ninja files and run them
 ./.dowel/build/*/bin/app
 
 cd ../libgreet
-dowel test                       # test ターゲットをビルドして走らせる
+dowel test                       # build and run the test targets
 ```
 
-## 3. 最小のプロジェクトを作る
+## 3. Create a minimal project
 
-必要なファイルは2つ。`dowel.toml`（パッケージ情報。機械が読み書きする厳密な TOML）と
-`dowel.build`（ターゲット定義。人間が書く）。分離の理由は
-[10-manifest.md](10-manifest.md) にある。
+Two files are required: `dowel.toml` (package information; strict TOML read
+and written by machines) and `dowel.build` (target definitions; written by
+humans). The reasons for the split are in [10-manifest.md](10-manifest.md).
 
 ```
 myapp/
@@ -77,17 +78,17 @@ dowel build
 ./.dowel/build/*/bin/myapp
 ```
 
-成果物と中間ファイルは `.dowel/` に置かれる（git ignore 対象にする）。
-ビルドディレクトリは構成（`--config`）ごとに分かれる。`.dowel/` は
-いつ消しても正しさを失わない。失うのはキャッシュの利得だけである
-（[60-cli.md](60-cli.md) ストア節）。
+Build outputs and intermediates go under `.dowel/` (add it to your git
+ignore). Build directories are separated per configuration (`--config`).
+Deleting `.dowel/` is always safe: correctness is never lost, only the cached
+speedup (see the store section of [60-cli.md](60-cli.md)).
 
-## 4. ライブラリに分け、依存する
+## 4. Split out a library and depend on it
 
-パッケージ間の依存は `dowel.toml` に宣言する（現状はローカルパスのみ。
-レジストリ / git / tarball の取得は未実装 —
-[91-implementation-status.md](91-implementation-status.md)）。
-どのターゲットがその依存を使うかは `dowel.build` に書く。
+Dependencies between packages are declared in `dowel.toml` (currently local
+paths only; fetching from registries / git / tarballs is not implemented —
+[91-implementation-status.md](91-implementation-status.md)). Which target uses
+a dependency is written in `dowel.build`.
 
 `app/dowel.toml`:
 
@@ -104,27 +105,27 @@ path = "../libgreet"
 deps = [dep("libgreet")]
 ```
 
-ライブラリ側は、依存元へ伝播するもの（`public`）と自分にのみ効くもの
-（`private`）をブロックで分ける。
+On the library side, what propagates to dependents (`public`) and what applies
+only to the library itself (`private`) are separated by block:
 
 ```
 [lib.greet]
 sources = glob("src/**.c")
 
 [lib.greet.public]
-includes = [dir("include")]      # app のコンパイルにも効く
+includes = [dir("include")]      # also affects the compilation of app
 
 [lib.greet.private]
-includes = [dir("src")]          # 自分にのみ効く。app からは見えない
+includes = [dir("src")]          # affects only this library; invisible to app
 ```
 
-伝播した値がどこから来たかは `dowel why` で辿れる。
+`dowel why` traces where a propagated value came from:
 
 ```sh
 dowel why app:app includes
 ```
 
-## 5. テストを足す
+## 5. Add tests
 
 ```
 [test.unit]
@@ -134,30 +135,35 @@ sources = glob("tests/*.c")
 deps = [target("greet")]
 ```
 
-`dowel test` がビルドして起動し、終了状態 0 を成功とする。C の慣習に従い、
-専用のテストハーネスは課さない。
+`dowel test` builds and runs them, treating exit status 0 as success. This
+follows the C convention; no test harness is imposed.
 
 ```sh
 dowel test
-dowel test --nocapture           # テストの出力を素通しする
-dowel test --failed --fail-fast  # 前回落ちた分だけ、最初の失敗で打ち切る
+dowel test --nocapture           # pass test output through
+dowel test --failed --fail-fast  # only what failed last time, stop at the first failure
 ```
 
-## 6. 日常のループ
+## 6. The everyday loop
 
-- `dowel check` — 保存のたびに。計画まで走らせ診断だけ出す（実行しない）ので速い
-- `dowel build` / `dowel test` — 実際に確かめる
-- `dowel why <target> <property>` — 「なぜこの値になったのか」を伝播経路で答える
-- `DOWEL_LOG=debug dowel build` — 「なぜ再ビルドされたのか」をログで答える
+- `dowel check` — on every save. Runs through planning and reports diagnostics
+  only, without executing anything, so it is fast
+- `dowel build` / `dowel test` — verify for real
+- `dowel why <target> <property>` — answers "why does this value look like
+  this" with the propagation path
+- `DOWEL_LOG=debug dowel build` — answers "why did this rebuild" in the log
 
-エディタで書くなら言語サーバがある（`dowel lsp`。
-[63-guides.md](63-guides.md) 6節）。診断は位置と安定コードを持ち、
-未知の名前には候補が提示される。
+If you write manifests in an editor, there is a language server (`dowel lsp`;
+[63-guides.md](63-guides.md) section 6). Diagnostics carry locations and
+stable codes, and unknown names come with suggestions.
 
-## 7. 次に読むもの
+## 7. What to read next
 
-- タスク別の使い方（構成切り替え、クロス実行、CI 連携）— [63-guides.md](63-guides.md)
-- dowel 自体の版の固定と切り替え（`dowelup`）— [61-acquisition.md](61-acquisition.md)
-- マニフェストに書ける全て — [10-manifest.md](10-manifest.md)
-- コマンドとオプションの全て — [60-cli.md](60-cli.md)
-- いま何が動き、何が未実装か — [91-implementation-status.md](91-implementation-status.md)
+- Task-oriented how-tos (switching configurations, cross execution, CI) —
+  [63-guides.md](63-guides.md)
+- Pinning and switching versions of dowel itself (`dowelup`) —
+  [61-acquisition.md](61-acquisition.md)
+- Everything the manifests accept — [10-manifest.md](10-manifest.md)
+- Every command and option — [60-cli.md](60-cli.md)
+- What works today and what doesn't —
+  [91-implementation-status.md](91-implementation-status.md)

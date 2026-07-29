@@ -1,111 +1,115 @@
-# 未決事項
+# Open questions
 
-優先度順。上位ほど後続の設計に波及する。
+In priority order. The higher an item, the more it constrains later design.
 
-## Q1. `cfg` 名前空間の語彙
+## Q1. The `cfg` namespace vocabulary
 
-**状態**: 未着手。次に詰めるべき項目。
+**Status**: not started. The next item to pin down.
 
-`dowel.toml` の `when` 述語、`dowel.build` の `match` / `when`、
-ツールチェーン選択、ABI ラベルのすべてが参照する共通基盤。
+The shared foundation referenced by `when` predicates in `dowel.toml`,
+`match` / `when` in `dowel.build`, toolchain selection, and ABI labels.
 
-暫定案:
+Working draft:
 
 ```
-cfg.opt        構成（debug / release / …）
-cfg.target     ターゲットトリプル
-host.os        ビルドホストの OS
-host.arch      ビルドホストのアーキテクチャ
-feature.<name> 機能フラグ
-tc.c           選択された C ツールチェーン
+cfg.opt        configuration (debug / release / …)
+cfg.target     target triple
+host.os        build host OS
+host.arch      build host architecture
+feature.<name> feature flag
+tc.c           the selected C toolchain
 ```
 
-決めるべき点:
+To decide:
 
-- `cfg` に含める次元の確定（これが ABI ラベルの構成要素の候補になる）
-- 述語の合成規則（暗黙の AND 以外を許すか）
-- 語彙を固定するか、ツールチェーンが拡張できるようにするか
+- Which dimensions belong in `cfg` (these become candidate components of the
+  ABI label)
+- Predicate composition rules (allow anything beyond implicit AND?)
+- Whether the vocabulary is fixed or extensible by toolchains
 
-### 実装が用いている暫定語彙
+### The provisional vocabulary used by the implementation
 
-実装を進めるために、上記の暫定案をそのまま**閉じた語彙**として実装してある
-（`crates/dowel-eval/src/config.rs`）。これは Q1 の決定ではなく、
-決定までの仮置きである。現物は `dowel schema dump --section=cfg` で得られる。
+To make progress, the implementation adopts the draft above verbatim as a
+**closed vocabulary** (`crates/dowel-eval/src/config.rs`). This is a
+placeholder until Q1 is decided, not the decision itself. The live version is
+available from `dowel schema dump`.
 
-| 名前空間 | 実装済みのキー | 値域 |
+| Namespace | Implemented keys | Domain |
 |---|---|---|
 | `cfg` | `opt` | `debug` / `release` |
-| `cfg` | `target` | ターゲットトリプル（自由文字列） |
-| `host` | `os` / `arch` | ビルドホストの値 |
-| `feature` | `<name>` | 真偽（`dowel.toml` の `[features]` で宣言されたもののみ） |
-| `tc` | `c` | 選択された C ツールチェーンの識別子 |
+| `cfg` | `target` | target triple (free-form string) |
+| `host` | `os` / `arch` | build host values |
+| `feature` | `<name>` | boolean (only names declared in `[features]` of `dowel.toml`) |
+| `tc` | `c` | identifier of the selected C toolchain |
 
-述語の合成は暗黙の AND のみ。`match` の網羅性検査は値域が有限な
-`cfg.opt` / `host.os` / `host.arch` に対してのみ働き、`cfg.target` は
-値域が無限であるため `_` アームを必須とする。この非対称は Q1 の決定時に見直す。
+Predicate composition is implicit AND only. Exhaustiveness checking of `match`
+applies to keys with finite domains (`cfg.opt` / `host.os` / `host.arch`);
+`cfg.target` has an unbounded domain and requires a `_` arm. This asymmetry
+will be revisited when Q1 is decided.
 
-## Q2. ABI ラベルの構成
+## Q2. ABI label composition
 
-**状態**: 第3ターンで保留。Q1 の結果に依存する。
+**Status**: deferred. Depends on the outcome of Q1.
 
-Conan の `package_id` に相当する。粒度の設計が全体を左右する。
+The counterpart of Conan's `package_id`. Granularity dominates the design.
 
-- **粗すぎる** → 検証が無意味になる（vcpkg triplet の限界と同じ）
-- **細かすぎる** → キャッシュヒット率が壊滅する
+- **Too coarse** → verification becomes meaningless (the vcpkg triplet limit)
+- **Too fine** → cache hit rates collapse
 
-候補となる構成要素: ツールチェーン ID、C++ 標準バージョン、標準ライブラリ実装、
-`_GLIBCXX_USE_CXX11_ABI`、MSVC ランタイム種別、サニタイザ、LTO、例外モデル、
-浮動小数点モデル。
+Candidate components: toolchain ID, C++ standard version, standard library
+implementation, `_GLIBCXX_USE_CXX11_ABI`, MSVC runtime kind, sanitizers, LTO,
+exception model, floating-point model.
 
-Phase 0 の検証（実在する不整合の検出数）が、この設計の必要粒度を示す。
+The Phase 0 verification (how many real mismatches are detected) will indicate
+the required granularity.
 
-## Q4. ストア形式の詳細
+## Q4. Store format details
 
-**状態**: 骨子のみ確定（[20-architecture.md](20-architecture.md) 5節）。
+**Status**: skeleton only ([20-architecture.md](20-architecture.md) section 5).
 
-- レコード構造とインデックスのレイアウト
-- フィンガープリントの計算対象（何をハッシュに含めるか）
-- GC 方針（世代数 / 容量上限 / 到達可能性）
-- バージョン変更時の移行（フォーマット変更でストアを捨てる判断基準）
+- Record structure and index layout
+- What goes into the fingerprint (what is hashed)
+- GC policy (generations / size cap / reachability)
+- Migration across version changes (when a format change discards the store)
 
-## Q5. 名称の確定
+## Q6. What to do when `import` output is rejected
 
-**状態**: 仮称 `dowel`。[adr/0006-naming.md](adr/0006-naming.md) 参照。
+Configurations extracted from an existing project may fail this system's
+verification (ABI mismatch, `error_on_conflict`, and so on).
 
-先行商標および既存プロジェクトの調査が未実施。確定前に必須。
+Options:
 
-## Q6. `import` 結果が受理されない場合の扱い
+- A mode that downgrades to warnings (limited to a migration window)
+- Fail and require fixes
+- Mark extracted output "unverified" and enable verification incrementally
 
-既存プロジェクトから抽出した構成が、本システムの検証（ABI 不整合、
-`error_on_conflict` 等）で失敗する場合がある。
+The third is favored, but the granularity of the mark and the conditions for
+clearing it are undecided.
 
-選択肢:
+## Q7. C++20 modules
 
-- 警告に降格するモードを設ける（移行期間限定）
-- 失敗させ、修正を要求する
-- 抽出結果に「未検証」マークを付け、検証を段階的に有効化する
+The plan is to make scan actions first-class in the graph, but parts of this
+depend on the state of clangd support. Re-survey when Phase 2 starts.
 
-3案目が有力だが、マークの粒度と解除条件が未定。
+## Q8. Verifying the current state of Meson
 
-## Q7. C++20 modules の扱い
+The statements about Meson in [00-overview.md](00-overview.md) are based on
+prior knowledge. The wrap and lock behavior in particular may have changed in
+recent releases; confirmation against the official documentation has not been
+done.
 
-走査アクションをグラフの一級市民として設計する方針だが、
-clangd 側の対応状況に依存する部分がある。Phase 2 着手時に再調査が必要。
+## Q10. Prebuilt distribution for dowelup
 
-## Q8. Meson の現状確認
+**Status**: not started. [ADR-0013](adr/0013-self-acquisition.md) defined
+source builds only.
 
-[00-overview.md](00-overview.md) の Meson に関する記述は既存知識に基づく。
-特に wrap とロック関連は直近の版で変わっている可能性があり、
-公式ドキュメントでの裏取りが未実施。
-## Q10. dowelup の prebuilt 配布
+Building from source assumes a Rust toolchain. Widening the audience requires
+distributing prebuilt binaries. To decide:
 
-**状態**: 未着手。[ADR-0013](adr/0013-self-acquisition.md) はソースビルドのみを定めた。
+- Where to publish (GitHub Releases or a separate endpoint)
+- How to verify (SHA-256 comparison; whether signatures are required)
+- How binaries map back to the sha source of truth (recording and checking
+  which commit a binary was built from)
 
-ソースからのビルドは Rust ツールチェーンを前提とする。利用対象を広げるには
-ビルド済みバイナリの配布が要る。決めるべき点:
-
-- 配布場所（GitHub Releases か、別のエンドポイントか）
-- 検証の方式（SHA-256 の対照、署名の要否）
-- sha 正本との対応（バイナリがどのコミットから出たかの記録と照合）
-
-取得自体は `curl` への委譲で足りるが、検証は自前で持つことになる。
+Fetching itself can be delegated to `curl`, but verification has to be owned
+here.

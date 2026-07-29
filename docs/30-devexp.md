@@ -1,14 +1,15 @@
-# 開発体験
+# Developer experience
 
-> 本書はランナー・デバッガ・エディタ連携の設計文書である。ランナーと
-> エディタ連携の使い方は [63-guides.md](63-guides.md) を、実装済みの範囲は
-> [91-implementation-status.md](91-implementation-status.md) を参照
-> （`dowel debug` は未実装）。
+> This is a design document for runners, debugger integration, and editor
+> integration. Usage of runners and editors is in
+> [63-guides.md](63-guides.md); what is implemented is in
+> [91-implementation-status.md](91-implementation-status.md)
+> (`dowel debug` is not implemented).
 
-## 1. ランナー抽象
+## 1. The runner abstraction
 
-ターゲットトリプルごとに実行ラッパを宣言し、`dowel test --target <triple>` が
-透過的にラッパ経由で実行されるようにする。
+Declare an execution wrapper per target triple, and let
+`dowel test --target <triple>` run through the wrapper transparently.
 
 ```toml
 [runner.riscv64gc-unknown-linux-gnu]
@@ -16,14 +17,16 @@ command = "qemu-riscv64"
 args    = ["-L", "/usr/riscv64-linux-gnu"]
 ```
 
-実体として想定するもの: qemu-user、qemu-system、実機への SSH、シリアル経由の書き込みと実行。
-実機を宣言可能にすることで組込み用途に対応する。
+Intended instantiations: qemu-user, qemu-system, SSH to real hardware,
+serial-port flashing and execution. Making real hardware declarable is what
+covers embedded use.
 
-### 転送を伴うランナー
+### Runners with transfer
 
-対象機がビルド機のファイルシステムを参照できない場合、起動の前に成果物を
-転送する。転送元と転送先のパスはマニフェストに書かず、実装が末尾に付け足す
-（[ADR-0008](adr/0008-runner-transfer.md)）。
+When the target machine cannot see the build machine's file system, the
+artifact is transferred before launch. Source and destination paths are not
+written in the manifest; the implementation appends them
+([ADR-0008](adr/0008-runner-transfer.md)).
 
 ```toml
 [runner.aarch64-unknown-linux-gnu]
@@ -34,116 +37,135 @@ command    = "ssh"
 args       = ["board.local"]
 ```
 
-上記は以下に展開される。
+This expands to:
 
 ```
 scp -q <build>/bin/unit_test board.local:/tmp/dowel/unit_test
 ssh board.local /tmp/dowel/unit_test
 ```
 
-`transfer` と `remote_dir` は同時に指定する。終了状態は起動コマンドが
-そのまま返すため、`ssh` を用いる場合は対象機側の終了状態が合否になる。
+`transfer` and `remote_dir` are specified together. The exit status is
+whatever the launch command returns, so with `ssh` the target machine's exit
+status is the verdict.
 
-先行例（機能自体は既存）:
+Prior art (the capability itself is established):
 
-| システム | 相当機能 |
+| System | Equivalent |
 |---|---|
 | Cargo | `target.<triple>.runner` |
 | Meson | `exe_wrapper` |
 | CMake | `CMAKE_CROSSCOMPILING_EMULATOR` |
 
-## 2. デバッガ連携
+## 2. Debugger integration
 
-ここが実質的な差別化点である。ビルドシステムは成果物を生成したアクションの
-全入力を知っているため、デバッガ設定を**生成できる**。
+This is the real differentiator. The build system knows every input of the
+action that produced an artifact, so it can **generate** debugger
+configuration.
 
-### 2.1 再現性とデバッグのトレードオフを解消する
+### 2.1 Resolving the reproducibility-vs-debugging trade-off
 
-再現性のために `-ffile-prefix-map` でソースパスを正規化すると、
-デバッガのソース解決が壊れる。これを埋め合わせる `substitute-path` の正しい値を
-知っているのは、写像を適用した当人であるビルドシステムだけである。
+Normalizing source paths with `-ffile-prefix-map` for reproducibility breaks
+the debugger's source resolution. The one party that knows the correct
+`substitute-path` to compensate is the party that applied the mapping — the
+build system.
 
-**再現性とデバッグ体験は本来トレードオフの関係にあり、それを解消できるのはこの層に限られる。**
+**Reproducibility and debugging experience are inherently a trade-off, and
+this layer is the only place it can be resolved.**
 
-### 2.2 `dowel debug <target>` が行うこと
+### 2.2 What `dowel debug <target>` does
 
-- sysroot、`substitute-path`、共有ライブラリ探索パスを確定させる
-- クロス実行時は qemu の gdbstub を起動し、ツールチェーンに紐づいた版の gdb を接続する
-- あるいは DAP（Debug Adapter Protocol）の起動設定を出力し、
-  エディタから同一環境を再現できるようにする
+- Pins down the sysroot, `substitute-path`, and shared-library search paths
+- For cross execution, starts qemu's gdbstub and connects the gdb version
+  tied to the toolchain
+- Alternatively emits a DAP (Debug Adapter Protocol) launch configuration so
+  an editor reproduces the same environment
 
-### 2.3 派生機能
+### 2.3 Derived features
 
-`dowel test --debug-failed` — 失敗したテストをそのままデバッガ下で再実行する。
-同一の情報から実現できる。
+`dowel test --debug-failed` — rerun a failing test directly under the
+debugger. Realizable from the same information.
 
-## 3. エディタ連携
+## 3. Editor integration
 
-3つの経路を混同しないこと。
+Three paths; do not conflate them.
 
-| 対象 | 役割 |
+| Target | Role |
 |---|---|
-| マニフェスト言語の LSP | 自前で実装（コアの別フロントエンド） |
-| C/C++ の LSP | clangd に委譲。ビルドシステムは**供給側**に回る |
-| デバッグ | DAP に情報を供給 |
+| the manifest language LSP | implemented in-house (another frontend of the core) |
+| the C/C++ LSP | delegated to clangd; the build system is the **supplier** |
+| debugging | supply information to DAP |
 
-### 3.1 clangd への供給
+### 3.1 Supplying clangd
 
-現在の唯一の接点は `compile_commands.json` だが、以下の制約がある。
+The only current interface is `compile_commands.json`, with these limits:
 
-- 単一構成しか表現できない
-- C++20 モジュールの情報を持たない
+- It expresses a single configuration only
+- It carries no C++20 module information
 
-構成切り替えに追従した即時更新は改善できるが、モジュール対応は clangd 側も
-未成熟であり、こちらの一存では解決しない。
+Immediate updates that track configuration switches can be improved on our
+side; module support is also immature on clangd's side and cannot be solved
+unilaterally.
 
-### 3.2 マニフェスト言語の LSP
+### 3.2 The manifest language LSP
 
-初期は診断とホバーのみに絞る。[20-architecture.md](20-architecture.md) の
-4制約を守っていれば、機能追加は段階的に可能。
+Initially restricted to diagnostics and hover. As long as the four
+constraints in [20-architecture.md](20-architecture.md) are respected,
+features can be added incrementally.
 
-この部分は**完了しない**（継続的な保守コストを伴う）ことを前提に計画する。
+Plan on this part **never being finished** (it carries a permanent
+maintenance cost).
 
-起動は `dowel lsp`。標準入出力で LSP を話す。エディタが起動主体であり
-エディタと共に終了するため、[ADR-0002](adr/0002-no-daemon.md) が退けた
-常駐デーモンとは区別される。CLI は言語サーバの存在に一切依存しない。
+Started as `dowel lsp`; speaks LSP on stdin/stdout. The editor is the
+starting party and it exits with the editor, which distinguishes it from the
+resident daemon rejected by [ADR-0002](adr/0002-no-daemon.md). The CLI never
+depends on the language server's existence.
 
-ホバーはスキーマそのものを説明にする。プロパティの型と併合規則、表の見出しの
-各段、組み込み関数の署名、構成キーの値域を出す。出所は `dowel schema dump` が
-読むのと同じ表であり、二重に持たない。語の特定は評価済みの値ではなく CST を
-辿って行う。誤りを含むファイルでも説明が出る必要があるためである。
+Hover explains the schema itself: property types and merge rules, each level
+of a table header, builtin function signatures, configuration key domains.
+The source is the same table `dowel schema dump` reads; nothing is kept
+twice. Word identification walks the CST rather than evaluated values,
+because explanations must appear even in files that contain errors.
 
-VS Code 向けのクライアントは `editors/vscode/` にある。`dowel lsp` を起動して
-診断とホバーを受け取り、`dowel.build` の構文強調を付ける。
+The VS Code client lives in `editors/vscode/`. It starts `dowel lsp`,
+receives diagnostics and hover, and adds syntax highlighting for
+`dowel.build`.
 
-診断として出しているのは、開いているファイル1つを単位とした構文解析と評価の
-結果である。ファイルを跨ぐ診断（`undeclared-dependency`、併合の衝突、
-計画段のパス解決）はワークスペースの模型を要するため、まだ出さない。
-出さないものは `dowel_lsp::UNSUPPORTED` に理由とともに列挙してあり、
-一覧に載せた診断が実際には出ている場合は検査が落ちる。
+The diagnostics published are the result of parsing and evaluating the single
+open file. Cross-file diagnostics (`undeclared-dependency`, merge conflicts,
+planning-stage path resolution) require a workspace model and are not
+produced yet. What is not produced is listed with reasons in
+`dowel_lsp::UNSUPPORTED`, and the check fails if a listed diagnostic is in
+fact being emitted.
 
-## 4. LLM 支援を前提とした設計
+## 4. Designing for LLM assistance
 
-LLM は訓練コーパスの分布から生成するため、公開コーパスが存在しない新規構文は
-最も苦手な領域にあたる。「LLM があるから馴染みのない構文でよい」は成立しない。
+LLMs generate from the distribution of their training corpus, so novel syntax
+with no public corpus is their weakest ground. "LLMs exist, so unfamiliar
+syntax is fine" does not hold.
 
-一方、LLM が確実に強いのは**修復ループ**である。位置つきの構造化診断があれば、
-誤った出力から正しい記述への収束は速い。
+What LLMs are reliably good at is the **repair loop**: with located,
+structured diagnostics, convergence from wrong output to correct text is
+fast.
 
-したがって LLM 前提は、構文の自由度を上げる根拠ではなく
-**診断品質への投資を正当化する根拠**として扱う。具体的には以下3点。
+The LLM premise therefore justifies not looser syntax but **investment in
+diagnostic quality**. Concretely:
 
-1. **診断の JSON 出力**（`--message-format=json`）。rustc と同様に、
-   修正提案（span + 置換文字列）を含める。エージェントが機械的に適用できる形にする
-2. **スキーマの機械可読な公開**。`dowel schema dump` で全 `kind` とプロパティの
-   型・併合規則を出力する。これをコンテキストに与えることでコーパス不在を補える
-3. **`dowel check` の高速化**。生成→検証の反復が速いほど収束が速い。増分評価がここに効く
+1. **JSON diagnostics** (`--message-format=json`), including fix suggestions
+   (span + replacement) as rustc does, in a form agents can apply
+   mechanically
+2. **A machine-readable schema**: `dowel schema dump` prints every `kind` and
+   property with types and merge rules. Supplying it as context compensates
+   for the missing corpus
+3. **A fast `dowel check`**: the faster the generate-verify loop, the faster
+   the convergence. Incremental evaluation pays off here
 
-## 5. C++20 modules への対応
+## 5. C++20 modules
 
-モジュールはソースを走査するまで依存関係が確定しない。
-ninja は `dyndep` で扱えるが、生成物の構造は複雑になり、CMake / Meson とも
-対応は枯れていない（Fortran が数十年抱えてきた問題と同型）。
+With modules, dependencies are unknown until sources are scanned. ninja can
+express this with `dyndep`, but the generated structure gets complex, and
+neither CMake nor Meson has matured here (the same shape of problem Fortran
+has carried for decades).
 
-走査アクションをグラフの一級市民として扱う設計は増分評価と相性が良く、
-現時点で明確に空いている領域である。ただし clangd 側の対応状況に依存する部分がある。
+Treating scan actions as first-class citizens of the graph fits incremental
+evaluation well and is clearly open territory today — though parts depend on
+the state of clangd support.

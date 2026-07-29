@@ -1,7 +1,7 @@
-# hello — 動く最小の例
+# hello — the minimal working example
 
-静的ライブラリ（`libgreet`）と、それを使う実行ファイル（`app`）の2パッケージ。
-`dowel` が実際に C をコンパイルできることを示す。
+Two packages: a static library (`libgreet`) and an executable that uses it
+(`app`). Demonstrates that `dowel` really compiles C.
 
 ```sh
 cd app
@@ -10,24 +10,25 @@ dowel build
 ./.dowel/build/*/bin/app
 
 cd ../libgreet
-dowel test        # test.greet_test をビルドして走らせる
+dowel test        # build and run test.greet_test
 ```
 
-見どころ:
+What to look at:
 
-- `libgreet/include` は `public.includes`、`libgreet/src` は `private.includes`。
-  `app` から前者のヘッダは見えるが、後者は見えない
-- `public.defines` の `GREET_API` は `app` のコンパイルにも効く
-- `flags` は `match cfg.opt` で構成ごとに切り替わる。
-  `dowel build --config=release` で確かめられる
-- `libgreet` の `[test.greet_test]` は公開ヘッダしか使わない。
-  `dowel test` が終了状態で合否を判定する
+- `libgreet/include` is in `public.includes`, `libgreet/src` in
+  `private.includes`. `app` can see headers from the former but not the
+  latter
+- `GREET_API` in `public.defines` also affects the compilation of `app`
+- `flags` switch per configuration via `match cfg.opt`; confirm with
+  `dowel build --config=release`
+- `[test.greet_test]` in `libgreet` uses only the public headers.
+  `dowel test` judges pass/fail by exit status
 
-伝播の経路は `dowel why` で辿れる。
+Propagation paths can be traced with `dowel why`:
 
 ```sh
 dowel why app:app includes
 dowel graph --kind=action
 ```
 
-この例は `crates/dowel-cli/tests/example.rs` がビルドして検査している。
+This example is built and checked by `crates/dowel-cli/tests/example.rs`.

@@ -1,10 +1,11 @@
-# GitHub Pages の設定。main ブランチを `/ (root)` で公開するとそのまま文書サイトになる
-# （Settings → Pages → Deploy from a branch → main / root）。
-# ここに列挙したプラグインは GitHub Pages が既定で有効にするものであり、
-# ローカルプレビュー（jekyll serve）でも同じ挙動を得るために明示している。
+# GitHub Pages configuration. Publishing the main branch at `/ (root)` turns
+# the repository into the documentation site as-is
+# (Settings → Pages → Deploy from a branch → main / root).
+# The plugins listed here are the ones GitHub Pages enables by default; they
+# are spelled out so a local preview (jekyll serve) behaves the same way.
 title: dowel
-description: C を対象とするビルドシステム（開発中・名称暫定）
-lang: ja
+description: A build system for C (under development)
+lang: en
 theme: jekyll-theme-primer
 
 markdown: kramdown
@@ -12,11 +13,11 @@ kramdown:
   input: GFM
 
 plugins:
-  - jekyll-optional-front-matter # 前付けなしの .md をそのままページにする
-  - jekyll-relative-links        # .md への相対リンクを .html へ解決する
-  - jekyll-readme-index          # 各ディレクトリの README.md を index にする
-  - jekyll-default-layout        # レイアウト未指定のページにテーマ既定を当てる
-  - jekyll-titles-from-headings  # 先頭見出しをページタイトルにする
+  - jekyll-optional-front-matter # serve .md files without front matter as pages
+  - jekyll-relative-links        # resolve relative links to .md into .html
+  - jekyll-readme-index          # make each directory's README.md its index
+  - jekyll-default-layout        # apply the theme default to pages without a layout
+  - jekyll-titles-from-headings  # use the leading heading as the page title
 
 relative_links:
   enabled: true
@@ -25,7 +26,8 @@ relative_links:
 readme_index:
   enabled: true
 
-# サイトに含めないもの。文書からリンクされるソース（crates/ 等）は含める。
+# Excluded from the site. Sources linked from the documents (crates/ etc.)
+# stay included.
 exclude:
   - target
   - .work

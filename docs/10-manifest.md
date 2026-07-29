@@ -1,17 +1,20 @@
-# マニフェスト仕様
+# Manifest reference
 
-`dowel.toml` と `dowel.build` に何を書けるか、その型と併合の意味論を定める
-リファレンス。書き方の入門は [62-getting-started.md](62-getting-started.md) にある。
-本文書は設計上の全体像を含むため、一部に未実装の要素がある。未実装のものには
-その旨を注記し、現況の一覧は [91-implementation-status.md](91-implementation-status.md) に置く。
+What `dowel.toml` and `dowel.build` accept, and the types and merge semantics
+behind them. The introduction to writing manifests is in
+[62-getting-started.md](62-getting-started.md). This document includes the
+full design, so parts of it are not implemented yet; those parts are marked
+in place, and the current state is listed in
+[91-implementation-status.md](91-implementation-status.md).
 
-マニフェストは2ファイルに分離する。根拠は [ADR-0003](adr/0003-manifest-split.md)。
+The manifest is split into two files. The rationale is
+[ADR-0003](adr/0003-manifest-split.md).
 
-| ファイル | 形式 | 主体 | 内容 |
+| File | Format | Written by | Contents |
 |---|---|---|---|
-| `dowel.toml` | 厳密な TOML | 機械が読み書き | パッケージ情報、依存、ツールチェーン、ポリシー |
-| `dowel.build` | TOML 風方言 | 人間が記述 | ターゲット定義、伝播プロパティ、条件分岐 |
-| `dowel.lock` | 生成物（未実装） | 機械 | 解決結果、ハッシュ、推移的依存 |
+| `dowel.toml` | strict TOML | machines (read and write) | package information, dependencies, toolchain, policy |
+| `dowel.build` | TOML-style dialect | humans | target definitions, propagated properties, conditionals |
+| `dowel.lock` | generated (not implemented) | machines | resolution results, hashes, transitive dependencies |
 
 ## 1. `dowel.toml`
 
@@ -52,17 +55,21 @@ when    = { os = "windows" }
 default = ["zlib"]
 ```
 
-### 規則
+### Rules
 
-- 厳密な TOML として維持する。値の位置に式を許さない。
-  外部ツール（SBOM 生成器、脆弱性スキャナ、更新ボット）が独自パーサなしで読めることを保証する
-- 依存指定は 4 形態: レジストリ名 / git / https tarball / ローカルパス。
-  **実装済みなのは `path` のみ**である。取得を伴う3形態と `dowel.lock` の生成は
-  未実装（[91-implementation-status.md](91-implementation-status.md)）
-- git 依存はブランチ・タグでの解決を禁止し、フル 40 桁の不変オブジェクト参照を要求する
-- 条件は `when = { os = "windows" }` のように**閉じた語彙の構造体**で表す。
-  Cargo の `[target.'cfg(windows)'.dependencies]` のような文字列埋め込みの小言語は採らない
-  （CMake のジェネレータ式と同じ失敗様式のため）
+- Kept as strict TOML; expressions are not allowed in value position. This
+  guarantees external tools (SBOM generators, vulnerability scanners, update
+  bots) can read it without a custom parser
+- Dependencies come in 4 forms: registry name / git / https tarball / local
+  path. **Only `path` is implemented**; the three fetching forms and
+  `dowel.lock` generation are not
+  ([91-implementation-status.md](91-implementation-status.md))
+- git dependencies may not resolve through branches or tags; a full 40-digit
+  immutable object reference is required
+- Conditions are **structs over a closed vocabulary**, as in
+  `when = { os = "windows" }`. String-embedded mini-languages like Cargo's
+  `[target.'cfg(windows)'.dependencies]` are not adopted (they fail the same
+  way CMake generator expressions do)
 
 ## 2. `dowel.build`
 
@@ -90,47 +97,53 @@ sources = glob("tests/*.c")
 deps    = [target("foo")]
 ```
 
-### TOML から継承する構文
+### Syntax inherited from TOML
 
-テーブルヘッダ `[a.b.c]`、キー = 値、配列、インラインテーブル、
-基本文字列・複数行文字列、`#` 行コメント、暗黙のテーブル生成。
+Table headers `[a.b.c]`, key = value, arrays, inline tables, basic and
+multi-line strings, `#` line comments, implicit table creation.
 
-### 値の位置でのみ追加する要素
+### Elements added in value position only
 
-| 要素 | 記法 | 借用元 |
+| Element | Notation | Borrowed from |
 |---|---|---|
-| 関数呼び出し | `glob(...)`, `dir(...)`, `dep(...)`, `target(...)` | 一般 |
-| 網羅的分岐 | `match cfg.opt { debug => …, release => … }` | Rust |
-| 条件付き要素 | `dep("zlib") when feature.zlib` | 独自（後置） |
-| 名前空間参照 | `cfg.opt`, `feature.zlib`, `host.os` | 一般 |
+| Function calls | `glob(...)`, `dir(...)`, `dep(...)`, `target(...)` | common |
+| Exhaustive branching | `match cfg.opt { debug => …, release => … }` | Rust |
+| Conditional elements | `dep("zlib") when feature.zlib` | original (postfix) |
+| Namespace references | `cfg.opt`, `feature.zlib`, `host.os` | common |
 
-式は**純粋かつ全域**とする。副作用なし、変数束縛なし、反復は有限リストに対する
-内包表記のみ、再帰なし。これにより停止性を言語仕様として保証する（[ADR-0004](adr/0004-syntax.md)）。
+Expressions are **pure and total**: no side effects, no variable bindings,
+iteration only as comprehensions over finite lists, no recursion. Termination
+is thereby guaranteed as part of the language specification
+([ADR-0004](adr/0004-syntax.md)).
 
-### テーブル種別
+### Table kinds
 
-`[<kind>.<name>]` の `kind` は閉じた語彙とし、それぞれスキーマを持つ。未知の `kind` は型検査で落とす。
+The `kind` in `[<kind>.<name>]` is a closed vocabulary, each with its own
+schema. An unknown `kind` fails type checking.
 
-| kind | 意味 | 実装状況 |
+| kind | Meaning | Status |
 |---|---|---|
-| `lib` / `bin` / `test` | ターゲット | 実装済み |
-| `bench` | ベンチマークターゲット | 未実装 |
-| `template` | 再利用単位（非再帰） | 未実装 |
-| `toolchain` | ツールチェーン記述 | 未実装 |
-| `runner` | 実行ラッパ（qemu 等）。`[runner.<triple>]` で名前はターゲットトリプル | 実装済み |
+| `lib` / `bin` / `test` | targets | implemented |
+| `bench` | benchmark targets | not implemented |
+| `template` | reuse unit (non-recursive) | not implemented |
+| `toolchain` | toolchain description | not implemented |
+| `runner` | execution wrapper (qemu etc.); in `[runner.<triple>]` the name is a target triple | implemented |
 
-`runner` だけは名前がターゲット名ではなくターゲットトリプルであり、
-プロパティの集合も他と別である（`command` と `args`）。成果物を生成せず、
-伝播もしないため、ターゲットと同じ語彙を与えると意味のない記述が型検査を通る。
+`runner` is the one kind whose name is a target triple rather than a target
+name, and whose property set differs from the others (`command` and `args`).
+It produces no artifacts and propagates nothing, so giving it the target
+vocabulary would let meaningless declarations pass type checking.
 
 ### `public` / `private`
 
-CMake の `INTERFACE` / `PRIVATE` に相当するが、プロパティ名ごとの修飾ではなく
-ブロックで区切る。伝播するものとしないものを構文上分離する。
+The counterpart of CMake's `INTERFACE` / `PRIVATE`, but separated by block
+rather than qualified per property name. What propagates and what does not
+are distinguished syntactically.
 
-## 3. 型と併合意味論
+## 3. Types and merge semantics
 
-Dの実質はここにある。プロパティごとに**併合規則を型として宣言**する。
+The substance of the language is here: each property **declares its merge
+rule as part of its type**.
 
 ```
 schema {
@@ -141,28 +154,32 @@ schema {
 }
 ```
 
-| 併合規則 | 挙動 |
+| Merge rule | Behavior |
 |---|---|
-| `union` | 和集合。順序はトポロジカル順（依存元が先、依存先が後。インクルード探索・リンク順の期待に一致する） |
-| `append` | 連結。順序を保存する |
-| `error_on_conflict` | 異なる値が到達したら両方の来歴を提示して失敗 |
-| `must_equal` | 一致しなければ失敗。ABI ラベルの検証はこれで表現される（ラベルの自動算出は未実装であり、現状は手書きの `abi` 文字列を検証する） |
-| `replace` | 後から到達した値で置き換える |
+| `union` | set union, in topological order (dependents before dependencies — the order include search and linking expect) |
+| `append` | concatenation, preserving order |
+| `error_on_conflict` | if different values arrive, fail and present the provenance of both |
+| `must_equal` | fail unless equal. ABI label verification is expressed this way (automatic label computation is not implemented; today a hand-written `abi` string is verified) |
+| `replace` | the later-arriving value wins |
 
-併合規則を型に属させることで、プロパティ追加時に検証コードを書き足す必要がなくなる。
+Because the merge rule belongs to the type, adding a property does not
+require writing new verification code.
 
-### 主要な型
+### Principal types
 
-- **`Path`** — `string` と別型。基準点（プロジェクトルート / ビルドディレクトリ / sysroot）を
-  型に含み、文字列連結によるパス構築を言語として提供しない。
-  CMake における事故の多くはここに由来する
-- **`List<T>` / `Set<T>`** — セミコロン区切り文字列という表現を持たない
-- **`Cfg<T>`** — 構成でパラメタライズされた `T`。`match` の結果はこの型を持つ。
-  ジェネレータ式に相当するが、文字列埋め込みの小言語ではなく通常の型として扱う。
-  アクション生成時に構成を与えて具体化するため、`--release` と `--target` の切り替えで
-  マニフェスト評価が再実行されない
+- **`Path`** — a distinct type from `string`. The base point (project root /
+  build directory / sysroot) is part of the type, and the language provides
+  no string concatenation for building paths. Much of CMake's accident
+  surface originates here
+- **`List<T>` / `Set<T>`** — there is no semicolon-separated-string
+  representation
+- **`Cfg<T>`** — a `T` parameterized by configuration; the result of `match`
+  has this type. It corresponds to a generator expression, but as an ordinary
+  type rather than a string-embedded mini-language. Configurations are
+  substituted at action-generation time, so switching `--release` or
+  `--target` does not re-run manifest evaluation
 
-## 4. 抽象化機構（未実装）
+## 4. Abstraction (not implemented)
 
 ```
 [template.cli_tool]
@@ -173,10 +190,11 @@ sources = srcs
 deps    = [dep("cli-common")]
 ```
 
-- テンプレートは非再帰。呼び出しグラフに閉路があれば静的に検出して失敗させる
-- 反復は有限リストに対する内包表記のみ
+- Templates are non-recursive; a cycle in the call graph is detected
+  statically and fails
+- Iteration is limited to comprehensions over finite lists
 
-## 5. 来歴の表示
+## 5. Displaying provenance
 
 ```
 $ dowel why target:app includes
@@ -186,29 +204,34 @@ include/                          Path
     ← deps of target:app                app/dowel.build:7
 ```
 
-来歴チェーンはクエリグラフの部分木をそのまま辿ったものであり、
-増分評価エンジンを実装していれば追加のデータ構造を要しない。
+The provenance chain is a walk of the query graph's subtree as-is; with an
+incremental evaluation engine in place it requires no additional data
+structure.
 
-## 6. TOML との混同への対処
+## 6. Guarding against confusion with TOML
 
-`dowel.build` は TOML の上位方言であり、既存の TOML ツールは値の位置で失敗する。
+`dowel.build` is a superset dialect of TOML, and existing TOML tools fail at
+value position.
 
-- 拡張子を `.toml` にしない。エディタが TOML モードを適用しないようにする
-- TOML として妥当だが本仕様で不正な記述には、その旨を診断に明記する
-- 補完・強調・診断は自前の言語サーバで提供する
+- The extension is not `.toml`, so editors do not apply TOML mode
+- Input that is valid TOML but invalid here gets a diagnostic saying so
+  explicitly
+- Completion, highlighting, and diagnostics come from our own language server
 
-## 7. 構成語彙（暫定）
+## 7. Configuration vocabulary (provisional)
 
-`cfg` / `feature` / `host` / `tc` 名前空間の語彙は確定していない
-（[99-open-questions.md](99-open-questions.md) Q1）。実装は決定までの仮置きとして
-以下を**閉じた語彙**として持つ。現物は `dowel schema dump` で得られる。
+The vocabulary of the `cfg` / `feature` / `host` / `tc` namespaces is not
+finalized ([99-open-questions.md](99-open-questions.md) Q1). Until it is, the
+implementation carries the following as a **closed vocabulary**. The live
+version is available from `dowel schema dump`.
 
-| 名前空間 | キー | 値域 |
+| Namespace | Key | Domain |
 |---|---|---|
 | `cfg` | `opt` | `debug` / `release` |
-| `cfg` | `target` | ターゲットトリプル（自由文字列。`match` は `_` アーム必須） |
-| `host` | `os` / `arch` | ビルドホストの値 |
-| `feature` | `<name>` | 真偽。`dowel.toml` の `[features]` で宣言されたもののみ |
-| `tc` | `c` | 選択された C ツールチェーンの識別子 |
+| `cfg` | `target` | target triple (free-form string; `match` requires a `_` arm) |
+| `host` | `os` / `arch` | build host values |
+| `feature` | `<name>` | boolean; only names declared in `[features]` of `dowel.toml` |
+| `tc` | `c` | identifier of the selected C toolchain |
 
-`when` 述語の合成は暗黙の AND のみ。`match` の網羅性検査は値域が有限なキーに働く。
+Predicate composition in `when` is implicit AND only. Exhaustiveness checking
+of `match` applies to keys with finite domains.
