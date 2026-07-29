@@ -101,6 +101,12 @@ const CASES: &[Case] = &[
         files: &[("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n$\n")],
         args: CHECK,
     },
+    Case {
+        code: "nesting-too-deep",
+        why: "the value nests 65 levels; the parser accepts at most 64",
+        files: &[("app/dowel.build", "[bin.app]\nsources = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]\n")],
+        args: CHECK,
+    },
     // --- マニフェストの厳密性 --------------------------------------------
     Case {
         code: "expression-in-strict-toml",
