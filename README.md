@@ -68,9 +68,9 @@ anywhere in its closure uses the C++ driver. Runners for cross execution
 (`[runner.<triple>]`), incremental evaluation, persisted evaluation results,
 and the language server (diagnostics and hover) all work.
 
-The main things not implemented yet: dependency fetching (only local `path`
-dependencies work) and `dowel.lock`, `dowel debug`, and migration tooling
-for existing build systems. See
+The main things not implemented yet: registry dependencies and `dowel.lock`
+(local `path` and sha-pinned `git` dependencies work), `dowel debug`, and
+migration tooling for existing build systems. See
 [docs/91-implementation-status.md](docs/91-implementation-status.md) for the
 full list and measurements, and [docs/90-roadmap.md](docs/90-roadmap.md) for
 the implementation plan.

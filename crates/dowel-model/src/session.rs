@@ -220,8 +220,20 @@ impl Session {
                     );
                     continue;
                 }
-                if let DepKind::Path(rel) = &dep.kind {
-                    queue.push((canonical(&dir.join(rel)), Some(dep.source_site)));
+                match &dep.kind {
+                    DepKind::Path(rel) => {
+                        queue.push((canonical(&dir.join(rel)), Some(dep.source_site)));
+                    }
+                    // 取得はここで行う。rev が固定されているため、2回目以降は
+                    // ネットワークに触れない（crate::fetch のモジュール説明）。
+                    DepKind::Git { url, rev } => {
+                        match crate::fetch::ensure(&self.root, &dep.name, url, rev, dep.source_site)
+                        {
+                            Ok(d) => queue.push((canonical(&d), Some(dep.source_site))),
+                            Err(d) => self.diagnostics.push(*d),
+                        }
+                    }
+                    DepKind::Unsupported(_) => {}
                 }
             }
         }
@@ -791,12 +803,16 @@ impl Session {
     }
 
     /// 依存名から読み込み済みパッケージを引く。
-    /// 取得を要する供給形態（レジストリ / git）は未実装のため `None` になる。
+    /// レジストリ依存は取得が未実装のため `None` になる。
     pub fn dep_package(&self, from: PackageId, dep_name: &str) -> Option<PackageId> {
         let pkg = self.package(from);
         let dep = pkg.deps.iter().find(|d| d.name == dep_name)?;
         match &dep.kind {
             DepKind::Path(rel) => self.by_root.get(&canonical(&pkg.root.join(rel))).copied(),
+            DepKind::Git { rev, .. } => self
+                .by_root
+                .get(&canonical(&crate::fetch::checkout_dir(&self.root, &dep.name, rev)))
+                .copied(),
             DepKind::Unsupported(_) => None,
         }
     }

@@ -157,7 +157,13 @@ changes, only the speed.
 
 ### Model (`dowel-model`)
 
-- Loading multiple packages by following `path` dependencies
+- Loading multiple packages by following `path` and `git` dependencies
+- git dependencies are pinned to a full 40-digit commit sha (anything else
+  is `unpinned-dependency`) and fetched once into
+  `.dowel/deps/<name>-<rev12>/` by delegating to the `git` command; the
+  checkout is placed atomically with a completion marker, and later runs
+  never touch the network. Because the rev pins the content exactly, no
+  lock file is involved
 - Diagnostics for unknown properties and type mismatches against the schema
   (with suggestions)
 - The `interface(T)` / `compile_env(T)` split: `private` dependencies affect
@@ -319,19 +325,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (379 tests):
+Current breakdown (382 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 251 |
+| `unit-*` | per-crate unit tests | 252 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 45 |
+| `e2e` | compile real C and C++, run it, check the output | 47 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (45 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |
@@ -403,7 +409,7 @@ cannot be measured with the current fixtures; the scale fixture
 | `dowel debug` | Phase 4 |
 | cross-file language-server diagnostics | Phase 4; per-file diagnostics are implemented (`dowel_lsp::UNSUPPORTED`) |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
-| dependency fetching (registry / git / tarball), `dowel.lock` | Phase 5; today only `path` dependencies |
+| registry / tarball dependencies, `dowel.lock` | Phase 5; today `path` and sha-pinned `git` work, neither of which needs a lock |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi` |
 | per-language flags (`cxx_flags`, C++ standard selection) | undecided; today `flags` applies to both C and C++ translation units |

@@ -52,8 +52,13 @@ name = "libgreet"
 path = "../libgreet"
 
 [[dependencies]]
+name = "bar"
+git  = "https://github.com/example/bar"
+rev  = "9f3c0a1e2b7d4856c0f1a93e5d2b8c4770ae6135"
+
+[[dependencies]]
 name     = "zlib"
-version  = "1.3"        # not implemented: fetching
+version  = "1.3"        # not implemented: registry fetching
 optional = true
 ```
 
@@ -64,8 +69,9 @@ it with `dep("name")` in `dowel.build` ([12-build-reference.md](12-build-referen
 | Key | Type | Behavior |
 |---|---|---|
 | `name` | string | required. Missing: `missing-field`. The name used by `dep("...")` and, for optional dependencies, by the feature flag that activates them |
-| `path` | string | a directory containing another dowel package, relative to this `dowel.toml`. **The only implemented source.** The path must exist and contain a manifest (`missing-manifest` otherwise) |
-| `git` | string | recognized but not fetchable yet: `unsupported-dependency`. The design requires a full 40-digit `rev`, never a branch or tag |
+| `path` | string | a directory containing another dowel package, relative to this `dowel.toml`. The path must exist and contain a manifest (`missing-manifest` otherwise) |
+| `git` | string | a git URL (anything `git` itself accepts, including local paths). Requires `rev`. Fetched once into `.dowel/deps/<name>-<rev12>/`; later runs never touch the network. A failing fetch is `unfetchable-dependency` |
+| `rev` | string | required with `git`: a **full 40-digit commit sha**. Branches, tags, and abbreviated shas are refused with `unpinned-dependency` — a name-only reference does not count as pinned. Because the rev pins the content exactly, git dependencies need no lock file |
 | `version` | string | registry dependencies; recognized but not fetchable yet: `unsupported-dependency` |
 | `optional` | bool | default `false`. An optional dependency participates only when a feature flag with the same name is enabled. When inactive, neither the edge nor the node exists — the package is not even loaded |
 | `when` | inline table | reserved for conditional dependencies (`when = { os = "windows" }`). Parsed, but **not yet honored** — the dependency is treated as unconditional |
@@ -101,5 +107,6 @@ enables (transitively closed, cycle-safe). Values must be arrays of strings
 
 - **No expressions** — enforced, see above
 - **No target definitions** — targets live in `dowel.build`
-- **`dowel.lock`** — not generated yet; resolution currently covers `path`
-  dependencies only, which need no locking
+- **`dowel.lock`** — not generated yet. The implemented sources need no
+  locking: `path` points at local content, and `git` is pinned to an exact
+  commit sha. A lock file arrives with registry dependencies
