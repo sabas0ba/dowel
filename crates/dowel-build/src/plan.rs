@@ -68,10 +68,18 @@ pub fn plan(
     let root = sess.root_package().map(|p| p.root.clone()).unwrap_or_else(|| PathBuf::from("."));
     let build_dir = build_dir(&root, cfg);
 
+    // ツールチェーンの宣言はターゲットトリプルで引く。無印の `[toolchain]` は
+    // ホスト向け、`[toolchain.<triple>]` はそのトリプル向けである（issue #42）。
+    let host = dowel_eval::config::default_triple();
+    let root_toolchain = sess.root_package().and_then(|p| p.toolchain_for(&cfg.target, &host));
+
     // ツールチェーンが混ざると ABI の前提が崩れる。1回のビルドで1つに限る。
+    // 比較するのは今のターゲットトリプルに適用される宣言だけ。別トリプル向けの
+    // 宣言は、このビルドに対する要求ではない。
     for p in &sess.packages {
+        let Some(decl) = p.toolchain_for(&cfg.target, &host) else { continue };
         let mismatches: [(&Option<String>, &str, &str); 2] =
-            [(&p.toolchain_c, "C", &cfg.tc_c), (&p.toolchain_cxx, "C++", &cfg.tc_cxx)];
+            [(&decl.c, "C", &cfg.tc_c), (&decl.cxx, "C++", &cfg.tc_cxx)];
         for (declared, lang, used) in mismatches {
             if let Some(tc) = declared {
                 if tc != used {
@@ -99,7 +107,7 @@ pub fn plan(
             "missing-toolchain",
             format!("cannot find the C compiler `{}`", cfg.tc_c),
         );
-        match sess.root_package().and_then(|p| p.toolchain_site) {
+        match root_toolchain.and_then(|t| t.c_site) {
             Some(s) => d = d.at(s.file, s.span, "declared here"),
             None => d = d.note("no `[toolchain]` is declared, so the default `cc` is used"),
         }
@@ -142,12 +150,25 @@ pub fn plan(
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
         if has_cxx[&tid] && !cxx_toolchain_checked {
             cxx_toolchain_checked = true;
-            if !crate::exec::program_exists(&cfg.tc_cxx) {
+            if cfg.target != host && root_toolchain.is_none_or(|t| t.cxx.is_none()) {
+                // ホストの `c++` へ落とすと、C++ の翻訳単位だけ別アーキテクチャの
+                // オブジェクトになる。黙って組まず、宣言の不足として述べる。
+                let mut d = Diagnostic::error(
+                    "missing-toolchain",
+                    format!("no C++ toolchain is declared for target `{}`", cfg.target),
+                );
+                if let Some(s) = root_toolchain.and_then(|t| t.site) {
+                    d = d.at(s.file, s.span, "add `cxx = \"...\"` here");
+                }
+                diags.push(d.note(
+                    "the sources contain C++, and the host `c++` would produce objects for the wrong architecture",
+                ));
+            } else if !crate::exec::program_exists(&cfg.tc_cxx) {
                 let mut d = Diagnostic::error(
                     "missing-toolchain",
                     format!("cannot find the C++ compiler `{}`", cfg.tc_cxx),
                 );
-                match sess.root_package().and_then(|p| p.toolchain_cxx_site) {
+                match root_toolchain.and_then(|t| t.cxx_site) {
                     Some(s) => d = d.at(s.file, s.span, "declared here"),
                     None => {
                         d = d.note("no `[toolchain] cxx` is declared, so the default `c++` is used")

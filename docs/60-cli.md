@@ -107,6 +107,11 @@ Generates ninja files and runs them. With no targets named, builds every
 - The compiler comes from `[toolchain]` in `dowel.toml` (default: `cc` on
   PATH). Toolchain fetching is not implemented; whatever is named must be on
   PATH
+- The toolchain is selected by the target triple. `--target=<triple>`
+  requires a `[toolchain.<triple>]` declaration
+  ([11-toml-reference.md](11-toml-reference.md)); a triple with none is
+  refused before building with `missing-toolchain` rather than silently
+  building host artifacts under that triple's name
 
 ## `dowel test`
 

@@ -182,8 +182,21 @@ changes, only the speed.
   only probed — when C++ sources are present
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
-  freshness reading depfiles)
+  freshness reading depfiles). Header dependency records (`.d` files) stay
+  on disk and are shared between the executors — ninja is not allowed to
+  fold them into `.ninja_deps` (`deps = gcc`), because a record private to
+  one executor makes the other conclude "up to date" with no dependency
+  information at all, silently keeping stale artifacts (issue #41). As a
+  backstop, the direct executor treats an output whose declared depfile is
+  missing as stale instead of fresh
 - Per-configuration build directories
+- `[toolchain.<triple>]` in `dowel.toml` — toolchain selection follows
+  `--target`, the same shape as `[runner.<triple>]` (issue #42). A target
+  triple with no declared toolchain is refused before building with
+  `missing-toolchain`, next to `missing-runner` in spirit: building host
+  artifacts under a foreign triple's name would report the configuration
+  mistake one stage later (as a runner's `Invalid ELF image`, or not at all).
+  Full toolchain *descriptions* (sysroots, probing) remain Phase 5
 - Transfer for `[runner.<triple>]` (`transfer` / `remote_dir` / `host`):
   when the target machine cannot see the build machine's file system,
   artifacts are carried over before launch. Paths are not written in the

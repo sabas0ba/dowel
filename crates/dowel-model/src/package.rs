@@ -24,14 +24,44 @@ pub struct Package {
     pub features: BTreeMap<String, Vec<String>>,
     /// `[features]` の見出し。宣言されていない名前を指す診断が参照する
     pub features_site: Option<Site>,
-    /// `[toolchain] c = "..."`
-    pub toolchain_c: Option<String>,
+    /// 無印の `[toolchain]`。ホスト向けビルドに適用される
+    pub toolchain: ToolchainDecl,
+    /// `[toolchain.<triple>]`。ターゲットトリプルごとの宣言。
+    /// `[runner.<triple>]` と同じ形で、`--target` の切り替えに追随する（issue #42）
+    pub toolchains: BTreeMap<String, ToolchainDecl>,
+}
+
+/// 1つの `[toolchain]`（または `[toolchain.<triple>]`）テーブルの内容。
+#[derive(Clone, Debug, Default)]
+pub struct ToolchainDecl {
+    /// テーブル見出しの位置。宣言に由来する診断が参照する
+    pub site: Option<Site>,
+    /// `c = "..."`
+    pub c: Option<String>,
     /// その宣言が書かれた位置。実在しないツールチェーンを指す診断が参照する
-    pub toolchain_site: Option<Site>,
-    /// `[toolchain] cxx = "..."`
-    pub toolchain_cxx: Option<String>,
+    pub c_site: Option<Site>,
+    /// `cxx = "..."`
+    pub cxx: Option<String>,
     /// その宣言が書かれた位置
-    pub toolchain_cxx_site: Option<Site>,
+    pub cxx_site: Option<Site>,
+}
+
+impl Package {
+    /// `triple` 向けのビルドに適用されるツールチェーン宣言。
+    ///
+    /// トリプルごとの宣言が最優先。無印の `[toolchain]` はホスト向けの宣言で
+    /// あり、別トリプルのビルドには適用しない。ホストのコンパイラで組んだ
+    /// 成果物に別トリプルの名前が付くのが issue #42 の形である。
+    /// 別トリプルに宣言が無い場合は `None` を返し、呼び手が拒む。
+    pub fn toolchain_for(&self, triple: &str, host: &str) -> Option<&ToolchainDecl> {
+        if let Some(d) = self.toolchains.get(triple) {
+            return Some(d);
+        }
+        if triple == host {
+            return Some(&self.toolchain);
+        }
+        None
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -78,10 +108,8 @@ pub fn from_document(
         deps: Vec::new(),
         features: BTreeMap::new(),
         features_site: None,
-        toolchain_c: None,
-        toolchain_site: None,
-        toolchain_cxx: None,
-        toolchain_cxx_site: None,
+        toolchain: ToolchainDecl::default(),
+        toolchains: BTreeMap::new(),
     };
 
     match doc.table(&["package"]) {
@@ -112,24 +140,67 @@ pub fn from_document(
         )),
     }
 
-    if let Some(t) = doc.table(&["toolchain"]) {
+    for t in doc.tables_under(&["toolchain"]) {
+        // `[toolchain]` はホスト向け、`[toolchain.<triple>]` はそのトリプル向け。
+        let (label, triple) = match t.path.len() {
+            1 => ("toolchain".to_string(), None),
+            2 => (format!("toolchain.{}", t.path[1]), Some(t.path[1].clone())),
+            _ => {
+                diags.push(
+                    Diagnostic::error(
+                        "unknown-table",
+                        format!("`[{}]` is not a toolchain declaration", t.path.join(".")),
+                    )
+                    .at(
+                        manifest_file,
+                        t.site.span,
+                        "write `[toolchain]` or `[toolchain.<triple>]`",
+                    ),
+                );
+                continue;
+            }
+        };
+        let mut decl = ToolchainDecl { site: Some(t.site), ..ToolchainDecl::default() };
         if let Some(e) = t.entry("c") {
             match e.value.as_str() {
                 Some(s) => {
-                    pkg.toolchain_c = Some(s.to_string());
-                    pkg.toolchain_site = Some(e.site);
+                    decl.c = Some(s.to_string());
+                    decl.c_site = Some(e.site);
                 }
-                None => type_err(diags, e.site, "toolchain.c", "a string"),
+                None => type_err(diags, e.site, &format!("{label}.c"), "a string"),
             }
         }
         if let Some(e) = t.entry("cxx") {
             match e.value.as_str() {
                 Some(s) => {
-                    pkg.toolchain_cxx = Some(s.to_string());
-                    pkg.toolchain_cxx_site = Some(e.site);
+                    decl.cxx = Some(s.to_string());
+                    decl.cxx_site = Some(e.site);
                 }
-                None => type_err(diags, e.site, "toolchain.cxx", "a string"),
+                None => type_err(diags, e.site, &format!("{label}.cxx"), "a string"),
             }
+        }
+        match triple {
+            Some(triple) => {
+                // トリプル向けの宣言は、そのトリプルのビルド全体を担う。
+                // `c` が無いと C のコンパイルとリンクがホストの既定へ落ち、
+                // 成果物のアーキテクチャが黙って食い違う（issue #42）。
+                if decl.c.is_none() {
+                    diags.push(
+                        Diagnostic::error(
+                            "missing-field",
+                            format!("toolchain `{triple}` has no `c`"),
+                        )
+                        .at(
+                            manifest_file,
+                            t.site.span,
+                            "a target toolchain must name its C compiler",
+                        )
+                        .note("for example `c = \"aarch64-linux-gnu-gcc\"`"),
+                    );
+                }
+                pkg.toolchains.insert(triple, decl);
+            }
+            None => pkg.toolchain = decl,
         }
     }
 
@@ -285,10 +356,8 @@ mod tests {
             deps: Vec::new(),
             features: map,
             features_site: None,
-            toolchain_c: None,
-            toolchain_site: None,
-            toolchain_cxx: None,
-            toolchain_cxx_site: None,
+            toolchain: ToolchainDecl::default(),
+            toolchains: BTreeMap::new(),
         }
     }
 
@@ -311,6 +380,33 @@ mod tests {
         let p = pkg_with(&[("a", &["b"]), ("b", &["c"]), ("c", &[])]);
         let f = resolve_features(&p, &["a".into()], false);
         assert_eq!(f.iter().cloned().collect::<Vec<_>>(), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn the_toolchain_is_selected_by_the_target_triple() {
+        const HOST: &str = "x86_64-unknown-linux-gnu";
+        const CROSS: &str = "riscv64gc-unknown-linux-gnu";
+        let mut p = pkg_with(&[]);
+        p.toolchain.c = Some("cc".into());
+        p.toolchains.insert(
+            CROSS.into(),
+            ToolchainDecl { c: Some("riscv64-gcc".into()), ..Default::default() },
+        );
+
+        // ホストのビルドは無印の宣言、別トリプルはそのトリプルの宣言。
+        assert_eq!(p.toolchain_for(HOST, HOST).unwrap().c.as_deref(), Some("cc"));
+        assert_eq!(p.toolchain_for(CROSS, HOST).unwrap().c.as_deref(), Some("riscv64-gcc"));
+    }
+
+    #[test]
+    fn a_foreign_triple_without_a_declaration_resolves_to_nothing() {
+        let mut p = pkg_with(&[]);
+        p.toolchain.c = Some("cc".into());
+        // 無印の宣言はホスト向けであり、別トリプルのビルドへは落ちない。
+        // ここが `Some` になると、ホストの成果物に別トリプルの名前が付く（issue #42）。
+        assert!(p
+            .toolchain_for("riscv64gc-unknown-linux-gnu", "x86_64-unknown-linux-gnu")
+            .is_none());
     }
 
     #[test]
