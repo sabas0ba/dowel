@@ -1,0 +1,10 @@
+# .vsix に入れないもの。実行に要るのは out/src と宣言的な資産だけである。
+src/**
+test/**
+out/test/**
+**/*.map
+tsconfig.json
+dev.sh
+.work/**
+node_modules/**
+.vscode-test/**
