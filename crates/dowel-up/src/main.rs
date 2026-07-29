@@ -93,7 +93,7 @@ fn run(opts: Options) -> Result<ExitCode, String> {
             let default = store::read_selection(&home.default_file()).ok();
             for i in store::installed(&home) {
                 let mark = if default.as_deref() == Some(i.sha.as_str()) { "*" } else { " " };
-                println!("{mark} {}  {}", i.sha, i.spec);
+                println!("{mark} {}  {}", i.sha, i.specs.join(", "));
             }
         }
         Command::Which => {
