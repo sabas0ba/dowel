@@ -67,6 +67,8 @@ pub struct Session {
     features: Features,
     /// 根の `[features]` から解決した集合。根を読むまでは空
     active: std::collections::BTreeSet<String>,
+    /// 値の入れ子の上限（`--max-nesting`）。既定は `dowel_syntax::MAX_NESTING`
+    max_nesting: usize,
 }
 
 impl Session {
@@ -83,6 +85,14 @@ impl Session {
     /// パッケージとしても依存グラフの節点として残る。取得を伴う供給形態
     /// （Phase 5）では、選ばれていない依存を取得することになる。
     pub fn load_with(root: &Path, features: Features) -> Session {
+        Session::load_with_max_nesting(root, features, dowel_syntax::MAX_NESTING)
+    }
+
+    /// 値の入れ子の上限も与えて読み込む（`--max-nesting` の配管）。
+    ///
+    /// 上限は評価結果の指紋に混ざるため、上限を跨いだ再実行でストアが
+    /// 古い結果を返すことはない（`query::fingerprint_of_source`）。
+    pub fn load_with_max_nesting(root: &Path, features: Features, max_nesting: usize) -> Session {
         let mut sess = Session {
             sm: SourceMap::new(),
             diagnostics: Vec::new(),
@@ -97,6 +107,7 @@ impl Session {
             cache: Rc::new(Cache::open(&canonical(root))),
             features,
             active: std::collections::BTreeSet::new(),
+            max_nesting,
         };
         sess.walk();
         sess
@@ -322,8 +333,9 @@ impl Session {
         // `Session` は打ち切りを公開していないため、この `Db` が
         // 打ち切られることはない。言語サーバを載せる際は、
         // ここが `Result` の伝播点になる。
-        let out = query::evaluated(&self.db, file, strict, Some(self.cache.clone()))
-            .expect("the session never cancels its own queries");
+        let out =
+            query::evaluated(&self.db, file, strict, self.max_nesting, Some(self.cache.clone()))
+                .expect("the session never cancels its own queries");
         self.diagnostics.extend(out.diagnostics.iter().cloned());
         out
     }
@@ -355,6 +367,61 @@ impl Session {
 
     /// `dowel.build` の各テーブルをターゲットへ組み上げる。
     fn build_targets(&mut self, pkg: PackageId, doc: &Document) {
+        TargetSink {
+            pkg,
+            targets: &mut self.targets,
+            runners: &mut self.runners,
+            diagnostics: &mut self.diagnostics,
+        }
+        .build(doc);
+    }
+}
+
+/// `dowel.build` のテーブル列をターゲットとランナーへ組み上げる先。
+///
+/// [`Session`] の読み込みと、開いている1ファイルだけを見る検査
+/// （[`check_build_file`]、issue #38）が同じ実装を共有する。分けて持つと、
+/// 片方だけを直したときに CLI とエディタの診断が黙って食い違う。
+struct TargetSink<'a> {
+    pkg: PackageId,
+    targets: &'a mut Vec<Target>,
+    runners: &'a mut BTreeMap<String, Runner>,
+    diagnostics: &'a mut Vec<Diagnostic>,
+}
+
+/// 開いている1ファイルの `dowel.build` を型検査する。
+///
+/// ワークスペースの模型もディスクも要らない。言語サーバが「開いている
+/// 1ファイルで決まる」検査を `dowel check` と同じ実装で出すための入口である
+/// （issue #38）。ファイルを跨ぐ検査（機能名の照合、依存の解決、併合）と
+/// 計画段の検査（パス解決、glob 展開）はここには無い。
+pub fn check_build_file(doc: &Document) -> Vec<Diagnostic> {
+    let mut targets = Vec::new();
+    let mut runners = BTreeMap::new();
+    let mut diagnostics = Vec::new();
+    TargetSink {
+        pkg: PackageId(0),
+        targets: &mut targets,
+        runners: &mut runners,
+        diagnostics: &mut diagnostics,
+    }
+    .build(doc);
+    diagnostics
+}
+
+/// 開いている1ファイルの `dowel.toml` を型検査する。
+///
+/// [`package::from_document`] の診断だけを取り出す。読み取り自体が
+/// ディスクに触れないため、そのまま言語サーバから使える。
+pub fn check_manifest_file(doc: &Document, file: FileId) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let _ = package::from_document(PackageId(0), doc, PathBuf::from("."), file, &mut diagnostics);
+    diagnostics
+}
+
+impl TargetSink<'_> {
+    fn build(&mut self, doc: &Document) {
+        let pkg = self.pkg;
         // `[lib.foo]` と `[lib.foo.public]` は別テーブルだが同じターゲットを指す。
         let mut index: BTreeMap<(String, String), TargetId> = BTreeMap::new();
 
@@ -460,7 +527,7 @@ impl Session {
             }
         }
 
-        for t in &self.targets {
+        for t in self.targets.iter() {
             if t.package == pkg {
                 log_trace!("declared target {}.{}", t.kind.name(), t.name);
             }
@@ -705,7 +772,9 @@ impl Session {
         );
         self.targets[tid.0].props_mut(block).insert(name, value);
     }
+}
 
+impl Session {
     pub fn package(&self, id: PackageId) -> &Package {
         &self.packages[id.0]
     }

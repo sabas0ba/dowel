@@ -186,6 +186,36 @@ fn pins_a_release_and_dispatches_through_the_shim() {
 }
 
 #[test]
+fn every_specifier_used_to_install_can_select_that_version() {
+    // issue #39。`stable` とそれが指すタグが同じコミットに解決されるのは
+    // 通常の状態であり、どの指定子で入れても、その指定子で選べること。
+    let root = scratch("respec");
+    let up = upstream(&root);
+    let home = root.join("home");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // 3つの指定子が同じコミットに解決される。2つ目以降は実体を再利用する。
+    for spec in ["0.1.0", "stable", "tag:v0.1.0"] {
+        let r = dowelup(&home, &project, &["--upstream", &up.url, "install", spec]).ok();
+        assert_eq!(r.stdout.trim(), up.c1, "`{spec}` resolved to a different commit");
+    }
+
+    // どの指定子でも選べる。`run` は `+<指定子>` と同じ照合を使う。
+    for spec in ["0.1.0", "stable", "tag:v0.1.0"] {
+        let r = dowelup(&home, &project, &["run", spec]).ok();
+        assert_eq!(r.stdout, "one\n", "`{spec}` cannot select the installed version");
+    }
+
+    // 一覧は全ての指定子を持つ。
+    let r = dowelup(&home, &project, &["list"]).ok();
+    let line = r.stdout.lines().find(|l| l.contains(&up.c1)).expect("c1 is not listed");
+    for spec in ["0.1.0", "stable", "tag:v0.1.0"] {
+        assert!(line.contains(spec), "`{spec}` is missing from the list line: {line}");
+    }
+}
+
+#[test]
 fn resolves_moving_references_and_switches_between_them() {
     let root = scratch("switch");
     let up = upstream(&root);

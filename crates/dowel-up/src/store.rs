@@ -70,7 +70,9 @@ impl Home {
 #[derive(Debug)]
 pub struct Installed {
     pub sha: String,
-    pub spec: String,
+    /// この sha を解決した指定子。入れた順。同じコミットを指す指定子は
+    /// 複数ありうる（`stable` とそれが指すタグ）。
+    pub specs: Vec<String>,
 }
 
 /// インストール済みの一覧。`origin` と実体の双方が揃うものだけを返す。
@@ -84,32 +86,55 @@ pub fn installed(home: &Home) -> Vec<Installed> {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(home.origin(&sha)) else { continue };
-        let spec = field(&text, "spec").unwrap_or_default();
-        out.push(Installed { sha, spec });
+        out.push(Installed { sha, specs: fields(&text, "spec") });
     }
     out.sort_by(|a, b| a.sha.cmp(&b.sha));
     out
 }
 
-pub fn write_origin(home: &Home, sha: &str, spec: &str, url: &str) -> Result<(), String> {
+/// 解決の記録を書く。既に記録がある場合は新しい指定子・上流を追記する。
+///
+/// 同じコミットを別の指定子で入れ直すのは通常の操作である（`stable` は
+/// 最新の release タグそのものを指す）。最初の1つしか残さないと、
+/// install が成功した指定子で `dowel +<指定子>` が選べない（issue #39）。
+pub fn record_origin(home: &Home, sha: &str, spec: &str, url: &str) -> Result<(), String> {
     let file = home.origin(sha);
-    let text = format!("sha={sha}\nspec={spec}\nurl={url}\n");
+    let (mut specs, mut urls) = match std::fs::read_to_string(&file) {
+        Ok(text) => (fields(&text, "spec"), fields(&text, "url")),
+        Err(_) => (Vec::new(), Vec::new()),
+    };
+    if !specs.iter().any(|s| s == spec) {
+        specs.push(spec.to_string());
+    }
+    if !urls.iter().any(|u| u == url) {
+        urls.push(url.to_string());
+    }
+    let mut text = format!("sha={sha}\n");
+    for s in &specs {
+        text.push_str(&format!("spec={s}\n"));
+    }
+    for u in &urls {
+        text.push_str(&format!("url={u}\n"));
+    }
     std::fs::write(&file, text).map_err(|e| format!("cannot write {}: {e}", file.display()))
 }
 
-fn field(text: &str, key: &str) -> Option<String> {
+/// `key=値` の行を全て集める。記録は追記されるため、値は1つとは限らない。
+fn fields(text: &str, key: &str) -> Vec<String> {
     let prefix = format!("{key}=");
-    text.lines().find_map(|l| l.strip_prefix(&prefix).map(str::to_string))
+    text.lines().filter_map(|l| l.strip_prefix(&prefix).map(str::to_string)).collect()
 }
 
 /// インストール済みの中から1つ選ぶ。sha の接頭辞か、インストール時の
-/// 指定子そのもの（`nightly` や `branch:feature`）で照合する。
+/// 指定子のいずれか（`nightly` や `branch:feature`）で照合する。
 /// 後者は「そのときの解決結果」への別名であり、上流へは問い合わせない。
 pub fn match_installed<'a>(list: &'a [Installed], needle: &str) -> Result<&'a Installed, String> {
     let lower = needle.to_ascii_lowercase();
     let by_sha = spec::is_hex(&lower);
-    let hits: Vec<&Installed> =
-        list.iter().filter(|i| i.spec == needle || (by_sha && i.sha.starts_with(&lower))).collect();
+    let hits: Vec<&Installed> = list
+        .iter()
+        .filter(|i| i.specs.iter().any(|s| s == needle) || (by_sha && i.sha.starts_with(&lower)))
+        .collect();
     match hits.as_slice() {
         [] => Err(format!(
             "no installed version matches `{needle}`; `dowelup list` shows what is installed"
@@ -118,7 +143,7 @@ pub fn match_installed<'a>(list: &'a [Installed], needle: &str) -> Result<&'a In
         many => Err(format!(
             "`{needle}` matches more than one installed version:\n{}",
             many.iter()
-                .map(|i| format!("  {}  (from {})", i.sha, i.spec))
+                .map(|i| format!("  {}  (from {})", i.sha, i.specs.join(", ")))
                 .collect::<Vec<_>>()
                 .join("\n")
         )),
@@ -236,18 +261,41 @@ mod tests {
         let list = vec![
             Installed {
                 sha: "aaa1111111111111111111111111111111111111".to_string(),
-                spec: "nightly".to_string(),
+                specs: vec!["nightly".to_string()],
             },
             Installed {
                 sha: "aab2222222222222222222222222222222222222".to_string(),
-                spec: "branch:feature".to_string(),
+                specs: vec!["branch:feature".to_string()],
             },
         ];
-        assert_eq!(match_installed(&list, "aaa").unwrap().spec, "nightly");
-        assert_eq!(match_installed(&list, "branch:feature").unwrap().spec, "branch:feature");
+        assert_eq!(match_installed(&list, "aaa").unwrap().specs, ["nightly"]);
+        assert_eq!(match_installed(&list, "branch:feature").unwrap().specs, ["branch:feature"]);
         let e = match_installed(&list, "aa").unwrap_err();
         assert!(e.contains("aaa1") && e.contains("aab2"), "{e}");
         let e = match_installed(&list, "zzz").unwrap_err();
         assert!(e.contains("dowelup list"), "{e}");
+    }
+
+    #[test]
+    fn recording_the_same_sha_again_appends_the_new_specifier() {
+        // 同じコミットを指す指定子は複数ありうる（issue #39）。
+        // どの指定子で入れても、その指定子で照合できること。
+        let root = scratch("origin-append");
+        let home = Home { root };
+        let sha = "aaa1111111111111111111111111111111111111";
+        std::fs::create_dir_all(home.version_dir(sha)).unwrap();
+
+        record_origin(&home, sha, "stable", "https://example.invalid/up").unwrap();
+        record_origin(&home, sha, "tag:v0.9.0", "https://example.invalid/up").unwrap();
+        // 同じ指定子の入れ直しは重複させない。
+        record_origin(&home, sha, "stable", "https://example.invalid/up").unwrap();
+
+        let text = std::fs::read_to_string(home.origin(sha)).unwrap();
+        assert_eq!(fields(&text, "spec"), ["stable", "tag:v0.9.0"]);
+        assert_eq!(fields(&text, "url"), ["https://example.invalid/up"]);
+
+        let list = vec![Installed { sha: sha.to_string(), specs: fields(&text, "spec") }];
+        assert!(match_installed(&list, "stable").is_ok());
+        assert!(match_installed(&list, "tag:v0.9.0").is_ok());
     }
 }

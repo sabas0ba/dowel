@@ -212,6 +212,11 @@ which distinguishes it from the resident daemon rejected by
 
 - Full-document sync: `publishDiagnostics` in response to `didOpen` /
   `didChange` / `didSave` / `didClose`
+- Beyond parsing and evaluation, diagnostics include the type checking
+  decidable from the single open file (`unknown-property` / `type-mismatch` /
+  `unknown-kind`, …), produced by the same implementation as the CLI. A check
+  enforces that every code in the case table either reaches the editor or has
+  a reason in `dowel_lsp::UNSUPPORTED`
 - `textDocument/hover`: property types and merge rules, each level of a table
   header, builtin function signatures, configuration key domains. The source
   is the same table `dowel schema dump` reads

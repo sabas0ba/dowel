@@ -13,10 +13,12 @@
 //!
 //! ## 現時点で見ているもの
 //!
-//! 開いているファイル1つを単位として、構文解析と評価の診断を出す。
-//! ファイルを跨ぐ診断（`undeclared-dependency`、併合の衝突）は
-//! ワークスペースの模型を要するため、まだ出さない。
-//! 何を出さないかは [`unsupported`] に列挙し、検査で追跡する。
+//! 開いているファイル1つを単位として、構文解析・評価・型検査の診断を出す。
+//! 型検査は CLI と同じ実装（`dowel_model::session::check_build_file` /
+//! `check_manifest_file`）を1ファイルの範囲で呼ぶ（issue #38）。
+//! ファイルを跨ぐ診断（`undeclared-dependency`、併合の衝突）と計画段の診断は
+//! ワークスペースの模型や実際のファイル走査を要するため、まだ出さない。
+//! 何を出さないかは [`UNSUPPORTED`] に列挙し、検査で追跡する。
 
 mod hover;
 mod rpc;
@@ -39,6 +41,25 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
     ("invalid-source", "path resolution happens at plan time"),
     ("unresolved-path", "path resolution happens at plan time"),
     ("empty-glob", "glob expansion happens at plan time"),
+    ("no-sources", "whether `sources` ends up empty is decided at plan time, after glob expansion"),
+    (
+        "missing-manifest",
+        "the diagnostic is about a file that does not exist; there is nothing to open",
+    ),
+    (
+        "missing-build",
+        "the diagnostic is about a file that does not exist; there is nothing to open",
+    ),
+    ("unreadable-build", "reading the file is the editor's job; the server sees only open buffers"),
+    ("missing-runner", "triggered by `--target`, which is not part of any manifest"),
+    ("missing-toolchain", "probing PATH for the compiler happens at plan time"),
+    ("dependency-cycle", "the cycle spans several packages; it needs the workspace model"),
+    (
+        "inactive-dependency",
+        "whether a feature enables the dependency is decided from `dowel.toml`",
+    ),
+    ("invalid-dependency", "what `deps` refers to is checked when the dependency graph is built"),
+    ("unsupported-language", "the language of a source is decided from the file list at plan time"),
 ];
 
 /// 開いている文書。エディタの緩衝が正本であり、ディスクは見ない。
@@ -212,8 +233,20 @@ fn publish(docs: &Documents, uri: &str) -> String {
     if path.file_name().is_some_and(|n| n == dowel_model::session::MANIFEST_NAME) {
         diags.extend(dowel_eval::strict::check(&parsed.root, file));
     }
-    let (_, eval_diags) = dowel_eval::eval(&parsed.root, text, file);
+    let (doc, eval_diags) = dowel_eval::eval(&parsed.root, text, file);
     diags.extend(eval_diags);
+    // 型検査の段。開いている1ファイルで決まる検査は CLI と同じ実装で出す
+    // （issue #38）。出さないと、誤りのあるマニフェストがエディタでは
+    // 無傷に見える。ファイルを跨ぐ検査は [`UNSUPPORTED`] に列挙してある。
+    match path.file_name() {
+        Some(n) if n == dowel_model::session::MANIFEST_NAME => {
+            diags.extend(dowel_model::session::check_manifest_file(&doc, file));
+        }
+        Some(n) if n == dowel_model::session::BUILD_NAME => {
+            diags.extend(dowel_model::session::check_build_file(&doc));
+        }
+        _ => {}
+    }
 
     log_debug!("lsp: {} diagnostics for {uri}", diags.len());
     diagnostics_notification(uri, &sm, &diags)

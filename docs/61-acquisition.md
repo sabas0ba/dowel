@@ -88,7 +88,7 @@ branch name alone does not count as pinned
 |---|---|
 | `$DOWELUP_HOME` (default `~/.dowel`) | the root of dowelup's state |
 | `versions/<sha>/bin/dowel` | an installed binary |
-| `versions/<sha>/origin` | which specifier and upstream it was resolved from |
+| `versions/<sha>/origin` | which specifiers and upstream it was resolved from; appended to when the same sha is installed again under a different specifier |
 | `upstream.git` | the mirror used for resolution and fetching |
 | `default` | the sha used where no pin exists |
 | `tmp/<sha>` | a build work tree; removed on success, kept on failure for inspection |

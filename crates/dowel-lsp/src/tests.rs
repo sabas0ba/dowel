@@ -119,7 +119,9 @@ fn opening_a_file_publishes_its_diagnostics() {
         Some("textDocument/publishDiagnostics")
     );
     assert_eq!(out[0].path("params.uri").and_then(|u| u.as_str()), Some("file:///w/dowel.build"));
-    assert!(codes(&out[0]).is_empty(), "unknown properties are a model-level diagnostic");
+    // 型検査の段も1ファイルで決まる範囲は出す（issue #38）。出さないと、
+    // 最も踏みやすい誤りがエディタでは無傷に見える。
+    assert_eq!(codes(&out[0]), ["unknown-property"]);
 }
 
 #[test]
@@ -163,13 +165,16 @@ fn closing_a_file_clears_its_diagnostics() {
 #[test]
 fn the_manifest_is_held_to_strict_toml() {
     // `dowel.toml` と `dowel.build` の区別はファイル名で行う（ADR-0003）。
-    let expr =
-        "[package]\nname = \"a\"\nversion = match cfg.opt { debug => \"1\", release => \"2\" }\n";
-    let manifest = exchange(&[did_open("file:///w/dowel.toml", expr)]);
+    // 同じ「値の位置の式」が、`dowel.toml` では拒まれ `dowel.build` では通る。
+    let expr = "flags = match cfg.opt { debug => [\"-O0\"], release => [\"-O2\"] }\n";
+    let manifest =
+        exchange(&[did_open("file:///w/dowel.toml", &format!("[package]\nname = \"a\"\n{expr}"))]);
     assert_eq!(codes(&manifest[0]), ["expression-in-strict-toml"]);
 
-    // 同じ本文でも `dowel.build` なら通る。
-    let build = exchange(&[did_open("file:///w/dowel.build", expr)]);
+    let build = exchange(&[did_open(
+        "file:///w/dowel.build",
+        &format!("[bin.a]\nsources = glob(\"src/*.c\")\n\n[bin.a.private]\n{expr}"),
+    )]);
     assert!(codes(&build[0]).is_empty(), "{:?}", codes(&build[0]));
 }
 

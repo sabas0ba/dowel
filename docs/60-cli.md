@@ -51,9 +51,18 @@ the run short, the summary reports how many tests were not run.
 | `-v, --verbose` | — | — | more logging; once for info, twice or more for debug |
 | `--log-level <level>` | `off` / `error` / `warn` / `info` / `debug` / `trace` | — | log level; an explicit value overrides `-v` |
 | `--log-format <fmt>` | `text` / `json` | `text` | log format (one object per line) |
+| `--max-nesting <n>` | number | 64 | maximum value-nesting depth the parser accepts (see below) |
 | `--color <when>` | `auto` / `always` / `never` | `auto` | color; `auto` currently resolves to no color (no terminal detection), so pass `always` explicitly when needed |
 | `-h, --help` | — | — | print usage |
 | `-V, --version` | — | — | print the version |
+
+### Nesting limit
+
+Parsing accepts value nesting up to 64 levels by default; anything deeper
+gets a `nesting-too-deep` diagnostic at the offending position. If a
+generated manifest exceeds this, raise it with `--max-nesting=<n>` (capped
+at 512 — accepting stack-exhausting depth would return an abort instead of a
+diagnostic).
 
 ### Environment variables
 

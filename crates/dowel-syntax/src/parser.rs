@@ -17,13 +17,38 @@ pub struct Parsed {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// 値の入れ子の深さの既定の上限。`--max-nesting` で変えられる。
+///
+/// 解析は再帰下降であり、深さがそのままスタックを使う。上限が無いと
+/// 生成された入力で abort し、診断を1件も出せない（issue #33）。
+/// 言語仕様は停止性を保証すると定めており（ADR-0004 の帰結）、処理系が
+/// 入力の深さで落ちるのはその主張と食い違う。実在のマニフェストの
+/// 入れ子は数段であり、64 は人が書く形に対して十分に深い。
+pub const MAX_NESTING: usize = 64;
+
+/// 指定できる上限の天井。
+///
+/// 上限は「abort しない」ことを守るための仕掛けであり、スタックが尽きる
+/// 深さまで上げられては意味を失う。観測では 6000 段のあたりで溢れた
+/// （issue #33）ため、余裕を持って1桁下に置く。
+pub const MAX_NESTING_CEILING: usize = 512;
+
 pub fn parse(src: &str, file: FileId) -> Parsed {
+    parse_with_max_nesting(src, file, MAX_NESTING)
+}
+
+/// 入れ子の上限を与えて解析する。`--max-nesting` の配管の終点。
+///
+/// 呼び手は [`MAX_NESTING_CEILING`] 以下に検証してから渡す。
+pub fn parse_with_max_nesting(src: &str, file: FileId, max_nesting: usize) -> Parsed {
     let lexed = lex(src);
     let mut p = Parser {
         src,
         file,
         tokens: lexed.tokens,
         pos: 0,
+        depth: 0,
+        max_nesting: max_nesting.min(MAX_NESTING_CEILING),
         builder: TreeBuilder::new(),
         diagnostics: Vec::new(),
     };
@@ -57,6 +82,10 @@ struct Parser<'a> {
     tokens: Vec<Token>,
     /// `tokens` の位置。些末部を含む生の位置である。
     pos: usize,
+    /// いま解析している値の入れ子の深さ。`max_nesting` で打ち切る。
+    depth: usize,
+    /// 入れ子の上限。既定は [`MAX_NESTING`]
+    max_nesting: usize,
     builder: TreeBuilder,
     diagnostics: Vec<Diagnostic>,
 }
@@ -323,6 +352,56 @@ impl<'a> Parser<'a> {
 
     fn expr(&mut self) {
         self.skip_trivia();
+        // 深さの検査は全ての値の再帰がここを通ることに依っている。
+        // 配列・インラインテーブル・呼び出し・`match` の腕は、いずれも
+        // `expr`（または `expr_with_when` 経由）で子の値へ降りる。
+        // 数えるのは入れ物の段数である。リテラルは再帰しないため、
+        // 上限ちょうどの入れ物の中身までは受け付ける。
+        let opens_a_container = matches!(self.nth(0), TokenKind::LBracket | TokenKind::LBrace)
+            || (self.nth(0) == TokenKind::Ident
+                && (self.at_keyword(0, "match") || self.nth(1) == TokenKind::LParen));
+        if opens_a_container && self.depth >= self.max_nesting {
+            self.too_deep();
+            return;
+        }
+        self.depth += 1;
+        self.expr_inner();
+        self.depth -= 1;
+    }
+
+    /// 深さの上限を超えた値。診断を1件出し、値の残りを再帰せずに読み切る。
+    ///
+    /// 読み切りは括弧の釣り合いだけを数える反復であり、深さに依存しない。
+    /// 上限を超えた部分木は1つの [`NodeKind::Error`] になる。
+    fn too_deep(&mut self) {
+        let t = self.nth_token(0);
+        self.diagnostics.push(
+            Diagnostic::error(
+                "nesting-too-deep",
+                format!("the value is nested more than {} levels deep", self.max_nesting),
+            )
+            .at(self.file, t.span, "the nesting reaches its limit here")
+            .note("such depth usually comes from a generated manifest; flatten the value, or raise the limit with `--max-nesting`"),
+        );
+        self.builder.start_node(NodeKind::Error, t.span.start);
+        let mut open = 0usize;
+        while let Some(t) = self.tokens.get(self.pos).copied() {
+            match t.kind {
+                TokenKind::Eof => break,
+                TokenKind::LBracket | TokenKind::LBrace | TokenKind::LParen => open += 1,
+                TokenKind::RBracket | TokenKind::RBrace | TokenKind::RParen if open == 0 => break,
+                TokenKind::RBracket | TokenKind::RBrace | TokenKind::RParen => open -= 1,
+                // 釣り合いの取れた位置の区切りは、囲んでいる要素の区切りである。
+                TokenKind::Comma | TokenKind::Newline if open == 0 => break,
+                _ => {}
+            }
+            self.builder.token(t);
+            self.pos += 1;
+        }
+        self.builder.finish_node();
+    }
+
+    fn expr_inner(&mut self) {
         match self.nth(0) {
             TokenKind::Str | TokenKind::Int => self.literal(),
             TokenKind::Ident => {
@@ -718,5 +797,74 @@ mod tests {
         let parsed = p(src);
         assert!(!parsed.diagnostics.is_empty());
         assert_lossless(src);
+    }
+
+    #[test]
+    fn a_leading_bom_is_accepted() {
+        // 画面に見えない違いで拒むと、続く診断が「正しく見える行」を指す
+        // （issue #34）。CRLF と同様、先頭の BOM は受け付ける。
+        let src = "\u{feff}[lib.foo]\nsources = glob(\"src/*.c\")\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_lossless(src);
+    }
+
+    #[test]
+    fn nesting_below_the_limit_is_untouched() {
+        let deep = format!("a = {}1{}\n", "[".repeat(MAX_NESTING), "]".repeat(MAX_NESTING));
+        let parsed = p(&deep);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_lossless(&deep);
+    }
+
+    #[test]
+    fn nesting_beyond_the_limit_is_refused_with_a_location() {
+        // 上限が無いと再帰がスタックを溢れさせ、診断を1件も出せない
+        // （issue #33）。拒否は abort ではなく、位置を持つ診断で行う。
+        let deep = format!("a = {}1{}\n", "[".repeat(MAX_NESTING + 1), "]".repeat(MAX_NESTING + 1));
+        let parsed = p(&deep);
+        let d = parsed
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "nesting-too-deep")
+            .expect("the depth limit did not report");
+        let label = d.primary_label().expect("the diagnostic carries no location");
+        // 位置は上限に達した括弧を指す。
+        assert_eq!(label.span.start as usize, 4 + MAX_NESTING);
+        assert_lossless(&deep);
+    }
+
+    #[test]
+    fn the_limit_is_configurable() {
+        // 生成されたマニフェストが 64 を超える場合の逃げ道（PR #36 のレビュー）。
+        let deep = format!("a = {}1{}\n", "[".repeat(100), "]".repeat(100));
+        let parsed = parse_with_max_nesting(&deep, FileId(0), 128);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+        // 天井は越えられない。上限は abort させないための仕掛けであり、
+        // スタックが尽きる深さを受け付けては意味を失う。
+        let very_deep = format!("a = {}1{}\n", "[".repeat(600), "]".repeat(600));
+        let parsed = parse_with_max_nesting(&very_deep, FileId(0), usize::MAX);
+        assert!(parsed.diagnostics.iter().any(|d| d.code == "nesting-too-deep"));
+    }
+
+    #[test]
+    fn extreme_nesting_does_not_abort() {
+        // 生成された入力の形（issue #33 の観測）。深さに再帰が比例しないこと。
+        // 閉じた形・閉じていない形・呼び出しの形の3つとも見る。
+        for src in [
+            format!("a = {}1{}\n", "[".repeat(100_000), "]".repeat(100_000)),
+            format!("a = {}\n", "[".repeat(100_000)),
+            format!("a = {}{{a=1}}{}\n", "{a=".repeat(50_000), "}".repeat(50_000)),
+            format!("a = {}\"x\"{}\n", "glob(".repeat(50_000), ")".repeat(50_000)),
+        ] {
+            let parsed = p(&src);
+            assert!(
+                parsed.diagnostics.iter().any(|d| d.code == "nesting-too-deep"),
+                "no depth diagnostic for {}...",
+                &src[..20]
+            );
+            assert_lossless(&src);
+        }
     }
 }

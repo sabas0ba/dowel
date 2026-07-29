@@ -82,12 +82,13 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
     // 機能フラグの選択は読み込みより前に要る。有効でない任意の依存は
     // 読み込まないため（docs/10-manifest.md）。
-    let mut sess = Session::load_with(
+    let mut sess = Session::load_with_max_nesting(
         &opts.directory,
         dowel_model::session::Features {
             requested: opts.features.clone(),
             default: opts.default_features,
         },
+        opts.max_nesting,
     );
     // ストアへの書き込みは読み込み直後に行う。以降の段階が失敗しても、
     // 何を読み、どう評価したかは次回の実行にとって有効な情報である。

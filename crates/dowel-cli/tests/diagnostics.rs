@@ -101,6 +101,12 @@ const CASES: &[Case] = &[
         files: &[("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n$\n")],
         args: CHECK,
     },
+    Case {
+        code: "nesting-too-deep",
+        why: "the value nests 65 levels; the parser accepts at most 64",
+        files: &[("app/dowel.build", "[bin.app]\nsources = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]\n")],
+        args: CHECK,
+    },
     // --- マニフェストの厳密性 --------------------------------------------
     Case {
         code: "expression-in-strict-toml",
@@ -907,6 +913,128 @@ fn the_uncovered_list_has_no_stale_entries() {
         );
         assert!(!covered.contains(*code), "`{code}` now has a case; remove it from UNCOVERED");
     }
+}
+
+// ---------------------------------------------------------------------------
+// 言語サーバとの網羅。
+//
+// 事例表の各コードについて、エディタにも届くか、届かない理由が
+// `dowel_lsp::UNSUPPORTED` に書かれているかの**どちらか**であることを見る。
+// 第3の状態（出ないのに列挙もされていない）を許すと、誤りのある
+// マニフェストがエディタでは無傷に見え、しかも誰も気づけない（issue #38）。
+// ---------------------------------------------------------------------------
+
+/// 事例のファイル一覧。基準プロジェクトに上書きを重ねた結果。
+fn effective_files(case: &Case) -> Vec<(&'static str, &'static str)> {
+    let mut files: Vec<(&str, &str)> = vec![
+        ("app/dowel.toml", "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n"),
+        ("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n"),
+    ];
+    for (rel, text) in case.files {
+        match files.iter().position(|(r, _)| r == rel) {
+            Some(i) => files[i] = (rel, text),
+            None => files.push((rel, text)),
+        }
+    }
+    files.retain(|(r, _)| r.ends_with("dowel.toml") || r.ends_with("dowel.build"));
+    files
+}
+
+/// 各ファイルを言語サーバに開かせ、届いた診断コードを全て集める。
+fn lsp_codes_for(files: &[(&str, &str)]) -> BTreeSet<String> {
+    use std::io::Write;
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_dowel"))
+        .arg("lsp")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("cannot start dowel lsp");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin is piped");
+        let mut send = |body: String| {
+            write!(stdin, "Content-Length: {}\r\n\r\n{body}", body.len())
+                .expect("cannot write to the server");
+        };
+        send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string());
+        send(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#.to_string());
+        for (i, (rel, text)) in files.iter().enumerate() {
+            let name = rel.rsplit('/').next().expect("the path has a file name");
+            send(format!(
+                r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///case{i}/{name}","languageId":"dowel","version":1,"text":{}}}}}}}"#,
+                json_string(text)
+            ));
+        }
+        send(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#.to_string());
+        send(r#"{"jsonrpc":"2.0","method":"exit"}"#.to_string());
+    }
+    let out = child.wait_with_output().expect("the server did not exit");
+    codes_in(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// JSON の文字列リテラルにする。
+fn json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[test]
+fn every_case_reaches_the_editor_or_is_listed_as_unsupported() {
+    let unsupported: BTreeSet<&str> = dowel_lsp::UNSUPPORTED.iter().map(|(c, _)| *c).collect();
+    let mut failures = Vec::new();
+    for case in CASES {
+        if unsupported.contains(case.code) {
+            continue;
+        }
+        let published = lsp_codes_for(&effective_files(case));
+        if !published.contains(case.code) {
+            failures.push(format!("  {} ({})", case.code, case.why));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} diagnostic(s) neither reach the editor nor are excused. emit them from the \
+         language server, or add them to dowel_lsp::UNSUPPORTED with a reason (issue #38):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn the_unsupported_list_of_the_lsp_has_no_stale_entries() {
+    // 出るようになったのに免除が残っていると、退行しても気づけない。
+    // ここでは事例を持つコードだけを見る。事例の無いコード（UNCOVERED）は
+    // 入力を組み立てられないため判定できない。
+    let cases: BTreeSet<&str> = CASES.iter().map(|c| c.code).collect();
+    let mut stale = Vec::new();
+    for (code, _) in dowel_lsp::UNSUPPORTED {
+        if !cases.contains(code) {
+            continue;
+        }
+        for case in CASES.iter().filter(|c| c.code == *code) {
+            if lsp_codes_for(&effective_files(case)).contains(*code) {
+                stale.push(format!("  {code}: published for `{}`", case.why));
+            }
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "these codes are listed in dowel_lsp::UNSUPPORTED but the server now publishes \
+         them; remove the entries:\n{}",
+        stale.join("\n")
+    );
 }
 
 #[test]
