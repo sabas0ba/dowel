@@ -536,13 +536,7 @@ fn schema_dump() -> String {
     w.end_array();
 
     w.key("functions").begin_array();
-    for (name, sig, doc) in [
-        ("glob", "(Str) -> List<Path>", "files matching the pattern; expanded at plan time"),
-        ("dir", "(Str) -> Path", "a directory relative to the package root"),
-        ("file", "(Str) -> Path", "a file relative to the package root"),
-        ("dep", "(Str) -> DepRef", "a reference to a dependency declared in dowel.toml"),
-        ("target", "(Str) -> TargetRef", "a reference to a target in the same package"),
-    ] {
+    for (name, sig, doc) in schema::FUNCTIONS {
         w.begin_object();
         w.field_str("name", name);
         w.field_str("signature", sig);

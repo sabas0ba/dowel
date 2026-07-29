@@ -173,6 +173,90 @@ fn the_manifest_is_held_to_strict_toml() {
     assert!(codes(&build[0]).is_empty(), "{:?}", codes(&build[0]));
 }
 
+fn hover_request(id: i64, uri: &str, line: i64, character: i64) -> String {
+    request(
+        id,
+        "textDocument/hover",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":{line},"character":{character}}}}}"#
+        ),
+    )
+}
+
+#[test]
+fn hover_is_announced_and_answered() {
+    let uri = "file:///w/dowel.build";
+    let out = exchange(&[
+        request(1, "initialize", "{}"),
+        did_open(uri, "[lib.foo.public]\nincludes = [dir(\"include\")]\n"),
+        // 2行目の先頭は `includes`。
+        hover_request(2, uri, 1, 2),
+    ]);
+    assert_eq!(
+        out[0].path("result.capabilities.hoverProvider").and_then(|h| h.as_bool()),
+        Some(true)
+    );
+
+    let value = out[2].path("result.contents.value").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(value.contains("`includes`"), "{value}");
+    assert!(value.contains("merge: `union`"), "{value}");
+    assert_eq!(out[2].path("result.contents.kind").and_then(|k| k.as_str()), Some("markdown"));
+    // 範囲は語を覆う。`includes` は8文字。
+    assert_eq!(out[2].path("result.range.start.character").and_then(|c| c.as_i64()), Some(0));
+    assert_eq!(out[2].path("result.range.end.character").and_then(|c| c.as_i64()), Some(8));
+}
+
+#[test]
+fn hover_on_a_position_without_a_word_answers_null() {
+    // 応答しないとエディタは待ち続ける。説明が無いことは `null` で伝える。
+    let uri = "file:///w/dowel.build";
+    let out = exchange(&[did_open(uri, "[lib.foo]\n"), hover_request(1, uri, 1, 0)]);
+    assert_eq!(out[1].path("result"), Some(&Json::Null));
+}
+
+#[test]
+fn hover_on_a_file_that_is_not_open_answers_null() {
+    let out = exchange(&[hover_request(1, "file:///w/never-opened.build", 0, 0)]);
+    assert_eq!(out[0].path("result"), Some(&Json::Null));
+}
+
+#[test]
+fn the_hover_position_is_read_in_utf16_units() {
+    // 桁は UTF-16 単位で来る。文字数として扱うと非 ASCII の行でずれる。
+    let uri = "file:///w/dowel.build";
+    let text = "[bin.a.private]\nflags = [\"あ😀\"] when feature.fast\n";
+    // `feature.fast` は `flags = ["あ😀"] when ` の後ろ。
+    let prefix = "flags = [\"あ😀\"] when ";
+    let character: i64 = prefix.chars().map(|c| c.len_utf16() as i64).sum();
+    let out = exchange(&[did_open(uri, text), hover_request(1, uri, 1, character + 1)]);
+    let value = out[1].path("result.contents.value").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(value.contains("`feature.fast`"), "{value}");
+}
+
+#[test]
+fn a_position_outside_the_text_answers_null_instead_of_being_rounded() {
+    // 位置は外から来る。丸めると別の語を説明することになる。
+    let uri = "file:///w/dowel.build";
+    let out = exchange(&[
+        did_open(uri, "[lib.foo]\n"),
+        hover_request(1, uri, 99, 0),
+        hover_request(2, uri, 0, 99),
+    ]);
+    assert_eq!(out[1].path("result"), Some(&Json::Null));
+    assert_eq!(out[2].path("result"), Some(&Json::Null));
+}
+
+#[test]
+fn the_end_of_a_line_is_a_valid_position() {
+    // 行末はその行の長さと一致する。断ってはならない。
+    assert_eq!(offset_of("ab\ncd\n", 0, 2), Some(2));
+    assert_eq!(offset_of("ab\ncd\n", 1, 2), Some(5));
+    assert_eq!(offset_of("ab\ncd\n", 1, 3), None);
+    assert_eq!(offset_of("ab\ncd\n", 5, 0), None);
+    // 非 ASCII を含む行。`😀` は UTF-16 で2単位を占める。
+    assert_eq!(offset_of("a😀b\n", 0, 3), Some("a😀".len() as u32));
+}
+
 #[test]
 fn a_request_that_is_not_implemented_gets_an_error_instead_of_silence() {
     // 応えないとエディタは待ち続ける。

@@ -167,6 +167,8 @@
 
 - 全文同期。`didOpen` / `didChange` / `didSave` / `didClose` に応じて
   `publishDiagnostics` を返す
+- `textDocument/hover`。プロパティの型と併合規則、表の見出しの各段、
+  組み込み関数の署名、構成キーの値域。出所は `dowel schema dump` と同じ表
 - 診断の範囲は 0 始まりの行と UTF-16 単位の桁。注記と修正提案の説明は
   本文に畳む
 - `dowel.toml` は名前で判別し、厳密な TOML の検証（[ADR-0003](adr/0003-manifest-split.md)）を課す
@@ -220,12 +222,12 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 成果物として保存し、要約をジョブのサマリに出す。詳細は
 [50-development.md](50-development.md) 3.1 節。
 
-現在の内訳（テスト 319 件）。
+現在の内訳（テスト 338 件）。
 
 | 段階 | 内容 | 件数 |
 |---|---|---|
 | `fmt` / `clippy` | 整形検査と静的解析（`-D warnings`） | — |
-| `unit-*` | クレートごとの単体テスト | 208 |
+| `unit-*` | クレートごとの単体テスト | 227 |
 | `syntax-robustness` | 壊れた入力に対するパニック不在とロスレス性 | 5 |
 | `model-integration` | マニフェスト読み込みからインタフェース併合まで | 10 |
 | `model-incremental` | 読み直しで何を計算しなかったかの数え上げ | 10 |
@@ -275,7 +277,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | `bench` / `template` / `toolchain` の各種別 | Phase 2 / 4 |
 | 移行（`migrate verify` / `import`） | Phase 3 |
 | `dowel debug` | Phase 4 |
-| 言語サーバのファイルを跨ぐ診断、ホバー | Phase 4。診断はファイル単位まで実装済み（`dowel_lsp::UNSUPPORTED`） |
+| 言語サーバのファイルを跨ぐ診断 | Phase 4。診断はファイル単位まで実装済み（`dowel_lsp::UNSUPPORTED`） |
 | 対象機に残した成果物の掃除、転送の省略判定 | Phase 4。転送は毎回行う |
 | 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
 | ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |

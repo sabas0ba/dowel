@@ -1,7 +1,8 @@
 //! マニフェスト言語の言語サーバ。
 //!
-//! [30-devexp.md](../../../docs/30-devexp.md) 3.2 の方針により、初期は診断に
-//! 絞る。コアの別フロントエンドであり、解析と評価は CLI と同じクエリを通す。
+//! [30-devexp.md](../../../docs/30-devexp.md) 3.2 の方針により、初期は診断と
+//! ホバーに絞る。コアの別フロントエンドであり、説明の出所はスキーマそのもの
+//! （`dowel schema dump` が出すものと同じ表）である。
 //!
 //! ## 常駐との関係
 //!
@@ -17,6 +18,7 @@
 //! ワークスペースの模型を要するため、まだ出さない。
 //! 何を出さないかは [`unsupported`] に列挙し、検査で追跡する。
 
+mod hover;
 mod rpc;
 
 use dowel_support::json::{Json, JsonWriter};
@@ -75,6 +77,7 @@ fn handle(docs: &mut Documents, m: &rpc::Message, shutdown: &mut bool) -> Vec<St
             w.key("capabilities").begin_object();
             // 全文同期。差分同期は本文の再構成が要り、得るものは大きくない。
             w.key("textDocumentSync").i64(1);
+            w.key("hoverProvider").bool(true);
             w.end_object();
             w.key("serverInfo").begin_object();
             w.field_str("name", "dowel");
@@ -127,12 +130,69 @@ fn handle(docs: &mut Documents, m: &rpc::Message, shutdown: &mut bool) -> Vec<St
             vec![diagnostics_notification(&uri, &SourceMap::new(), &[])]
         }
 
+        (rpc::Message::Request { id, .. }, "textDocument/hover") => {
+            vec![rpc::response(id, |w| hover_result(docs, params, w))]
+        }
+
         // 要求には必ず応える。応えないとエディタは待ち続ける。
         (rpc::Message::Request { id, .. }, other) => {
             vec![rpc::error(id, -32601, &format!("`{other}` is not implemented"))]
         }
         (rpc::Message::Notification { .. }, _) => Vec::new(),
     }
+}
+
+/// ホバーの応答。説明が無い位置では `null` を返す。
+fn hover_result(docs: &Documents, params: &Json, w: &mut JsonWriter) {
+    let Some((text, h)) = find_hover(docs, params) else {
+        w.null();
+        return;
+    };
+    // 範囲は本文の中のオフセットで決まる。位置の変換のためだけに写しを作る。
+    let mut sm = SourceMap::new();
+    let file = sm.add("hover", text);
+
+    w.begin_object();
+    w.key("contents").begin_object();
+    w.field_str("kind", "markdown");
+    w.field_str("value", &h.markdown);
+    w.end_object();
+    w.key("range");
+    write_range(w, &sm, file, h.span);
+    w.end_object();
+}
+
+fn find_hover(docs: &Documents, params: &Json) -> Option<(String, hover::Hover)> {
+    let uri = str_at(params, "textDocument.uri")?;
+    let text = docs.text.get(&uri)?;
+    let line = params.path("position.line")?.as_i64()? as u32;
+    let character = params.path("position.character")?.as_i64()? as u32;
+    let offset = offset_of(text, line, character)?;
+    let parsed = dowel_syntax::parse(text, FileId(0));
+    let h = hover::at(&parsed.root, text, offset)?;
+    Some((text.clone(), h))
+}
+
+/// LSP の位置をバイトオフセットにする。
+///
+/// 行は 0 始まり、桁は UTF-16 単位である。範囲の外を指す位置は `None`。
+/// 位置は外から来るため、丸めずに断る。
+fn offset_of(text: &str, line: u32, character: u32) -> Option<u32> {
+    let mut start = 0usize;
+    for _ in 0..line {
+        start += text.get(start..)?.find('\n')? + 1;
+    }
+    let rest = text.get(start..)?;
+    let line_text = rest.split('\n').next().unwrap_or(rest);
+    let mut units = 0u32;
+    for (i, c) in line_text.char_indices() {
+        if units == character {
+            return Some((start + i) as u32);
+        }
+        units += c.len_utf16() as u32;
+    }
+    // 行末はその行の長さと一致する。それを超える位置は断る。
+    (units == character).then_some((start + line_text.len()) as u32)
 }
 
 fn str_at(params: &Json, path: &str) -> Option<String> {
