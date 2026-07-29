@@ -48,6 +48,7 @@
 | [50-development.md](50-development.md) | 開発環境（Nix / コンテナ）と規約 |
 | [51-testing.md](51-testing.md) | テストスイートの設計。層ごとの責務と、テストを足すときの判断 |
 | [60-cli.md](60-cli.md) | コマンド、出力の約束、ログとデバッグ |
+| [61-acquisition.md](61-acquisition.md) | dowel 自体の取得と版の切り替え（`dowelup`） |
 | [90-roadmap.md](90-roadmap.md) | 実装順序と検証計画 |
 | [91-implementation-status.md](91-implementation-status.md) | 実装状況、計測、設計文書との差異 |
 | [99-open-questions.md](99-open-questions.md) | 未決事項 |

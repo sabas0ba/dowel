@@ -99,6 +99,7 @@ run unit-model gating -- cargo test -p dowel-model --lib
 run unit-build gating -- cargo test -p dowel-build --lib
 run unit-lsp gating -- cargo test -p dowel-lsp --lib
 run unit-cli gating -- cargo test -p dowel-cli --bins
+run unit-up gating -- cargo test -p dowel-up --bins
 
 # --- 統合テスト ---------------------------------------------------------
 # 壊れた入力に対してパニックせず、CST がロスレスであること。
@@ -117,6 +118,8 @@ run fixture gating -- cargo test -p dowel-cli --test fixture
 # 診断が利用者まで届くこと、および網羅の追跡。
 run diagnostics gating -- cargo test -p dowel-cli --test diagnostics
 run example gating -- cargo test -p dowel-cli --test example
+# dowel 自体の取得。上流のフィクスチャに対して解決・取得・切り替えが働くこと。
+run up gating -- cargo test -p dowel-up --test dowelup
 # 文書のリンクと索引。検査しない限り不整合は検出されない。
 run docs gating -- cargo test -p dowel-cli --test docs
 

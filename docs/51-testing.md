@@ -18,6 +18,7 @@
 | フィクスチャ | 実プロジェクトの形状でのビルドと実行 | `tests/projects/` | `fixture` |
 | 診断と網羅 | 診断が利用者に到達するか。機能に対する検査の有無 | `crates/dowel-cli/tests/diagnostics.rs` | `diagnostics` |
 | 例 | 文書に記載した例の動作 | `crates/dowel-cli/tests/example.rs` | `example` |
+| 取得 | `dowelup` が版を解決・取得・切り替えできるか | `crates/dowel-up/tests/dowelup.rs` | `up` |
 | 文書 | リンクが解決するか。索引が完全か | `crates/dowel-cli/tests/docs.rs` | `docs` |
 | 計測 | 予算の遵守 | `scripts/measure-startup.py` | `startup` |
 

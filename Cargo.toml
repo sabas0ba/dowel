@@ -10,6 +10,7 @@ members = [
     "crates/dowel-build",
     "crates/dowel-lsp",
     "crates/dowel-cli",
+    "crates/dowel-up",
 ]
 
 [workspace.package]
