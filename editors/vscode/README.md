@@ -30,7 +30,8 @@
 使わず、`src/protocol.ts`（枠付け）と `src/connection.ts`（要求と応答の
 対応付け）を自前で持つ。サーバの能力が全文同期・診断・ホバーに絞られている
 （`crates/dowel-lsp`）ため、この範囲では自前の方が小さく、npm の供給網に
-晒される面も狭い。開発時依存は `typescript` と型定義の3つだけである。
+晒される面も狭い。開発時依存は `typescript`、型定義2つ、E2E 用の
+`@vscode/test-electron`（公式ハーネス）に留める。
 
 | ファイル | 責務 |
 |---|---|
@@ -55,6 +56,15 @@ cd editors/vscode
 
 ```sh
 cargo build -p dowel-cli --target x86_64-unknown-linux-musl
+```
+
+実物の VS Code での E2E（`test/e2e/`）は `@vscode/test-electron` が
+VS Code 本体を `.vscode-test/` に取得して回す。診断が UI に届き、直せば
+消え、ホバーが出るところまでを拡張ホストの API で確かめる。Electron は
+表示先と新しめの libc を要するため、この検査だけはコンテナの外で回す。
+
+```sh
+xvfb-run -a npm run test:e2e    # 画面のない環境。あるならそのまま npm run test:e2e
 ```
 
 手元で試すには、このディレクトリを VS Code で開いて F5（Extension

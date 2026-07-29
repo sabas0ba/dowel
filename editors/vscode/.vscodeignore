@@ -7,3 +7,4 @@ tsconfig.json
 dev.sh
 .work/**
 node_modules/**
+.vscode-test/**

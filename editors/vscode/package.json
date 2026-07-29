@@ -67,11 +67,13 @@
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "npm run build && node --test out/test/*.test.js"
+    "test": "npm run build && node --test out/test/*.test.js",
+    "test:e2e": "npm run build && node out/test/e2e/main.js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "~1.90.0",
+    "@vscode/test-electron": "^3.1.0",
     "typescript": "^5.9.0"
   }
 }
