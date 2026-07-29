@@ -183,6 +183,50 @@ fn the_document_map_lists_every_document() {
 }
 
 #[test]
+fn the_crate_table_matches_the_workspace() {
+    // クレートを足して表に書かないと、読み手はその層が無いものとして読む。
+    // 実装状況の文書は「何が在るか」の索引でもある。
+    let status = repo_root().join("docs/91-implementation-status.md");
+    let text =
+        std::fs::read_to_string(&status).expect("docs/91-implementation-status.md is missing");
+
+    let mut found: Vec<String> = std::fs::read_dir(repo_root().join("crates"))
+        .expect("cannot read crates/")
+        .flatten()
+        .filter(|e| e.path().join("Cargo.toml").exists())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    found.sort();
+    assert!(
+        found.len() >= 8,
+        "only {} crates were found; the scan is probably broken",
+        found.len()
+    );
+
+    // 本文のどこかに名前が出ているだけでは足りない。表の行として在ることを見る。
+    let listed: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("| `dowel-"))
+        .map(|l| l.trim_start_matches("| `").split('`').next().unwrap_or(""))
+        .collect();
+
+    let missing: Vec<&String> = found.iter().filter(|c| !listed.contains(&c.as_str())).collect();
+    assert!(
+        missing.is_empty(),
+        "these crates are not in the table of docs/91-implementation-status.md:\n  {}",
+        missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
+    );
+
+    // 逆方向。表にあるが実体の無いクレートを検出する。
+    for name in listed {
+        assert!(
+            found.iter().any(|c| c == name),
+            "the table names `{name}`, which is not a crate in the workspace"
+        );
+    }
+}
+
+#[test]
 fn the_adr_index_matches_the_records() {
     // ADR は索引経由で参照される。索引に無い決定は事実上参照できない。
     let adr = repo_root().join("docs/adr");

@@ -28,7 +28,7 @@
 - 永続化ストア（mmap インデックス + 追記ログ、`flock`、原子的差し替え）
 - 型システムと併合意味論
 - 来歴の追跡と `dowel why`
-- `dowel check`（評価と診断のみ、ビルドしない）
+- `dowel check`（計画まで走らせ、実行しない。範囲は [ADR-0010](adr/0010-check-scope.md)）
 
 **出荷物**: `dowel check` と `dowel why`。既存プロジェクトに並置して検証できる。
 

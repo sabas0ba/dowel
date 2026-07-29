@@ -17,19 +17,24 @@ C/C++ を主対象とするビルドシステム。CMake / Bazel / Meson に対�
 そのうえで各層の実装を進める。
 
 現時点で `dowel check` / `dowel build` / `dowel test` / `dowel why` /
-`dowel graph` / `dowel schema dump` が動く。複数パッケージの C を実際に
-コンパイルし、静的ライブラリを作り、リンクして実行できる。
-マニフェスト評価は増分クエリエンジンを通っており、クロス実行のための
-ランナー（`[runner.<triple>]`）も宣言できる。
+`dowel graph` / `dowel schema dump` / `dowel cache` / `dowel lsp` が動く。
+複数パッケージの C を実際にコンパイルし、静的ライブラリを作り、リンクして
+実行できる。クロス実行のためのランナー（`[runner.<triple>]`）も宣言できる。
+
+マニフェスト評価は増分クエリエンジンを通っている。ターゲット単位の派生は
+スパンを含まない要約に指紋を付けており、コメントだけの編集は併合まで届かない
+（[docs/adr/0011-cutoff-and-provenance.md](docs/adr/0011-cutoff-and-provenance.md)）。
+言語サーバは診断とホバーを返す。
 
 ```sh
 cargo build --release
 
-dowel check            # 評価と診断のみ。ビルドしない
+dowel check            # 計画まで走らせ、診断のみ出す。実行はしない
 dowel build            # ninja を生成して実行する
 dowel test             # test ターゲットをビルドして走らせる
 dowel why app:app includes
 dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
+dowel lsp              # 言語サーバ。エディタが起動する
 
 DOWEL_LOG=trace dowel build   # 依存グラフと各アクションのコマンドをログに出す
 ```
