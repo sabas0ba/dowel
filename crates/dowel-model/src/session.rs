@@ -3,26 +3,25 @@
 //! `Session` は「1回の CLI 実行が触れた全て」を保持する。読み込みの経路は
 //! 増分クエリエンジン（[`crate::query`]）を通しており、
 //! [`Session::reload`] は中身の変わらなかったファイルを解析し直さない。
-//! 永続化ストア（docs/20-architecture.md 5節）を差し込む先も同じ場所であり、
-//! `Db` のメモ表がその差し替え対象になる。
+//! プロセスを跨いだ再利用は永続化ストア（[`crate::persist`]）が担う。
+//! 前回と本文が同じマニフェストは、解析も評価もせずに復元する。
 
 use crate::package::{self, DepKind, Package};
+use crate::persist::Cache;
 use crate::query::{self, Key};
 use crate::runner::Runner;
 use crate::target::{label, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Document, Ns, Site, Value};
 use dowel_query::{Db, Stats};
-use dowel_store::{Inputs, Store};
+use dowel_store::Inputs;
 use dowel_support::diag::closest;
 use dowel_support::{log, Diagnostic, FileId, SourceMap, Span};
 use dowel_support::{log_debug, log_trace};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
-
-/// 入力の記録を置くファイル名。ストアのディレクトリ内に置く。
-const INPUTS: &str = "inputs";
 
 pub const MANIFEST_NAME: &str = "dowel.toml";
 pub const BUILD_NAME: &str = "dowel.build";
@@ -62,6 +61,8 @@ pub struct Session {
     inputs: Inputs,
     /// 前回の実行が残した入力の記録
     previous: Inputs,
+    /// プロセスを跨いだ評価結果の再利用（ADR-0012）
+    cache: Rc<Cache>,
     /// 任意の依存を読むかどうかの判定に使う選択
     features: Features,
     /// 根の `[features]` から解決した集合。根を読むまでは空
@@ -92,7 +93,8 @@ impl Session {
             root: canonical(root),
             db: Db::new(),
             inputs: Inputs::new(),
-            previous: read_inputs(&canonical(root)),
+            previous: crate::persist::read_inputs(&canonical(root)),
+            cache: Rc::new(Cache::open(&canonical(root))),
             features,
             active: std::collections::BTreeSet::new(),
         };
@@ -151,21 +153,12 @@ impl Session {
             .expect("the session never cancels its own queries")
     }
 
-    /// 今回読み込んだ入力の記録をストアへ書く。
+    /// 今回の実行が読んだ入力と、計算した評価結果をストアへ書く。
     ///
-    /// 書けなくても誤りではない。次回の実行が変更検出をやり直すだけであり、
+    /// 書けなくても誤りではない。次回の実行が計算し直すだけであり、
     /// 結果は変わらない。書き手を取得できない場合も同様である。
-    pub fn save_inputs(&self) {
-        let store = Store::open(&self.root);
-        let Ok(Some(_writer)) = store.writer() else {
-            log_debug!("inputs: not writing (no write lock)");
-            return;
-        };
-        let dir = Store::dir(&self.root);
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let _ = std::fs::write(dir.join(INPUTS), self.inputs.encode());
-            log_debug!("inputs: recorded {} files", self.inputs.len());
-        }
+    pub fn save(&self) -> crate::persist::Saved {
+        self.cache.save(&self.inputs)
     }
 
     /// 前回の実行から見た入力の変化。プロセスを跨いだ観測に使う。
@@ -329,7 +322,7 @@ impl Session {
         // `Session` は打ち切りを公開していないため、この `Db` が
         // 打ち切られることはない。言語サーバを載せる際は、
         // ここが `Result` の伝播点になる。
-        let out = query::evaluated(&self.db, file, strict)
+        let out = query::evaluated(&self.db, file, strict, Some(self.cache.clone()))
             .expect("the session never cancels its own queries");
         self.diagnostics.extend(out.diagnostics.iter().cloned());
         out
@@ -843,19 +836,6 @@ fn path_hint(expected: &dowel_eval::Type, actual: &dowel_eval::Type) -> String {
             .into()
     } else {
         format!("expected type {}", expected.display())
-    }
-}
-
-/// 前回の実行が残した入力の記録。無ければ空。
-fn read_inputs(root: &Path) -> Inputs {
-    let path = Store::dir(root).join(INPUTS);
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let inputs = Inputs::decode(&text);
-            log_debug!("inputs: {} records from the previous run", inputs.len());
-            inputs
-        }
-        Err(_) => Inputs::new(),
     }
 }
 

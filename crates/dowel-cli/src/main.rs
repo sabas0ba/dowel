@@ -89,9 +89,9 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             default: opts.default_features,
         },
     );
-    // 入力の記録は読み込み直後に書く。以降の段階が失敗しても、
-    // 何を読んだかは次回の実行にとって有効な情報である。
-    sess.save_inputs();
+    // ストアへの書き込みは読み込み直後に行う。以降の段階が失敗しても、
+    // 何を読み、どう評価したかは次回の実行にとって有効な情報である。
+    sess.save();
     for (path, change) in sess.input_changes() {
         log_trace!("input {}: {change:?}", path.display());
     }
