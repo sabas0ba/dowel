@@ -174,6 +174,11 @@ store: wrote 1 values, restored 3, skipped 0 with diagnostics
 
 - 全文同期。`didOpen` / `didChange` / `didSave` / `didClose` に応じて
   `publishDiagnostics` を返す
+- 診断は構文解析・評価に加え、開いている1ファイルで決まる型検査
+  （`unknown-property` / `type-mismatch` / `unknown-kind` 等）を CLI と
+  同じ実装で出す。事例表の各コードが「エディタに届く」か
+  「`dowel_lsp::UNSUPPORTED` に理由がある」かのどちらかであることは
+  検査が強制する
 - `textDocument/hover`。プロパティの型と併合規則、表の見出しの各段、
   組み込み関数の署名、構成キーの値域。出所は `dowel schema dump` と同じ表
 - 診断の範囲は 0 始まりの行と UTF-16 単位の桁。注記と修正提案の説明は
