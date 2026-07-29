@@ -783,6 +783,16 @@ mod tests {
     }
 
     #[test]
+    fn a_leading_bom_is_accepted() {
+        // 画面に見えない違いで拒むと、続く診断が「正しく見える行」を指す
+        // （issue #34）。CRLF と同様、先頭の BOM は受け付ける。
+        let src = "\u{feff}[lib.foo]\nsources = glob(\"src/*.c\")\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_lossless(src);
+    }
+
+    #[test]
     fn nesting_below_the_limit_is_untouched() {
         let deep = format!("a = {}1{}\n", "[".repeat(MAX_NESTING), "]".repeat(MAX_NESTING));
         let parsed = p(&deep);

@@ -107,6 +107,15 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn run(mut self) -> Lexed {
+        // 先頭の UTF-8 BOM は些末部として読み飛ばす。Windows のメモ帳や
+        // PowerShell のリダイレクトが黙って付けるものであり、利用者が書いた
+        // 覚えのない違いである。トークンとして残すのはロスレス性のため。
+        // 先頭にしか意味を持たないので、途中の同じバイト列は今までどおり
+        // 未知の文字として扱う。
+        if self.src.starts_with(&[0xEF, 0xBB, 0xBF]) {
+            self.pos = 3;
+            self.push(TokenKind::Whitespace, 0);
+        }
         while self.pos < self.src.len() {
             self.token();
         }
@@ -489,5 +498,32 @@ mod tests {
         assert_lossless(src);
         let newlines = lex(src).tokens.iter().filter(|t| t.kind == TokenKind::Newline).count();
         assert_eq!(newlines, 2);
+    }
+
+    #[test]
+    fn a_leading_bom_is_trivia() {
+        // Windows のメモ帳や PowerShell のリダイレクトが黙って付ける。
+        // 拒むと、利用者の画面には何も間違いが見えない（issue #34）。
+        let src = "\u{feff}a = 1\n";
+        let lexed = lex(src);
+        assert!(lexed.errors.is_empty(), "{:?}", lexed.errors);
+        assert_eq!(lexed.tokens[0].kind, TokenKind::Whitespace);
+        assert_eq!(&src[lexed.tokens[0].span.range()], "\u{feff}");
+        assert_lossless(src);
+        assert_eq!(
+            kinds(src),
+            vec![TokenKind::Ident, TokenKind::Eq, TokenKind::Int, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn a_bom_elsewhere_is_still_unknown() {
+        // BOM は先頭にしか意味を持たない。途中のものを黙って飲むと、
+        // 見えない文字が本文に紛れたことを利用者へ伝えられない。
+        let src = "a = 1\n\u{feff}b = 2\n";
+        let lexed = lex(src);
+        assert_eq!(lexed.errors.len(), 1);
+        assert_eq!(lexed.errors[0].kind, LexErrorKind::UnknownChar);
+        assert_lossless(src);
     }
 }
