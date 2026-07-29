@@ -1,0 +1,32 @@
+# GitHub Pages の設定。main ブランチを `/ (root)` で公開するとそのまま文書サイトになる
+# （Settings → Pages → Deploy from a branch → main / root）。
+# ここに列挙したプラグインは GitHub Pages が既定で有効にするものであり、
+# ローカルプレビュー（jekyll serve）でも同じ挙動を得るために明示している。
+title: dowel
+description: C を対象とするビルドシステム（開発中・名称暫定）
+lang: ja
+theme: jekyll-theme-primer
+
+markdown: kramdown
+kramdown:
+  input: GFM
+
+plugins:
+  - jekyll-optional-front-matter # 前付けなしの .md をそのままページにする
+  - jekyll-relative-links        # .md への相対リンクを .html へ解決する
+  - jekyll-readme-index          # 各ディレクトリの README.md を index にする
+  - jekyll-default-layout        # レイアウト未指定のページにテーマ既定を当てる
+  - jekyll-titles-from-headings  # 先頭見出しをページタイトルにする
+
+relative_links:
+  enabled: true
+  collections: true
+
+readme_index:
+  enabled: true
+
+# サイトに含めないもの。文書からリンクされるソース（crates/ 等）は含める。
+exclude:
+  - target
+  - .work
+  - vendor

@@ -3,7 +3,8 @@
 [90-roadmap.md](90-roadmap.md) はフェーズ単位の計画である。本文書は
 実装済みの機能を記録する。両者が食い違う場合、本文書を現況とみなす。
 
-コマンドの使い方は [60-cli.md](60-cli.md) にある。
+コマンドの仕様は [60-cli.md](60-cli.md)、タスク別の使い方は
+[62-guides.md](62-guides.md) にある。
 
 ## 方針: 最小構成を端から端まで先に通す
 
@@ -319,7 +320,7 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | 対象機に残した成果物の掃除、転送の省略判定 | Phase 4。転送は毎回行う |
 | 依存の取得（レジストリ / git / tarball）、`dowel.lock` | Phase 5。現状は `path` 依存のみ |
 | ABI ラベルの自動算出 | Phase 6。現状は手書きの `abi` に対する `must_equal` 検証のみ |
-| C++（`tc.cxx`、拡張子によるコンパイラ選択、C++ を含むターゲットのリンカ選択） | 未定。`README.md` は「C/C++ を主対象とする」と述べているが、現状は C のみ。C++ のソースは `unsupported-language` で拒む |
+| C++（`tc.cxx`、拡張子によるコンパイラ選択、C++ を含むターゲットのリンカ選択） | 未定。現状は C のみであり、C++ のソースは `unsupported-language` で拒む。利用者向け文書は「C を対象（C++ は計画段階）」と記述している |
 
 ## 設計文書との差異
 
@@ -328,7 +329,6 @@ make verify      # 全段階を実行し、結果を .work/verify/ に残す
 | 箇所 | 文書 | 実装 | 理由 |
 |---|---|---|---|
 | [ADR-0003](adr/0003-manifest-split.md) の帰結 | 「パーサが2系統になる」 | パーサは1系統。`dowel.toml` の厳密性は検証で課す | ADR の根拠（第三者ツールが独自パーサなしで読める）は検証で同じく満たされる。木が1つの方が来歴と診断の経路が単純 |
-| [10-manifest.md](10-manifest.md) 3節 | `includes` は「トポロジカル順」 | 自分が先、依存が後 | インクルード探索でもリンク順でも依存元が先に来るのが期待される挙動。トポロジカル順の向きを実装で確定させた |
 | 型 | `defines : Map<Ident, Val>` | `Val` を型として実装 | 文書の記法をそのまま型にした |
 | `abi` | ABI ラベルは算出される | 現状は文字列で手書き | 算出は Phase 6。`must_equal` の経路だけ先に通してある |
 | [30-devexp.md](30-devexp.md) 1節 | `args = ["-L", sysroot()]` | `args : List<Str>`。`sysroot()` は書けない | `sysroot` 基点のパスは Phase 4（`unimplemented-path-base`）。先に文字列で書けるようにし、基点が入った段で `List<Val>` へ広げる |

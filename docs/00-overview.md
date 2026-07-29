@@ -1,5 +1,9 @@
 # 概要
 
+> 本書はプロジェクトの動機と位置づけを述べる設計文書である。使い方は
+> [61-getting-started.md](61-getting-started.md)、機能の仕様は
+> [10-manifest.md](10-manifest.md) と [60-cli.md](60-cli.md) を参照。
+
 ## 1. 動機
 
 Cargo の使用感が成立しているのは、単一コンパイラ・単一言語・単一レジストリ・単一 ABI という

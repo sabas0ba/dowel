@@ -1,5 +1,8 @@
 # 既存ビルドシステムからの移行
 
+> 本書は移行機能の設計文書である。`dowel migrate verify` / `import` は
+> 未実装（[91-implementation-status.md](91-implementation-status.md)）。
+
 決定は [ADR-0005](adr/0005-migration.md)。要旨は「静的翻訳は行わない、動的抽出を行う」。
 
 ## 1. 静的翻訳が成立しない理由

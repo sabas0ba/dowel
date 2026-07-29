@@ -1,20 +1,54 @@
-# 文書一覧
+# dowel ドキュメント
 
-## 目的別の参照先
+利用者向けの文書（使い方と仕様）と、プロジェクト内部の文書（設計・開発・計画）の索引。
 
-| 目的 | 文書 |
+## 使い方（How-to）
+
+| 文書 | 内容 |
 |---|---|
-| 目標と非目標 | [00-overview.md](00-overview.md) |
-| 実装済みの機能 | [91-implementation-status.md](91-implementation-status.md) |
-| コマンドの仕様 | [60-cli.md](60-cli.md) |
-| マニフェストの記述方法 | [10-manifest.md](10-manifest.md) |
-| 内部構造（増分エンジン、ストア） | [20-architecture.md](20-architecture.md) |
-| エディタ・ランナー・デバッガ | [30-devexp.md](30-devexp.md) |
-| 既存プロジェクトからの移行 | [40-migration.md](40-migration.md) |
-| 開発への参加 | [50-development.md](50-development.md) → [51-testing.md](51-testing.md) |
-| 今後の計画 | [90-roadmap.md](90-roadmap.md) |
-| ある決定の根拠 | [adr/](adr/README.md) |
-| 決まっていないこと | [99-open-questions.md](99-open-questions.md) |
+| [61-getting-started.md](61-getting-started.md) | 導入から、最初のプロジェクトのビルド・テスト・実行まで |
+| [62-guides.md](62-guides.md) | タスク別の使い方。ビルド、テスト、構成と機能フラグ、来歴の調査、クロス実行、エディタ、キャッシュ、CI 連携 |
+
+動く現物は [`examples/hello`](../examples/hello) にある。
+
+## 仕様（リファレンス）
+
+| 文書 | 内容 |
+|---|---|
+| [10-manifest.md](10-manifest.md) | マニフェスト仕様。`dowel.toml` / `dowel.build` に書ける全て、型と併合意味論 |
+| [60-cli.md](60-cli.md) | コマンド仕様。全オプション、出力の約束、終了状態、診断の機械可読形式 |
+| [91-implementation-status.md](91-implementation-status.md) | いま何が動くか。未実装の一覧、計測、設計文書との差異 |
+
+仕様には設計上の全体像を含むため、一部に未実装の要素がある。未実装のものは
+仕様側に注記し、91 に一覧を置く。両者が食い違う場合は 91 を現況とみなす。
+
+## 設計（背景と内部構造）
+
+| 文書 | 内容 |
+|---|---|
+| [00-overview.md](00-overview.md) | 目標・非目標、既存システムに対する位置づけ |
+| [20-architecture.md](20-architecture.md) | 増分クエリエンジン、永続化ストア、言語サーバの内部構造 |
+| [30-devexp.md](30-devexp.md) | ランナー抽象、デバッガ連携、エディタ連携の設計 |
+| [40-migration.md](40-migration.md) | 既存ビルドシステムからの移行の設計（移行コマンドは未実装） |
+| [adr/](adr/README.md) | 決定事項とその根拠（ADR） |
+| [90-roadmap.md](90-roadmap.md) | 実装順序と検証計画 |
+| [99-open-questions.md](99-open-questions.md) | 未決事項 |
+
+## このリポジトリを開発する
+
+| 文書 | 内容 |
+|---|---|
+| [50-development.md](50-development.md) | 開発環境（Nix / コンテナ）と規約 |
+| [51-testing.md](51-testing.md) | テストスイートの設計。層ごとの責務と、テストを足すときの判断 |
+
+## GitHub Pages での公開
+
+本リポジトリは main ブランチをそのまま GitHub Pages で公開できる
+（Settings → Pages → Deploy from a branch → `main` / `/ (root)`）。
+設定は [`_config.yml`](../_config.yml) にある。公開時は Markdown 間の相対リンクが
+HTML へ解決され、各ディレクトリの README がそのディレクトリの索引ページになる。
+文書は追加の変換なしにリポジトリ上でもサイト上でも同じ経路で読めるよう、
+相対リンクのみで書く。
 
 ## 番号の規約
 
@@ -28,7 +62,7 @@
 | `3x` | 開発体験（ランナー、デバッガ、エディタ） |
 | `4x` | 既存ビルドシステムからの移行 |
 | `5x` | 本リポジトリの開発 |
-| `6x` | 利用者向けのリファレンス |
+| `6x` | 利用者向けの文書（リファレンスと howto） |
 | `9x` | 計画と現況 |
 | `99` | 未決事項 |
 
@@ -47,7 +81,9 @@
 | [40-migration.md](40-migration.md) | 既存ビルドシステムからの移行 |
 | [50-development.md](50-development.md) | 開発環境（Nix / コンテナ）と規約 |
 | [51-testing.md](51-testing.md) | テストスイートの設計。層ごとの責務と、テストを足すときの判断 |
-| [60-cli.md](60-cli.md) | コマンド、出力の約束、ログとデバッグ |
+| [60-cli.md](60-cli.md) | コマンド仕様、出力の約束、ログとデバッグ |
+| [61-getting-started.md](61-getting-started.md) | 導入から最初のビルドまでの howto |
+| [62-guides.md](62-guides.md) | タスク別の使い方ガイド |
 | [90-roadmap.md](90-roadmap.md) | 実装順序と検証計画 |
 | [91-implementation-status.md](91-implementation-status.md) | 実装状況、計測、設計文書との差異 |
 | [99-open-questions.md](99-open-questions.md) | 未決事項 |
@@ -63,6 +99,8 @@
   [91-implementation-status.md](91-implementation-status.md) は現況を記述する。
   両者が食い違う場合は後者を現況とみなす
 - 実装が仕様と異なる場合は、91 の「設計文書との差異」節に記録する
+- 利用者向けの文書（10 / 60 / 61 / 62）に書くのは動くものを基本とし、
+  未実装の要素を載せる場合はその旨を明記する
 
 ## 検査されるもの
 
