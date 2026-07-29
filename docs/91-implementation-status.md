@@ -174,6 +174,12 @@ changes, only the speed.
 - `glob` expansion (`*` / `**` / `?`), sorted lexicographically to be
   independent of traversal order
 - The action graph (compile / archive / link)
+- C and C++. The compiler is chosen per source by extension (C++:
+  `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; `tc.cxx` defaults to `c++`,
+  overridable with `[toolchain] cxx`). A link whose closure contains any C++
+  translation unit uses the C++ driver, so the C++ runtime is linked even
+  when the binary itself is pure C. The C++ toolchain is only required — and
+  only probed — when C++ sources are present
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
   freshness reading depfiles)
@@ -313,21 +319,21 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (363 tests):
+Current breakdown (379 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 242 |
+| `unit-*` | per-crate unit tests | 251 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C, run it, check the output | 42 |
-| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 23 |
+| `e2e` | compile real C and C++, run it, check the output | 45 |
+| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 10 |
+| `diagnostics` | diagnostics reaching the CLI (45 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
-| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 2 |
+| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |
 | `startup` | startup-time measurement (informational; machine noise does not fail the run) | — |
 
@@ -400,7 +406,7 @@ cannot be measured with the current fixtures; the scale fixture
 | dependency fetching (registry / git / tarball), `dowel.lock` | Phase 5; today only `path` dependencies |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi` |
-| C++ (`tc.cxx`, compiler selection by extension, linker selection for targets containing C++) | undecided. Today C only; C++ sources are rejected with `unsupported-language`. The user-facing documents say "for C (C++ planned)" |
+| per-language flags (`cxx_flags`, C++ standard selection) | undecided; today `flags` applies to both C and C++ translation units |
 
 ## Divergences from the design documents
 

@@ -70,19 +70,23 @@ pub fn plan(
 
     // ツールチェーンが混ざると ABI の前提が崩れる。1回のビルドで1つに限る。
     for p in &sess.packages {
-        if let Some(tc) = &p.toolchain_c {
-            if *tc != cfg.tc_c {
-                diags.push(
-                    Diagnostic::warning(
-                        "toolchain-mismatch",
-                        format!(
-                            "package `{}` asks for C toolchain `{tc}` but the build uses `{}`",
-                            p.name, cfg.tc_c
-                        ),
-                    )
-                    .note("fetching and switching toolchains is Phase 5 (docs/90-roadmap.md)")
-                    .note("ABI label checking assumes a single pinned toolchain"),
-                );
+        let mismatches: [(&Option<String>, &str, &str); 2] =
+            [(&p.toolchain_c, "C", &cfg.tc_c), (&p.toolchain_cxx, "C++", &cfg.tc_cxx)];
+        for (declared, lang, used) in mismatches {
+            if let Some(tc) = declared {
+                if tc != used {
+                    diags.push(
+                        Diagnostic::warning(
+                            "toolchain-mismatch",
+                            format!(
+                                "package `{}` asks for {lang} toolchain `{tc}` but the build uses `{used}`",
+                                p.name
+                            ),
+                        )
+                        .note("fetching and switching toolchains is Phase 5 (docs/90-roadmap.md)")
+                        .note("ABI label checking assumes a single pinned toolchain"),
+                    );
+                }
             }
         }
     }
@@ -119,6 +123,11 @@ pub fn plan(
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
+    // ターゲット → 自身のソースに C++ を含むか。リンカの選択が読む
+    let mut has_cxx: BTreeMap<TargetId, bool> = BTreeMap::new();
+    // C++ コンパイラの実在検査は C++ ソースが現れたときに1度だけ行う。
+    // C だけのビルドに C++ ツールチェーンを要求しないため
+    let mut cxx_toolchain_checked = false;
 
     // `graph.order` は依存が先。成果物ができてからリンクする順になる。
     for &tid in &graph.order {
@@ -130,6 +139,25 @@ pub fn plan(
         let env = interface::compile_env(sess, tid, &mut diags);
 
         let sources = collect_sources(sess, tid, cfg, &mut diags);
+        has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
+        if has_cxx[&tid] && !cxx_toolchain_checked {
+            cxx_toolchain_checked = true;
+            if !crate::exec::program_exists(&cfg.tc_cxx) {
+                let mut d = Diagnostic::error(
+                    "missing-toolchain",
+                    format!("cannot find the C++ compiler `{}`", cfg.tc_cxx),
+                );
+                match sess.root_package().and_then(|p| p.toolchain_cxx_site) {
+                    Some(s) => d = d.at(s.file, s.span, "declared here"),
+                    None => {
+                        d = d.note("no `[toolchain] cxx` is declared, so the default `c++` is used")
+                    }
+                }
+                diags.push(d.note(
+                    "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
+                ));
+            }
+        }
         if sources.is_empty() && target.kind != TableKind::Lib {
             diags.push(
                 Diagnostic::error("no-sources", format!("`{}` has no sources", sess.label(tid)))
@@ -173,6 +201,11 @@ pub fn plan(
         let mut objects = Vec::new();
         let mut compile_ids = Vec::new();
         for src in &sources {
+            // 言語は拡張子で決まる。`cc` は driver であり `.cpp` のコンパイル
+            // 自体は通すが、C++ として組むには標準ライブラリと ABI の前提が
+            // 揃った driver（`tc.cxx`）を使う必要がある
+            let (compiler, tool) =
+                if is_cxx(src) { (&cfg.tc_cxx, "CXX") } else { (&cfg.tc_c, "CC") };
             let obj = object_path(&build_dir, &pkg.name, &target.name, &pkg.root, src);
             let depfile = obj.with_extension("o.d");
             let mut args: Vec<String> = Vec::new();
@@ -197,15 +230,15 @@ pub fn plan(
                 id,
                 kind: ActionKind::Compile,
                 target: tid,
-                program: cfg.tc_c.clone(),
+                program: compiler.clone(),
                 args: args.clone(),
                 inputs: vec![src.clone()],
                 outputs: vec![obj.clone()],
                 depfile: Some(depfile),
-                description: format!("CC {}", rel_display(&build_dir, &obj)),
+                description: format!("{tool} {}", rel_display(&build_dir, &obj)),
                 deps: Vec::new(),
             });
-            let mut arguments = vec![cfg.tc_c.clone()];
+            let mut arguments = vec![compiler.clone()];
             arguments.extend(args);
             plan.compile_commands.push(CompileCommand {
                 directory: build_dir.clone(),
@@ -243,6 +276,14 @@ pub fn plan(
             }
             TableKind::Bin | TableKind::Test => {
                 let out = build_dir.join("bin").join(&target.name);
+                // リンク閉包のどこかに C++ の翻訳単位があれば、リンクは C++ の
+                // driver で行う。C の driver では C++ 標準ライブラリが付かず、
+                // 未定義参照は原因（依存先のソース）から離れた場所で報告される
+                let link_needs_cxx = graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .any(|t| has_cxx.get(&t).copied().unwrap_or(false));
+                let linker = if link_needs_cxx { &cfg.tc_cxx } else { &cfg.tc_c };
                 // リンク順は依存元が先。静的ライブラリの解決順の要請による。
                 let libs: Vec<PathBuf> = graph
                     .link_closure(tid)
@@ -273,7 +314,7 @@ pub fn plan(
                     id,
                     kind: ActionKind::Link,
                     target: tid,
-                    program: cfg.tc_c.clone(),
+                    program: linker.clone(),
                     args,
                     inputs,
                     outputs: vec![out.clone()],
@@ -321,40 +362,13 @@ fn default_compile_flags(cfg: &Config) -> Vec<String> {
 
 /// C++ として扱われる拡張子。
 ///
-/// `cc` は driver であり拡張子で言語を判別する。`.cpp` を渡すとコンパイルは
-/// 通るが、リンクも `cc` のまま行われるため C++ 標準ライブラリが付かない。
+/// `cc` も `c++` も driver であり拡張子で言語を判別するが、選択の結果は
+/// コンパイルだけでなくリンク（標準ライブラリの同伴）にも効くため、
+/// こちらでも判別して driver とリンカを選ぶ。
 const CXX_EXTENSIONS: &[&str] = &["cc", "cp", "cpp", "cxx", "c++", "CPP", "C"];
 
 fn is_cxx(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| CXX_EXTENSIONS.contains(&e))
-}
-
-/// C++ のソースを取り除き、1つの `sources` 要素につき1件だけ報告する。
-///
-/// 素通しにすると、利用者が手にするのはリンカの未定義参照だけになる。
-/// マニフェストのどこを直せばよいかを示すものが無い。
-fn drop_cxx(
-    paths: Vec<PathBuf>,
-    site: Option<dowel_eval::Site>,
-    diags: &mut Vec<Diagnostic>,
-) -> Vec<PathBuf> {
-    let (cxx, c): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| is_cxx(p));
-    if let Some(first) = cxx.first() {
-        let more =
-            if cxx.len() > 1 { format!(" and {} more", cxx.len() - 1) } else { String::new() };
-        let mut d = Diagnostic::error(
-            "unsupported-language",
-            format!("`{}`{more} is a C++ source", first.display()),
-        );
-        if let Some(s) = site {
-            d = d.at(s.file, s.span, "C++ cannot be built yet");
-        }
-        diags.push(
-            d.note("the C driver would compile it but link without the C++ runtime")
-                .note("C++ support is not implemented (docs/91-implementation-status.md)"),
-        );
-    }
-    c
 }
 
 fn collect_sources(
@@ -383,7 +397,6 @@ fn collect_sources(
                     }
                     diags.push(d.note(format!("scanned {}", pkg_root.display())));
                 }
-                let hits = drop_cxx(hits, item.prov.nearest_site(), diags);
                 out.extend(hits.into_iter().map(|rel| pkg_root.join(rel)));
             }
             Data::Path(p) if p.base == PathBase::Package => {
@@ -407,7 +420,7 @@ fn collect_sources(
                             p.rel
                         )));
                     }
-                    Ok(_) => out.extend(drop_cxx(vec![path], site, diags)),
+                    Ok(_) => out.push(path),
                     Err(e) => {
                         let mut d = Diagnostic::error(
                             "unresolved-path",

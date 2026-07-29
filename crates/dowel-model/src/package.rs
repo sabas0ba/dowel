@@ -28,6 +28,10 @@ pub struct Package {
     pub toolchain_c: Option<String>,
     /// その宣言が書かれた位置。実在しないツールチェーンを指す診断が参照する
     pub toolchain_site: Option<Site>,
+    /// `[toolchain] cxx = "..."`
+    pub toolchain_cxx: Option<String>,
+    /// その宣言が書かれた位置
+    pub toolchain_cxx_site: Option<Site>,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +80,8 @@ pub fn from_document(
         features_site: None,
         toolchain_c: None,
         toolchain_site: None,
+        toolchain_cxx: None,
+        toolchain_cxx_site: None,
     };
 
     match doc.table(&["package"]) {
@@ -114,6 +120,15 @@ pub fn from_document(
                     pkg.toolchain_site = Some(e.site);
                 }
                 None => type_err(diags, e.site, "toolchain.c", "a string"),
+            }
+        }
+        if let Some(e) = t.entry("cxx") {
+            match e.value.as_str() {
+                Some(s) => {
+                    pkg.toolchain_cxx = Some(s.to_string());
+                    pkg.toolchain_cxx_site = Some(e.site);
+                }
+                None => type_err(diags, e.site, "toolchain.cxx", "a string"),
             }
         }
     }
@@ -272,6 +287,8 @@ mod tests {
             features_site: None,
             toolchain_c: None,
             toolchain_site: None,
+            toolchain_cxx: None,
+            toolchain_cxx_site: None,
         }
     }
 

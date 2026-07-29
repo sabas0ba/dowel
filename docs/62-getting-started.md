@@ -13,6 +13,7 @@ There are no binary releases yet; build from source. You need:
 |---|---|
 | A Rust toolchain (`cargo`) | building `dowel` itself |
 | A C compiler | compiling your project; the default is `cc` on PATH |
+| A C++ compiler | only for projects with C++ sources; the default is `c++` on PATH |
 | `ninja` | the default executor; without it, the sequential executor (`--executor=direct`) works |
 
 ```sh

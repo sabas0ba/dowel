@@ -924,3 +924,134 @@ fn cache_commands_work_without_a_readable_manifest() {
     p.run(".", &["cache", "info"]).success();
     p.run(".", &["cache", "gc"]).success();
 }
+
+/// `.c` と `.cpp` が同じターゲットに混在する1パッケージ。
+///
+/// コンパイラはソースごとに拡張子で選ばれ、リンクは C++ の driver で行われる。
+/// `std::string` を経由させることで、C++ 標準ライブラリが実際にリンクされた
+/// ことを実行結果まで通して確かめる。
+#[test]
+fn a_mixed_c_and_cxx_target_builds_and_runs() {
+    let p = Project::new("cxx-mixed");
+    p.write("app/dowel.toml", "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n");
+    // `*.c*` が `.c` と `.cpp` の双方を拾う（`.h` は拾わない）。
+    p.write(
+        "app/dowel.build",
+        r#"
+[bin.app]
+sources = glob("src/*.c*")
+
+[bin.app.private]
+includes = [dir("src")]
+"#,
+    );
+    p.write("app/src/greet.h", "#pragma once\n#ifdef __cplusplus\nextern \"C\"\n#endif\nint greet_len(const char *name);\n");
+    p.write(
+        "app/src/greet.cpp",
+        r#"#include "greet.h"
+#include <string>
+extern "C" int greet_len(const char *name) {
+    std::string s("hello ");
+    s += name;
+    return (int)s.size();
+}
+"#,
+    );
+    p.write(
+        "app/src/main.c",
+        r#"#include <stdio.h>
+#include "greet.h"
+int main(void) {
+    printf("len=%d\n", greet_len("cxx"));
+    return 0;
+}
+"#,
+    );
+
+    p.run("app", &["check"]).success();
+    let r = p.run("app", &["build"]);
+    r.success();
+    // 各ソースが自分の言語の driver でコンパイルされている。
+    r.stderr_contains("CXX ");
+    r.stderr_contains("CC ");
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "len=9\n");
+}
+
+/// C の main が C++ 実装の静的ライブラリに依存する2パッケージ。
+///
+/// リンク対象自身は C だけでも、閉包に C++ の翻訳単位があればリンクは
+/// C++ の driver で行われなければならない。C の driver のままだと
+/// `std::string` の未定義参照でリンクに失敗する。
+#[test]
+fn a_c_binary_linking_a_cxx_library_links_with_the_cxx_driver() {
+    let p = Project::new("cxx-dep");
+    p.write("liblen/dowel.toml", "[package]\nname    = \"liblen\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "liblen/dowel.build",
+        r#"
+[lib.len]
+sources = glob("src/*.cpp")
+
+[lib.len.public]
+includes = [dir("include")]
+"#,
+    );
+    p.write(
+        "liblen/include/len.h",
+        "#pragma once\n#ifdef __cplusplus\nextern \"C\"\n#endif\nint len_of(const char *s);\n",
+    );
+    p.write(
+        "liblen/src/len.cpp",
+        r#"#include "len.h"
+#include <string>
+extern "C" int len_of(const char *s) {
+    return (int)std::string(s).size();
+}
+"#,
+    );
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"liblen\"\npath = \"../liblen\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"liblen\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"len.h\"\nint main(void) { printf(\"n=%d\\n\", len_of(\"abcd\")); return 0; }\n",
+    );
+
+    // 双方の実行器で同じ結果になる。
+    p.run("app", &["build", "--executor=direct"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "n=4\n");
+
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&bin), "n=4\n");
+}
+
+/// `[toolchain] cxx` の宣言が C++ のコンパイルとリンクの双方に効く。
+#[test]
+fn the_declared_cxx_toolchain_is_used_for_compile_and_link() {
+    let p = Project::new("cxx-toolchain");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain]\ncxx = \"no-such-cxx-19\"\n",
+    );
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.cpp\")\n");
+    p.write("app/src/main.cpp", "int main() { return 0; }\n");
+
+    // 実在しない C++ コンパイラは、起動前に計画段の診断で拒まれる。
+    let r = p.run("app", &["check"]);
+    r.failure();
+    assert!(r.stderr.contains("missing-toolchain"), "{r}");
+    assert!(r.stderr.contains("no-such-cxx-19"), "{r}");
+
+    // C だけのビルドは C++ ツールチェーンを要求しない。
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    std::fs::remove_file(p.path("app/src/main.cpp")).unwrap();
+    p.run("app", &["check"]).success();
+}
