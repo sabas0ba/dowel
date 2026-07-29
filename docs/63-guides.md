@@ -1,7 +1,7 @@
 # 使い方ガイド
 
 タスク別の howto。ここに書いた機能は実装済みである。導入と最初のビルドは
-[61-getting-started.md](61-getting-started.md)、オプションの完全な一覧は
+[62-getting-started.md](62-getting-started.md)、オプションの完全な一覧は
 [60-cli.md](60-cli.md)、マニフェストの記法は [10-manifest.md](10-manifest.md) にある。
 
 ## 1. ビルドする

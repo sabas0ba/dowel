@@ -6,8 +6,9 @@
 
 | 文書 | 内容 |
 |---|---|
-| [61-getting-started.md](61-getting-started.md) | 導入から、最初のプロジェクトのビルド・テスト・実行まで |
-| [62-guides.md](62-guides.md) | タスク別の使い方。ビルド、テスト、構成と機能フラグ、来歴の調査、クロス実行、エディタ、キャッシュ、CI 連携 |
+| [62-getting-started.md](62-getting-started.md) | 導入から、最初のプロジェクトのビルド・テスト・実行まで |
+| [63-guides.md](63-guides.md) | タスク別の使い方。ビルド、テスト、構成と機能フラグ、来歴の調査、クロス実行、エディタ、キャッシュ、CI 連携 |
+| [61-acquisition.md](61-acquisition.md) | dowel 自体の取得と版の切り替え（`dowelup`） |
 
 動く現物は [`examples/hello`](../examples/hello) にある。
 
@@ -82,8 +83,9 @@ HTML へ解決され、各ディレクトリの README がそのディレクト�
 | [50-development.md](50-development.md) | 開発環境（Nix / コンテナ）と規約 |
 | [51-testing.md](51-testing.md) | テストスイートの設計。層ごとの責務と、テストを足すときの判断 |
 | [60-cli.md](60-cli.md) | コマンド仕様、出力の約束、ログとデバッグ |
-| [61-getting-started.md](61-getting-started.md) | 導入から最初のビルドまでの howto |
-| [62-guides.md](62-guides.md) | タスク別の使い方ガイド |
+| [61-acquisition.md](61-acquisition.md) | dowel 自体の取得と版の切り替え（`dowelup`） |
+| [62-getting-started.md](62-getting-started.md) | 導入から最初のビルドまでの howto |
+| [63-guides.md](63-guides.md) | タスク別の使い方ガイド |
 | [90-roadmap.md](90-roadmap.md) | 実装順序と検証計画 |
 | [91-implementation-status.md](91-implementation-status.md) | 実装状況、計測、設計文書との差異 |
 | [99-open-questions.md](99-open-questions.md) | 未決事項 |
@@ -99,7 +101,7 @@ HTML へ解決され、各ディレクトリの README がそのディレクト�
   [91-implementation-status.md](91-implementation-status.md) は現況を記述する。
   両者が食い違う場合は後者を現況とみなす
 - 実装が仕様と異なる場合は、91 の「設計文書との差異」節に記録する
-- 利用者向けの文書（10 / 60 / 61 / 62）に書くのは動くものを基本とし、
+- 利用者向けの文書（10 / 6x）に書くのは動くものを基本とし、
   未実装の要素を載せる場合はその旨を明記する
 
 ## 検査されるもの

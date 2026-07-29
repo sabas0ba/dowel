@@ -32,7 +32,9 @@ dowel why app:app includes   # 値がそこへ来た経路を辿る
 ```
 
 自分のプロジェクトを作る手順は
-[docs/61-getting-started.md](docs/61-getting-started.md) にある。
+[docs/62-getting-started.md](docs/62-getting-started.md) にある。
+dowel 自体の版の固定・切り替えには `dowelup` が使える
+（[docs/61-acquisition.md](docs/61-acquisition.md)）。
 
 ## ドキュメント
 
@@ -40,8 +42,8 @@ dowel why app:app includes   # 値がそこへ来た経路を辿る
 
 | 知りたいこと | 文書 |
 |---|---|
-| 導入から最初のビルドまで | [docs/61-getting-started.md](docs/61-getting-started.md) |
-| タスク別の使い方（テスト、クロス実行、エディタ、CI 連携） | [docs/62-guides.md](docs/62-guides.md) |
+| 導入から最初のビルドまで | [docs/62-getting-started.md](docs/62-getting-started.md) |
+| タスク別の使い方（テスト、クロス実行、エディタ、CI 連携） | [docs/63-guides.md](docs/63-guides.md) |
 | マニフェストの仕様（`dowel.toml` / `dowel.build`、型と併合） | [docs/10-manifest.md](docs/10-manifest.md) |
 | コマンドとオプションの仕様 | [docs/60-cli.md](docs/60-cli.md) |
 | いま何が動き、何が未実装か | [docs/91-implementation-status.md](docs/91-implementation-status.md) |

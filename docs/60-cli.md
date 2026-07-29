@@ -2,7 +2,7 @@
 
 `dowel` が提供する全コマンドとオプションの仕様。本文書に記載したものは実装済みである。
 未実装の項目は [91-implementation-status.md](91-implementation-status.md) に一覧がある。
-タスク別の使い方は [62-guides.md](62-guides.md) にある。
+タスク別の使い方は [63-guides.md](63-guides.md) にある。
 
 ## 呼び出しの形
 
@@ -42,7 +42,7 @@ dowel <command> [options] [args]
 |---|---|---|---|
 | `-C, --directory <path>` | パス | `.` | このディレクトリのパッケージを対象にする |
 | `--config <name>` | `debug` / `release` | `debug` | ビルド構成 |
-| `--target <triple>` | ターゲットトリプル | ホスト | クロスコンパイル先（[62-guides.md](62-guides.md) 5節） |
+| `--target <triple>` | ターゲットトリプル | ホスト | クロスコンパイル先（[63-guides.md](63-guides.md) 5節） |
 | `--features <a,b>` | カンマ区切り | — | 有効化する機能フラグ。繰り返し指定できる |
 | `--no-default-features` | — | — | `[features]` の `default` を含めない |
 | `--message-format <fmt>` | `human` / `json` | `human` | 診断の形式 |

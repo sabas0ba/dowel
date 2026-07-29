@@ -1,7 +1,7 @@
 # 概要
 
 > 本書はプロジェクトの動機と位置づけを述べる設計文書である。使い方は
-> [61-getting-started.md](61-getting-started.md)、機能の仕様は
+> [62-getting-started.md](62-getting-started.md)、機能の仕様は
 > [10-manifest.md](10-manifest.md) と [60-cli.md](60-cli.md) を参照。
 
 ## 1. 動機

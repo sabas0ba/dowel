@@ -1,7 +1,7 @@
 # マニフェスト仕様
 
 `dowel.toml` と `dowel.build` に何を書けるか、その型と併合の意味論を定める
-リファレンス。書き方の入門は [61-getting-started.md](61-getting-started.md) にある。
+リファレンス。書き方の入門は [62-getting-started.md](62-getting-started.md) にある。
 本文書は設計上の全体像を含むため、一部に未実装の要素がある。未実装のものには
 その旨を注記し、現況の一覧は [91-implementation-status.md](91-implementation-status.md) に置く。
 

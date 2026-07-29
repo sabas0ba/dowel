@@ -1,7 +1,7 @@
 # 開発体験
 
 > 本書はランナー・デバッガ・エディタ連携の設計文書である。ランナーと
-> エディタ連携の使い方は [62-guides.md](62-guides.md) を、実装済みの範囲は
+> エディタ連携の使い方は [63-guides.md](63-guides.md) を、実装済みの範囲は
 > [91-implementation-status.md](91-implementation-status.md) を参照
 > （`dowel debug` は未実装）。
 

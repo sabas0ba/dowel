@@ -1,7 +1,7 @@
 # はじめる
 
 導入から、最初のプロジェクトのビルド・テスト・実行まで。
-タスク別の使い方は [62-guides.md](62-guides.md)、マニフェストの仕様は
+タスク別の使い方は [63-guides.md](63-guides.md)、マニフェストの仕様は
 [10-manifest.md](10-manifest.md)、コマンドの仕様は [60-cli.md](60-cli.md) にある。
 
 ## 1. 導入
@@ -22,6 +22,9 @@ export PATH="$PWD/target/release:$PATH"
 
 dowel --version
 ```
+
+版の固定や切り替えが要る場合は、`dowelup` で dowel 自体を取得・管理できる
+（[61-acquisition.md](61-acquisition.md)）。
 
 ## 2. 動く例を試す
 
@@ -148,12 +151,13 @@ dowel test --failed --fail-fast  # 前回落ちた分だけ、最初の失敗で
 - `DOWEL_LOG=debug dowel build` — 「なぜ再ビルドされたのか」をログで答える
 
 エディタで書くなら言語サーバがある（`dowel lsp`。
-[62-guides.md](62-guides.md) 6節）。診断は位置と安定コードを持ち、
+[63-guides.md](63-guides.md) 6節）。診断は位置と安定コードを持ち、
 未知の名前には候補が提示される。
 
 ## 7. 次に読むもの
 
-- タスク別の使い方（構成切り替え、クロス実行、CI 連携）— [62-guides.md](62-guides.md)
+- タスク別の使い方（構成切り替え、クロス実行、CI 連携）— [63-guides.md](63-guides.md)
+- dowel 自体の版の固定と切り替え（`dowelup`）— [61-acquisition.md](61-acquisition.md)
 - マニフェストに書ける全て — [10-manifest.md](10-manifest.md)
 - コマンドとオプションの全て — [60-cli.md](60-cli.md)
 - いま何が動き、何が未実装か — [91-implementation-status.md](91-implementation-status.md)
