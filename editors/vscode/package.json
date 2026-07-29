@@ -1,0 +1,77 @@
+{
+  "name": "dowel-vscode",
+  "displayName": "dowel",
+  "description": "Language support for dowel manifests: diagnostics, hover, and syntax highlighting via `dowel lsp`.",
+  "version": "0.0.1",
+  "publisher": "dowel",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sabas0ba/dowel"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/dowel.build",
+    "workspaceContains:**/dowel.toml"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "dowel-build",
+        "aliases": [
+          "dowel.build"
+        ],
+        "filenames": [
+          "dowel.build"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dowel-build",
+        "scopeName": "source.dowel-build",
+        "path": "./syntaxes/dowel-build.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "dowel.restartServer",
+        "title": "dowel: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "dowel",
+      "properties": {
+        "dowel.server.path": {
+          "type": "string",
+          "default": "dowel",
+          "description": "Path to the `dowel` executable. The language server is started as `dowel lsp`."
+        },
+        "dowel.server.trace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log the messages exchanged with the language server to the output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run build && node --test out/test/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "~1.90.0",
+    "typescript": "^5.9.0"
+  }
+}
