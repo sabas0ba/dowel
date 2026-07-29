@@ -425,15 +425,6 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
-        code: "unsupported-language",
-        why: "a `.cpp` source cannot be built with the C driver",
-        files: &[
-            ("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.cpp\")\n"),
-            ("app/src/main.cpp", "int main() { return 0; }\n"),
-        ],
-        args: CHECK,
-    },
-    Case {
         code: "missing-toolchain",
         why: "`[toolchain] c` names a compiler that is not on PATH",
         files: &[(

@@ -41,6 +41,7 @@ available from `dowel schema dump`.
 | `host` | `os` / `arch` | build host values |
 | `feature` | `<name>` | boolean (only names declared in `[features]` of `dowel.toml`) |
 | `tc` | `c` | identifier of the selected C toolchain |
+| `tc` | `cxx` | identifier of the selected C++ toolchain |
 
 Predicate composition is implicit AND only. Exhaustiveness checking of `match`
 applies to keys with finite domains (`cfg.opt` / `host.os` / `host.arch`);

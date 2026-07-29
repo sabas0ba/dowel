@@ -31,17 +31,18 @@ on for its metadata (in practice every package has both).
 
 ```toml
 [toolchain]
-c = "clang-19"
+c   = "clang-19"
+cxx = "clang++-19"
 ```
 
 | Key | Type | Behavior |
 |---|---|---|
-| `c` | string | the C compiler command. It must be on PATH at plan time — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain` |
+| `c` | string | the C compiler command, default `cc`. It must be on PATH at plan time — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain` |
+| `cxx` | string | the C++ compiler command, default `c++`. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
 
-Without a `[toolchain]` table, the default compiler is `cc` on PATH. If a
-dependency package declares a C toolchain different from the one the build
-uses, planning fails with `toolchain-mismatch` — ABI checking assumes a
-single pinned toolchain per build.
+If a dependency package declares a toolchain different from the one the
+build uses, planning warns with `toolchain-mismatch` — ABI checking assumes
+a single pinned toolchain per build.
 
 ## `[[dependencies]]`
 

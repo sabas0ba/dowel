@@ -59,7 +59,6 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
         "whether a feature enables the dependency is decided from `dowel.toml`",
     ),
     ("invalid-dependency", "what `deps` refers to is checked when the dependency graph is built"),
-    ("unsupported-language", "the language of a source is decided from the file list at plan time"),
 ];
 
 /// 開いている文書。エディタの緩衝が正本であり、ディスクは見ない。

@@ -386,6 +386,9 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
         if let Some(tc) = &root.toolchain_c {
             cfg.tc_c = tc.clone();
         }
+        if let Some(tc) = &root.toolchain_cxx {
+            cfg.tc_cxx = tc.clone();
+        }
     }
     Ok((cfg, diags))
 }

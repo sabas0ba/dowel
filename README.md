@@ -1,6 +1,6 @@
 # dowel
 
-A build system for C (C++ support is planned). Positioned as an alternative to
+A build system for C and C++. Positioned as an alternative to
 CMake / Bazel / Meson, differentiated on three points:
 
 1. **Incremental evaluation** — manifest evaluation is structured as a graph of
@@ -61,13 +61,15 @@ can be browsed as a site by publishing this repository on GitHub Pages
 ## Current state
 
 Under active development. `dowel check` / `build` / `test` / `why` / `graph` /
-`schema dump` / `cache` / `lsp` work today. It compiles C across multiple
-packages, produces static libraries, links, and runs the result. Runners for
-cross execution (`[runner.<triple>]`), incremental evaluation, persisted
-evaluation results, and the language server (diagnostics and hover) all work.
+`schema dump` / `cache` / `lsp` work today. It compiles C and C++ across
+multiple packages, produces static libraries, links, and runs the result —
+the compiler is chosen per source by extension, and a link involving C++
+anywhere in its closure uses the C++ driver. Runners for cross execution
+(`[runner.<triple>]`), incremental evaluation, persisted evaluation results,
+and the language server (diagnostics and hover) all work.
 
 The main things not implemented yet: dependency fetching (only local `path`
-dependencies work) and `dowel.lock`, C++, `dowel debug`, and migration tooling
+dependencies work) and `dowel.lock`, `dowel debug`, and migration tooling
 for existing build systems. See
 [docs/91-implementation-status.md](docs/91-implementation-status.md) for the
 full list and measurements, and [docs/90-roadmap.md](docs/90-roadmap.md) for

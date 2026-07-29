@@ -122,12 +122,20 @@ Planning turns merged property maps into an action graph.
   error
 - **Paths resolve** against their base point (the declaring package's
   root). Path values never concatenate as strings
-- **Actions**: one compile per source (`cc -c`, with `-I` / `-D` / flags
-  from `compile_env`), one archive per `lib` (`ar`), one link per `bin` /
-  `test` (own objects, dependency archives in graph order, `link_flags`)
-- The compiler is the build's C toolchain (`[toolchain] c` of the root
-  package, default `cc`); its absence from PATH is `missing-toolchain` at
-  plan time, not a cryptic exec failure later
+- **Actions**: one compile per source (with `-I` / `-D` / flags from
+  `compile_env`), one archive per `lib` (`ar`), one link per `bin` / `test`
+  (own objects, dependency archives in graph order, `link_flags`)
+- **The compiler is chosen per source by extension**: C++ extensions
+  (`.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`) compile with the C++
+  toolchain (`[toolchain] cxx`, default `c++`), everything else with the C
+  toolchain (`[toolchain] c`, default `cc`). `flags` apply to both
+- **The linker follows the closure**: if any translation unit in a
+  binary's link closure is C++ — even deep inside a dependency library —
+  the link runs through the C++ driver, so the C++ runtime is present.
+  A pure-C closure links with the C driver
+- A toolchain absent from PATH is `missing-toolchain` at plan time, not a
+  cryptic exec failure later. The C++ toolchain is only probed when C++
+  sources are actually present, so pure-C builds never require one
 - Everything lands in a per-configuration build directory
   `.dowel/build/<triple>-<opt>/` (`obj/`, `lib/`, `bin/`), so switching
   configurations never clobbers artifacts. `compile_commands.json` is

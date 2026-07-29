@@ -68,7 +68,7 @@ set.
 
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
-| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C only today — a C++ extension is rejected with `unsupported-language` |
+| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C and C++ may mix in one target; the language — and so the compiler — is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`, everything else compiles as C) |
 
 ### `[<kind>.<name>.public]` and `[<kind>.<name>.private]`
 
@@ -140,6 +140,7 @@ implemented; `dowel schema dump` prints the live version.)
 | `host.arch` | finite | `x86_64`, `aarch64`, `riscv64` |
 | `feature.<name>` | boolean | feature flags declared in `[features]` of `dowel.toml`; undeclared names are diagnosed with a suggestion |
 | `tc.c` | open | identifier of the selected C toolchain |
+| `tc.cxx` | open | identifier of the selected C++ toolchain |
 
 ### `match`
 

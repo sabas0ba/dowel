@@ -4,7 +4,7 @@
 # The plugins listed here are the ones GitHub Pages enables by default; they
 # are spelled out so a local preview (jekyll serve) behaves the same way.
 title: dowel
-description: A build system for C (under development)
+description: A build system for C and C++ (under development)
 lang: en
 theme: jekyll-theme-primer
 
