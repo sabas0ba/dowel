@@ -1266,3 +1266,40 @@ fn add_creates_a_subpackage_and_declares_the_dependency() {
     r.failure();
     assert!(r.stderr.contains("already declared"), "{r}");
 }
+
+/// `dowel add --git` は git 依存を宣言する。書かれるのはフル 40 桁の sha のみ。
+/// rev を省いた場合は HEAD を `git ls-remote` で一度だけ解決して固定する。
+#[test]
+fn add_git_declares_a_pinned_dependency() {
+    let p = Project::new("scaffold-add-git");
+    let rev = git_remote(&p);
+    let url = p.path("remote").display().to_string();
+    p.run(".", &["new", "myapp"]).success();
+
+    // 明示した sha はそのまま書かれる。
+    p.run("myapp", &["add", "--git", &url, "--rev", &rev, "--name", "liblen"])
+        .success()
+        .stderr_contains("declared git dependency `liblen`");
+    let manifest = std::fs::read_to_string(p.path("myapp/dowel.toml")).unwrap();
+    assert!(manifest.contains(&format!("rev  = \"{rev}\"")), "{manifest}");
+
+    // 宣言のまま check が通り、取得も走る。配線して実際に使える。
+    p.write(
+        "myapp/dowel.build",
+        "[bin.myapp]\nsources = glob(\"src/*.c\")\n\n[bin.myapp.private]\ndeps = [dep(\"liblen\")]\n",
+    );
+    p.write(
+        "myapp/src/main.c",
+        "#include <stdio.h>\n#include \"len.h\"\nint main(void) { printf(\"n=%d\\n\", len_of(\"ab\")); return 0; }\n",
+    );
+    p.run("myapp", &["build"]).success();
+    let bin = build_dir(&p.path("myapp"), "debug").join("bin/myapp");
+    assert_eq!(run_artifact(&bin), "n=2\n");
+
+    // rev を省くと HEAD を解決して固定する。名前は URL の最終要素から取る。
+    p.run(".", &["new", "other"]).success();
+    p.run("other", &["add", "--git", &url]).success();
+    let manifest = std::fs::read_to_string(p.path("other/dowel.toml")).unwrap();
+    assert!(manifest.contains("name = \"remote\""), "{manifest}");
+    assert!(manifest.contains(&format!("rev  = \"{rev}\"")), "resolved HEAD differs\n{manifest}");
+}

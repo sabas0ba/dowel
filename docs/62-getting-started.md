@@ -97,10 +97,12 @@ speedup (see the store section of [60-cli.md](60-cli.md)).
 ## 4. Split out a library and depend on it
 
 ```sh
-dowel add libs/util      # scaffold a library and declare the dependency
+dowel add libs/util                       # scaffold a library and declare the dependency
+dowel add --git https://github.com/x/y    # declare a git dependency, pinned to HEAD's sha
 ```
 
-`dowel add` creates a library package in a subdirectory and appends the
+`dowel add` creates a library package in a subdirectory (or, with `--git`,
+declares an external repository pinned to a full commit sha) and appends the
 `[[dependencies]]` entry to your `dowel.toml`; wiring it into a target
 (below) stays your choice, and the command prints the exact line to add.
 

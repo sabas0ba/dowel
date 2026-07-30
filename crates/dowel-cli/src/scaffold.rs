@@ -46,33 +46,20 @@ pub fn new_package(dir: &Path, lib: bool) -> Result<(), String> {
 
 /// `dowel add <path>`。カレントのパッケージ配下に lib パッケージを作り、
 /// `dowel.toml` へ `path` 依存を追記する。
-pub fn add_package(project: &Path, rel: &str) -> Result<(), String> {
-    let manifest_path = project.join("dowel.toml");
-    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        format!("cannot read {}: {e}. run `dowel add` inside a package", manifest_path.display())
-    })?;
-
+pub fn add_package(project: &Path, rel: &str, name: Option<&str>) -> Result<(), String> {
     let dir = project.join(rel);
-    let name = package_name(&dir)?;
-    // 名前の重複は読み込みが `dep(\"名前\")` を一意に解決できなくする。
-    if text.contains(&format!("name = \"{name}\"")) || text.contains(&format!("name=\"{name}\"")) {
-        return Err(format!("`{name}` is already declared in {}", manifest_path.display()));
-    }
+    let name = match name {
+        Some(n) => valid_name(n)?,
+        None => package_name(&dir)?,
+    };
+    let manifest_path = read_manifest_for_add(project, &name)?.0;
     if dir.join("dowel.toml").exists() {
         return Err(format!("`{}` is already a dowel package", dir.display()));
     }
 
     write(&dir, "dowel.toml", &manifest(&name))?;
     write_lib_skeleton(&dir, &name)?;
-
-    // 末尾に追記する。厳密な TOML では配列テーブルの位置に意味が無いため、
-    // 既存の本文を触らずに済む。
-    let mut out = text;
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&format!("\n[[dependencies]]\nname = \"{name}\"\npath = \"{rel}\"\n"));
-    std::fs::write(&manifest_path, out).map_err(fs_err)?;
+    append_dependency(project, &name, &format!("path = \"{rel}\""))?;
 
     eprintln!("created lib package `{name}` at {}", dir.display());
     eprintln!("declared it in {}", manifest_path.display());
@@ -80,13 +67,106 @@ pub fn add_package(project: &Path, rel: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// パスの最終要素をパッケージ名にする。テーブル見出しの識別子として
-/// 妥当であること（字句規則と同じ: 先頭は英字か `_`、以後は英数と `_` `-`）。
+/// `dowel add --git <url> [--rev <rev>]`。git 依存を `dowel.toml` へ宣言する。
+///
+/// マニフェストに書かれるのはフル 40 桁の sha のみ（docs/11-toml-reference.md）。
+/// 名前や省略時の HEAD はここで一度だけ `git ls-remote` により解決する。
+/// dowelup の pin と同じ判断で、解決を書き込み時に済ませ、
+/// 読み込みは以後ネットワークに依存しない。
+pub fn add_git_dependency(
+    project: &Path,
+    url: &str,
+    rev: Option<&str>,
+    name: Option<&str>,
+) -> Result<(), String> {
+    let name = match name {
+        Some(n) => valid_name(n)?,
+        None => name_from_url(url)?,
+    };
+    let (manifest_path, _) = read_manifest_for_add(project, &name)?;
+
+    let rev = match rev {
+        Some(r) if r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            r.to_ascii_lowercase()
+        }
+        Some(r) => ls_remote(url, r)?,
+        None => ls_remote(url, "HEAD")?,
+    };
+
+    append_dependency(project, &name, &format!("git  = \"{url}\"\nrev  = \"{rev}\""))?;
+    eprintln!("declared git dependency `{name}` at rev {rev} in {}", manifest_path.display());
+    eprintln!("next: add `deps = [dep(\"{name}\")]` to a target block in dowel.build");
+    eprintln!("      `dowel check` fetches it on first use");
+    Ok(())
+}
+
+/// `dowel.toml` を読み、名前の重複を拒む。重複は読み込みが `dep("名前")` を
+/// 一意に解決できなくする。
+fn read_manifest_for_add(
+    project: &Path,
+    name: &str,
+) -> Result<(std::path::PathBuf, String), String> {
+    let manifest_path = project.join("dowel.toml");
+    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        format!("cannot read {}: {e}. run `dowel add` inside a package", manifest_path.display())
+    })?;
+    if text.contains(&format!("name = \"{name}\"")) || text.contains(&format!("name=\"{name}\"")) {
+        return Err(format!("`{name}` is already declared in {}", manifest_path.display()));
+    }
+    Ok((manifest_path, text))
+}
+
+/// 末尾に追記する。厳密な TOML では配列テーブルの位置に意味が無いため、
+/// 既存の本文を触らずに済む。
+fn append_dependency(project: &Path, name: &str, source: &str) -> Result<(), String> {
+    let manifest_path = project.join("dowel.toml");
+    let mut out = std::fs::read_to_string(&manifest_path).map_err(fs_err)?;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!("\n[[dependencies]]\nname = \"{name}\"\n{source}\n"));
+    std::fs::write(&manifest_path, out).map_err(fs_err)
+}
+
+/// URL の最終要素（`.git` を除く）を依存名にする。
+fn name_from_url(url: &str) -> Result<String, String> {
+    let tail = url.trim_end_matches('/').rsplit(['/', ':']).next().unwrap_or("");
+    let tail = tail.strip_suffix(".git").unwrap_or(tail);
+    valid_name(tail).map_err(|e| format!("{e}. pass `--name <name>` to choose one"))
+}
+
+/// 名前を一度だけ sha に解決する。書き込むのは解決済みの sha のみであり、
+/// 名前だけの参照はマニフェストに残さない。
+fn ls_remote(url: &str, what: &str) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(["ls-remote", url, what])
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git ls-remote failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    match text.split_whitespace().next() {
+        Some(sha) if sha.len() == 40 => Ok(sha.to_string()),
+        _ => Err(format!("`{what}` does not resolve to a commit at `{url}`")),
+    }
+}
+
+/// パスの最終要素をパッケージ名にする。
 fn package_name(dir: &Path) -> Result<String, String> {
     let name = dir
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("cannot take a package name from `{}`", dir.display()))?;
+    valid_name(name)
+}
+
+/// テーブル見出しの識別子として妥当な名前であること
+/// （字句規則と同じ: 先頭は英字か `_`、以後は英数と `_` `-`）。
+fn valid_name(name: &str) -> Result<String, String> {
     let mut chars = name.bytes();
     let head_ok = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == b'_');
     let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');

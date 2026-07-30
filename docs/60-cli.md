@@ -97,14 +97,30 @@ the test suite on every run, so the skeletons cannot silently rot.
 ## `dowel add`
 
 ```
-dowel add <path>
+dowel add <path> [--name <n>]
+dowel add --git <url> [--rev <rev>] [--name <n>]
 ```
 
-Run inside a package. Creates a library package at `<path>` (relative to the
-package root) and appends the matching `[[dependencies]]` entry with a
-`path` source to the package's `dowel.toml`. The append preserves the
-existing manifest text untouched — position carries no meaning for array
-tables in strict TOML.
+Run inside a package; declares a dependency in its `dowel.toml`. Two forms:
+
+- **`<path>`** — creates a library package at the sub-path (relative to the
+  package root) and appends the matching `[[dependencies]]` entry with a
+  `path` source
+- **`--git <url>`** — appends a git dependency instead of scaffolding
+  anything. The manifest only ever receives a **full 40-digit sha**: an
+  explicit 40-digit `--rev` is written as-is, while a name (or, with `--rev`
+  omitted, `HEAD`) is resolved **once** via `git ls-remote` and the
+  resolved sha is what gets pinned — the same judgment as `dowelup pin`.
+  `dowel check` fetches it on first use
+
+| Option | Meaning |
+|---|---|
+| `--git <url>` | declare a git dependency instead of scaffolding a package |
+| `--rev <rev>` | the commit to pin; a non-sha name is resolved once via `git ls-remote` |
+| `--name <n>` | the dependency name (default: the last path or URL component) |
+
+The append preserves the existing manifest text untouched — position carries
+no meaning for array tables in strict TOML.
 
 What it does not do: wire the dependency into a target. Which target uses it
 is a per-target choice, so the command prints the exact

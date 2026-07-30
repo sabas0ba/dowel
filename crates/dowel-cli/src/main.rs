@@ -86,7 +86,21 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     if let Command::Add { path } = &opts.command {
-        scaffold::add_package(&opts.directory, path)?;
+        match (&opts.git, path) {
+            (Some(url), None) => scaffold::add_git_dependency(
+                &opts.directory,
+                url,
+                opts.rev.as_deref(),
+                opts.dep_name.as_deref(),
+            )?,
+            (None, Some(rel)) => {
+                scaffold::add_package(&opts.directory, rel, opts.dep_name.as_deref())?
+            }
+            (Some(_), Some(_)) => {
+                return Err("`add` takes either <path> or `--git <url>`, not both".into())
+            }
+            (None, None) => return Err("write `add <path>` or `add --git <url>`".into()),
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
