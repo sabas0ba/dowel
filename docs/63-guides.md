@@ -143,8 +143,11 @@ There are three paths; they serve different files.
 
 `dowel lsp` speaks LSP on stdin/stdout; the editor is the one that starts it
 (nothing stays resident). Hover shows property types and merge rules, builtin
-function signatures, and configuration key domains. Diagnostics are per open
-file; cross-file diagnostics are not produced yet.
+function signatures, and configuration key domains. Diagnostics cross files:
+with `dowel.toml` and `dowel.build` open, an unknown feature name, an
+undeclared dependency, or a merge conflict with a dependency shows up in the
+editor, against unsaved buffer contents. Plan-stage checks (glob expansion,
+path resolution, toolchain probing) still belong to `dowel check`.
 
 ## 7. Managing the cache
 

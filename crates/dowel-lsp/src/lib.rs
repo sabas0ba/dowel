@@ -33,35 +33,16 @@ use std::io::{BufRead, Write};
 /// 空にするのが目標である。「言語サーバでは出ない」ことを知らずに使うと、
 /// 誤りのあるマニフェストが正しいものに見える。
 pub const UNSUPPORTED: &[(&str, &str)] = &[
-    ("undeclared-dependency", "resolving `dep(...)` needs the workspace model"),
-    ("unknown-target", "resolving `target(...)` needs the other targets of the package"),
-    ("unknown-feature", "the vocabulary comes from `[features]` of the same package"),
-    ("merge-conflict", "merging needs the dependency graph"),
-    ("abi-mismatch", "merging needs the dependency graph"),
-    ("invalid-source", "path resolution happens at plan time"),
-    ("unresolved-path", "path resolution happens at plan time"),
-    ("empty-glob", "glob expansion happens at plan time"),
+    ("invalid-source", "path resolution happens at plan time, which scans the file system"),
+    ("unresolved-path", "path resolution happens at plan time, which scans the file system"),
+    ("empty-glob", "glob expansion happens at plan time, which scans the file system"),
     ("no-sources", "whether `sources` ends up empty is decided at plan time, after glob expansion"),
-    (
-        "missing-manifest",
-        "the diagnostic is about a file that does not exist; there is nothing to open",
-    ),
-    (
-        "missing-build",
-        "the diagnostic is about a file that does not exist; there is nothing to open",
-    ),
-    ("unreadable-build", "reading the file is the editor's job; the server sees only open buffers"),
+    ("unreadable-build", "the buffer overlay cannot reproduce an unreadable file on disk"),
     ("missing-runner", "triggered by `--target`, which is not part of any manifest"),
     ("missing-toolchain", "probing PATH for the compiler happens at plan time"),
-    ("dependency-cycle", "the cycle spans several packages; it needs the workspace model"),
-    (
-        "inactive-dependency",
-        "whether a feature enables the dependency is decided from `dowel.toml`",
-    ),
-    ("invalid-dependency", "what `deps` refers to is checked when the dependency graph is built"),
     (
         "unfetchable-dependency",
-        "fetching happens when the workspace is loaded; the server never touches the network",
+        "the server never touches the network; fetching and its diagnostic belong to the CLI",
     ),
 ];
 
@@ -123,7 +104,7 @@ fn handle(docs: &mut Documents, m: &rpc::Message, shutdown: &mut bool) -> Vec<St
             let Some(uri) = str_at(params, "textDocument.uri") else { return Vec::new() };
             let text = str_at(params, "textDocument.text").unwrap_or_default();
             docs.text.insert(uri.clone(), text);
-            vec![publish(docs, &uri)]
+            publish_all(docs)
         }
 
         (_, "textDocument/didChange") => {
@@ -139,19 +120,24 @@ fn handle(docs: &mut Documents, m: &rpc::Message, shutdown: &mut bool) -> Vec<St
                 return Vec::new();
             };
             docs.text.insert(uri.clone(), text.to_string());
-            vec![publish(docs, &uri)]
+            publish_all(docs)
         }
 
         (_, "textDocument/didSave") => {
             let Some(uri) = str_at(params, "textDocument.uri") else { return Vec::new() };
-            vec![publish(docs, &uri)]
+            let _ = uri;
+            publish_all(docs)
         }
 
         (_, "textDocument/didClose") => {
             let Some(uri) = str_at(params, "textDocument.uri") else { return Vec::new() };
             docs.text.remove(&uri);
             // 閉じた時点で診断を消す。エディタは残った印を自分では落とさない。
-            vec![diagnostics_notification(&uri, &SourceMap::new(), &[])]
+            // 残りの文書は診断し直す。閉じた緩衝がディスクの内容を覆っていた
+            // 場合、他の文書の診断が変わりうる。
+            let mut out = vec![diagnostics_notification(&uri, &SourceMap::new(), &[])];
+            out.extend(publish_all(docs));
+            out
         }
 
         (rpc::Message::Request { id, .. }, "textDocument/hover") => {
@@ -223,10 +209,122 @@ fn str_at(params: &Json, path: &str) -> Option<String> {
     params.path(path).and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
+/// 開いている全ての文書の診断を作り直す。
+///
+/// 1つの編集は同じパッケージの他の文書の診断を変えうる
+/// （`[features]` を直せば `dowel.build` 側の `unknown-feature` が消える）。
+/// 開いている文書は少数で解析はミリ秒の桁であり、全部やり直すのが
+/// 最も単純で、かつ取りこぼしが無い。
+fn publish_all(docs: &Documents) -> Vec<String> {
+    docs.text.keys().map(|uri| publish(docs, uri)).collect()
+}
+
+/// この文書が属するパッケージのルート。
+///
+/// マニフェスト（`dowel.toml`）が同じディレクトリに開かれているか、
+/// ディスクに在る場合にだけパッケージとみなす。どちらも無ければ
+/// 1ファイルで決まる検査に留める（孤立した `dowel.build` を編集中でも
+/// 説明が出るように）。
+fn package_root(path: &std::path::Path, docs: &Documents) -> Option<std::path::PathBuf> {
+    let name = path.file_name()?;
+    if name != dowel_model::session::MANIFEST_NAME && name != dowel_model::session::BUILD_NAME {
+        return None;
+    }
+    let dir = path.parent()?;
+    let manifest = dir.join(dowel_model::session::MANIFEST_NAME);
+    if docs.text.keys().any(|u| path_of(u) == manifest) || manifest.exists() {
+        Some(dir.to_path_buf())
+    } else {
+        None
+    }
+}
+
+/// パッケージの模型で診断する。ファイルを跨ぐ検査はここで出る。
+///
+/// 開いている緩衝が正本であり、模型はそれを重ねて読む
+/// （`Session::load_for_editor`）。ネットワークにもストアにも触れない。
+/// 打鍵ごとに作って捨てるため、常駐デーモンとは区別されたままである
+/// （[ADR-0002]）。
+///
+/// 解析の根は、開いている各マニフェストのディレクトリと自分のディレクトリの
+/// 全てを試す。依存の先を編集しているとき（併合の衝突の片割れ等）、その文書に
+/// 掛かる診断は依存元を根とする模型からしか出ないためである。自分に届かない
+/// 根からは何も採られず、同じ診断が複数の根から届いた場合は1つに畳む。
+///
+/// [ADR-0002]: ../../../docs/adr/0002-no-daemon.md
+fn publish_workspace(docs: &Documents, uri: &str, path: &std::path::Path) -> String {
+    let overlay: BTreeMap<std::path::PathBuf, String> =
+        docs.text.iter().map(|(u, t)| (path_of(u), t.clone())).collect();
+
+    let mut roots: std::collections::BTreeSet<std::path::PathBuf> = overlay
+        .keys()
+        .filter(|p| p.file_name().is_some_and(|n| n == dowel_model::session::MANIFEST_NAME))
+        .filter_map(|p| p.parent().map(std::path::Path::to_path_buf))
+        .collect();
+    if let Some(dir) = path.parent() {
+        roots.insert(dir.to_path_buf());
+    }
+
+    let mut batches: Vec<(dowel_model::Session, Vec<Diagnostic>)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, String, u32, u32)> =
+        std::collections::BTreeSet::new();
+    for root in &roots {
+        let sess = dowel_model::Session::load_for_editor(root, overlay.clone());
+        let cfg = dowel_eval::Config::host_default();
+        let (graph, gdiags) = dowel_model::graph::build(&sess, &cfg);
+        let idiags = dowel_model::interface::prepare(&sess, &graph, &cfg);
+        let mut diags = sess.diagnostics.clone();
+        diags.extend(gdiags);
+        diags.extend(idiags);
+        // 併合の診断（衝突・ABI 不一致）は `compile_env` を経由して出るものが
+        // ある（`private` と依存の `public` の衝突は interface では起きない）。
+        // `check` が計画段で通るのと同じ経路をここでも通す。
+        for t in &sess.targets {
+            dowel_model::interface::compile_env(&sess, t.id, &mut diags);
+        }
+        // この文書に主ラベルを持つものだけを、この文書へ出す。他の開いている
+        // 文書に掛かる診断は、その文書の publish が同じ模型から拾い直す。
+        let kept: Vec<Diagnostic> = diags
+            .into_iter()
+            .filter(|d| {
+                let Some(l) = d.primary_label() else { return false };
+                if !(sess.sm.contains(l.file) && sess.sm.path(l.file) == path) {
+                    return false;
+                }
+                seen.insert((d.code.to_string(), d.message.clone(), l.span.start, l.span.end))
+            })
+            .collect();
+        if !kept.is_empty() {
+            batches.push((sess, kept));
+        }
+    }
+
+    log_debug!(
+        "lsp: {} workspace diagnostics for {uri}",
+        batches.iter().map(|(_, d)| d.len()).sum::<usize>()
+    );
+    rpc::notification("textDocument/publishDiagnostics", |w| {
+        w.begin_object();
+        w.field_str("uri", uri);
+        w.key("diagnostics").begin_array();
+        for (sess, diags) in &batches {
+            for d in diags {
+                write_diagnostic(w, &sess.sm, d);
+            }
+        }
+        w.end_array();
+        w.end_object();
+    })
+}
+
 /// 1ファイルを解析・評価して診断の通知を作る。
 fn publish(docs: &Documents, uri: &str) -> String {
     let text = docs.text.get(uri).map(|s| s.as_str()).unwrap_or("");
     let path = path_of(uri);
+    // パッケージの中の文書は、ワークスペースの模型で診断する。
+    if package_root(&path, docs).is_some() {
+        return publish_workspace(docs, uri, &path);
+    }
     let mut sm = SourceMap::new();
     let file = sm.add(&path, text.to_string());
 
