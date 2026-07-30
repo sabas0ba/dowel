@@ -80,7 +80,9 @@ affects this target only. (The precise formulas are in
 |---|---|---|---|
 | `includes` | `Set<Path>` | `union` | include search paths (`-I`). Ordered along the dependency graph: your own first, dependencies after |
 | `defines` | `Map<Ident, Val>` | `error_on_conflict` | preprocessor definitions (`-D`). Two different values arriving for the same name fail, with both provenances shown |
-| `flags` | `List<Str>` | `append` | compile flags, order-preserving |
+| `flags` | `List<Str>` | `append` | compile flags for every language, order-preserving |
+| `c_flags` | `List<Str>` | `append` | compile flags for C sources only, placed after `flags` |
+| `cxx_flags` | `List<Str>` | `append` | compile flags for C++ sources only, placed after `flags` (e.g. `["-std=c++20"]`) |
 | `link_flags` | `List<Str>` | `append` | link flags, order-preserving |
 | `deps` | `List<DepRef \| TargetRef>` | `append` | edges: `dep("name")` is a package dependency declared in `dowel.toml`; `target("name")` is a target in the same package |
 | `abi` | `AbiLabel` | `must_equal` | ABI label. Every target linked together must declare the same value or the build fails (`abi-mismatch`) before linking. Currently a hand-written string; automatic computation is planned |

@@ -212,7 +212,19 @@ pub fn block_props() -> Vec<PropDef> {
             name: "flags",
             ty: list(Type::Str),
             merge: Merge::Append,
-            doc: "compile flags. order preserving",
+            doc: "compile flags for every language. order preserving",
+        },
+        PropDef {
+            name: "c_flags",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "compile flags for C sources only, after `flags`. order preserving",
+        },
+        PropDef {
+            name: "cxx_flags",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "compile flags for C++ sources only, after `flags`. order preserving",
         },
         PropDef {
             name: "link_flags",

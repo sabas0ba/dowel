@@ -137,6 +137,8 @@ Planning turns merged property maps into an action graph.
   (`.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`) compile with the C++
   toolchain (`[toolchain] cxx`, default `c++`), everything else with the C
   toolchain (`[toolchain] c`, default `cc`). `flags` apply to both
+  languages; `c_flags` / `cxx_flags` follow them and reach only their own
+  language, so a per-language flag can override a shared one
 - **The linker follows the closure**: if any translation unit in a
   binary's link closure is C++ — even deep inside a dependency library —
   the link runs through the C++ driver, so the C++ runtime is present.
