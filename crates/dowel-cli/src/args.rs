@@ -18,6 +18,8 @@ Usage:
     dowel <command> [options]
 
 Commands:
+    new <path>         Create a package in a new directory (default: bin; --lib for a library).
+    add <path>         Create a lib package in a subdirectory and declare it as a path dependency.
     check              Evaluate the manifests and report diagnostics. Does not build.
     build [target]     Build. With no target, builds every bin and test.
     test [target]      Build and run test targets. With no target, runs every test.
@@ -45,6 +47,9 @@ Common options:
         --color <when>       auto | always | never
     -h, --help               Show this help
     -V, --version            Show the version
+
+new options:
+        --lib                Generate a library package instead of an executable
 
 build options:
         --executor <name>    ninja | direct (default: ninja when available)
@@ -76,6 +81,14 @@ Examples:
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Command {
+    /// 雛型の生成（scaffold.rs）
+    New {
+        path: String,
+    },
+    /// サブパッケージの追加と `dowel.toml` への配線（scaffold.rs）
+    Add {
+        path: String,
+    },
     Check,
     Build {
         targets: Vec<String>,
@@ -118,6 +131,8 @@ pub enum OutFormat {
 pub struct Options {
     pub command: Command,
     pub directory: PathBuf,
+    /// `new` がライブラリの雛型を作るか
+    pub lib: bool,
     pub config: String,
     pub target: Option<String>,
     pub features: Vec<String>,
@@ -144,6 +159,7 @@ impl Default for Options {
         Options {
             command: Command::Check,
             directory: PathBuf::from("."),
+            lib: false,
             config: "debug".into(),
             target: None,
             features: Vec::new(),
@@ -173,7 +189,8 @@ pub enum Parsed {
     Version,
 }
 
-const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema", "cache", "lsp"];
+const COMMANDS: &[&str] =
+    &["new", "add", "check", "build", "test", "why", "graph", "schema", "cache", "lsp"];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -217,6 +234,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
 
         match name.as_str() {
             "-C" | "--directory" => opts.directory = PathBuf::from(take("--directory")?),
+            "--lib" => opts.lib = true,
             "--config" => opts.config = take("--config")?,
             "--target" => opts.target = Some(take("--target")?),
             "--features" => {
@@ -307,6 +325,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             other if other.starts_with('-') => {
                 let known = [
                     "--directory",
+                    "--lib",
                     "--config",
                     "--target",
                     "--features",
@@ -359,6 +378,14 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
 
     let Some(cmd) = command else { return Ok(Parsed::Help) };
     opts.command = match cmd.as_str() {
+        "new" => match positional.as_slice() {
+            [path] => Command::New { path: path.clone() },
+            _ => return Err("`new` takes one argument: <path>".into()),
+        },
+        "add" => match positional.as_slice() {
+            [path] => Command::Add { path: path.clone() },
+            _ => return Err("`add` takes one argument: <path>".into()),
+        },
         "check" => Command::Check,
         "build" => Command::Build { targets: positional },
         "test" => Command::Test { targets: positional },
@@ -462,6 +489,23 @@ mod tests {
     #[test]
     fn no_arguments_prints_help() {
         assert!(matches!(parse(Vec::<String>::new()).unwrap(), Parsed::Help));
+    }
+
+    #[test]
+    fn new_takes_a_path_and_the_lib_flag() {
+        let o = run(&["new", "myapp"]).unwrap();
+        assert_eq!(o.command, Command::New { path: "myapp".into() });
+        assert!(!o.lib);
+        assert!(run(&["new", "mylib", "--lib"]).unwrap().lib);
+        assert!(run(&["new"]).is_err(), "`new` requires a path");
+        assert!(run(&["new", "a", "b"]).is_err(), "`new` takes exactly one path");
+    }
+
+    #[test]
+    fn add_takes_exactly_one_path() {
+        let o = run(&["add", "libs/util"]).unwrap();
+        assert_eq!(o.command, Command::Add { path: "libs/util".into() });
+        assert!(run(&["add"]).is_err());
     }
 
     #[test]

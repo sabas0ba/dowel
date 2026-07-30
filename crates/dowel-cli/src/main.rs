@@ -8,6 +8,7 @@
 //! これにより `dowel graph --format=dot | dot -Tsvg` がログ水準に関わらず動く。
 
 mod args;
+mod scaffold;
 
 use args::{Command, GraphKind, MessageFormat, Options, OutFormat, Parsed};
 use dowel_build::{compdb, exec, plan as build_plan, testing};
@@ -79,6 +80,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         eprintln!("removed {removed} store(s) left by older formats");
         return Ok(ExitCode::SUCCESS);
     }
+    // 雛型の生成もマニフェストを要さない（`add` は自分で読む）。
+    if let Command::New { path } = &opts.command {
+        scaffold::new_package(&opts.directory.join(path), opts.lib)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Command::Add { path } = &opts.command {
+        scaffold::add_package(&opts.directory, path)?;
+        return Ok(ExitCode::SUCCESS);
+    }
 
     // 機能フラグの選択は読み込みより前に要る。有効でない任意の依存は
     // 読み込まないため（docs/10-manifest.md）。
@@ -107,7 +117,12 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     sess.diagnostics.extend(idiags);
 
     match &opts.command {
-        Command::SchemaDump | Command::CacheInfo | Command::CacheGc | Command::Lsp => {
+        Command::SchemaDump
+        | Command::CacheInfo
+        | Command::CacheGc
+        | Command::Lsp
+        | Command::New { .. }
+        | Command::Add { .. } => {
             unreachable!("handled above")
         }
 

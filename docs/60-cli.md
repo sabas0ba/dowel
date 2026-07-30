@@ -74,6 +74,44 @@ What each log level shows (debug: per-stage timing and graph sizes; trace:
 dependency edges and the full command line of every action) is broken down in
 [91-implementation-status.md](91-implementation-status.md).
 
+## `dowel new`
+
+```
+dowel new <path> [--lib]
+```
+
+Creates a package in a new directory (which must not exist or be empty).
+The package name is the last path component and must be a valid identifier
+(a letter or `_`, then letters, digits, `_`, `-`).
+
+| Option | Meaning |
+|---|---|
+| `--lib` | generate a library package instead of an executable |
+
+The default skeleton is a `bin` package (`dowel.toml`, `dowel.build`,
+`src/main.c`, `.gitignore`); `--lib` generates a library with a public
+header under `include/`, a private `src/`, and a `test` target that
+`dowel test` runs as-is. The generated packages are built and executed by
+the test suite on every run, so the skeletons cannot silently rot.
+
+## `dowel add`
+
+```
+dowel add <path>
+```
+
+Run inside a package. Creates a library package at `<path>` (relative to the
+package root) and appends the matching `[[dependencies]]` entry with a
+`path` source to the package's `dowel.toml`. The append preserves the
+existing manifest text untouched — position carries no meaning for array
+tables in strict TOML.
+
+What it does not do: wire the dependency into a target. Which target uses it
+is a per-target choice, so the command prints the exact
+`deps = [dep("<name>")]` line to add instead
+([12-build-reference.md](12-build-reference.md)). A name already declared in
+`dowel.toml` is refused.
+
 ## `dowel check`
 
 ```

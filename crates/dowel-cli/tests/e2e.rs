@@ -1205,3 +1205,64 @@ int main(void) { printf("c=%d cxx=%d\n", FROM_C, cxx_part()); return 0; }
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "c=1 cxx=1\n");
 }
+
+/// `dowel new` が生成した bin パッケージは、そのままビルドして実行できる。
+///
+/// 雛型が仕様の変更に置いていかれると、最初の体験が「生成物が壊れている」に
+/// なる。生成 → ビルド → 実行を常時通すことで雛型の陳腐化を防ぐ。
+#[test]
+fn a_new_bin_package_builds_and_runs() {
+    let p = Project::new("scaffold-bin");
+    p.run(".", &["new", "myapp"]).success().stderr_contains("created bin package `myapp`");
+    p.run("myapp", &["check"]).success();
+    p.run("myapp", &["build"]).success();
+    let bin = build_dir(&p.path("myapp"), "debug").join("bin/myapp");
+    assert_eq!(run_artifact(&bin), "hello from myapp\n");
+
+    // 生成先が空でなければ書かない。
+    let r = p.run(".", &["new", "myapp"]);
+    r.failure();
+    assert!(r.stderr.contains("already"), "{r}");
+}
+
+/// `dowel new --lib` の雛型はテストつきで、`dowel test` がそのまま通る。
+#[test]
+fn a_new_lib_package_passes_its_own_test() {
+    let p = Project::new("scaffold-lib");
+    p.run(".", &["new", "mylib", "--lib"]).success();
+    p.run("mylib", &["test"]).success();
+}
+
+/// `dowel add` はサブパッケージを作り、`dowel.toml` へ path 依存を追記する。
+/// 追記後もマニフェストは厳密な TOML として読める。
+#[test]
+fn add_creates_a_subpackage_and_declares_the_dependency() {
+    let p = Project::new("scaffold-add");
+    p.run(".", &["new", "myapp"]).success();
+    p.run("myapp", &["add", "libs/util"]).success().stderr_contains("declared it in");
+
+    let manifest = std::fs::read_to_string(p.path("myapp/dowel.toml")).unwrap();
+    assert!(manifest.contains("name = \"util\""), "{manifest}");
+    assert!(manifest.contains("path = \"libs/util\""), "{manifest}");
+
+    // 追記されたマニフェストのまま check が通り、依存も読める。
+    p.run("myapp", &["check"]).success();
+
+    // 案内どおり deps を配線すると、実際に使える。
+    p.write(
+        "myapp/dowel.build",
+        "[bin.myapp]\nsources = glob(\"src/*.c\")\n\n[bin.myapp.private]\ndeps = [dep(\"util\")]\n",
+    );
+    p.write(
+        "myapp/src/main.c",
+        "#include <stdio.h>\n#include \"util.h\"\nint main(void) { printf(\"a=%d\\n\", util_answer()); return 0; }\n",
+    );
+    p.run("myapp", &["build"]).success();
+    let bin = build_dir(&p.path("myapp"), "debug").join("bin/myapp");
+    assert_eq!(run_artifact(&bin), "a=42\n");
+
+    // 同じ名前の二重宣言は拒む。
+    let r = p.run("myapp", &["add", "other/util"]);
+    r.failure();
+    assert!(r.stderr.contains("already declared"), "{r}");
+}
