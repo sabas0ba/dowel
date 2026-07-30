@@ -179,7 +179,24 @@ dowel schema dump                    # the schema and configuration vocabulary, 
 - The output of `dowel schema dump` is also intended as context for LLM agents
   ([30-devexp.md](30-devexp.md) section 4)
 
-## 9. Reading diagnostics
+## 9. Verifying a migration
+
+When porting a project from another build system, keep the old system's
+`compile_commands.json` and check the ported targets against it:
+
+```sh
+dowel migrate verify path/to/old/compile_commands.json
+```
+
+Sources are matched one by one and their compile arguments compared after
+normalization (spelling differences like `-DX` vs `-D X`, relative vs
+absolute `-I`, and output/depfile flags don't count). A ported source with
+differing arguments fails the run and lists each difference with its
+direction; sources you haven't ported yet are reported but don't fail —
+migration proceeds target by target. `--format=json` for CI
+([60-cli.md](60-cli.md)).
+
+## 10. Reading diagnostics
 
 - Human output uses the rustc format: severity, a stable code, location
   labels, notes, and fix suggestions

@@ -276,6 +276,18 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
 - `stable` cannot resolve until a release tag appears upstream. Prebuilt
   binary distribution is not started (Q10)
 
+### Migration (`dowel-build`)
+
+- `dowel migrate verify <compile_commands.json>` compares a reference
+  compile database against the plan, source by source, after normalization
+  (`-DX` ≡ `-D X` ≡ `-DX=1`; `-I` resolved against each entry's
+  `directory`; compiler name, `-c`/`-o`, and the `-MD` family ignored;
+  remaining flags as a multiset). Differing ported sources fail the run;
+  unported sources are reported without failing — porting is incremental
+  (docs/40-migration.md 4)
+- Both reference forms are read (`arguments` array and shell-quoted
+  `command` string). Output is text or `--format=json`
+
 ### Scaffolding (`dowel-cli`)
 
 - `dowel new <path>` generates a working `bin` package, or a library with a
@@ -342,16 +354,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (390 tests):
+Current breakdown (395 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 255 |
+| `unit-*` | per-crate unit tests | 259 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 52 |
+| `e2e` | compile real C and C++, run it, check the output | 53 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -422,7 +434,7 @@ cannot be measured with the current fixtures; the scale fixture
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
 | the probe-fact DB | Phase 2 |
 | the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
-| migration (`migrate verify` / `import`) | Phase 3 |
+| `migrate import` (drafting manifests from the CMake File API) | Phase 3; `migrate verify` is implemented |
 | `dowel debug` | Phase 4 |
 | cross-file language-server diagnostics | Phase 4; per-file diagnostics are implemented (`dowel_lsp::UNSUPPORTED`) |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |

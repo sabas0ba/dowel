@@ -5,6 +5,7 @@ pub mod compdb;
 pub mod dump;
 pub mod exec;
 pub mod glob;
+pub mod migrate;
 pub mod ninja;
 pub mod plan;
 pub mod testing;

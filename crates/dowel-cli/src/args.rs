@@ -27,6 +27,8 @@ Commands:
     why <target> <property>
                        Show how a value reached a target.
     graph              Dump the dependency graph or the action graph.
+    migrate verify <compile_commands.json>
+                       Compare a reference compile database with dowel's plan.
     schema dump        Print the schema and configuration vocabulary in machine-readable form.
     cache info         Report the size and record count of the on-disk store.
     cache gc           Remove stores left by older formats.
@@ -77,6 +79,9 @@ graph options:
 why options:
         --format <fmt>       text | json (default: text)
 
+migrate verify options:
+        --format <fmt>       text | json (default: text)
+
 Examples:
     dowel check --message-format=json
     dowel graph --kind=action --format=dot | dot -Tsvg -o actions.svg
@@ -109,6 +114,10 @@ pub enum Command {
         property: String,
     },
     Graph,
+    /// 参照の compile_commands.json と計画の等価性検査（docs/40-migration.md 4節）
+    MigrateVerify {
+        reference: String,
+    },
     SchemaDump,
     CacheInfo,
     CacheGc,
@@ -207,7 +216,7 @@ pub enum Parsed {
 }
 
 const COMMANDS: &[&str] =
-    &["new", "add", "check", "build", "test", "why", "graph", "schema", "cache", "lsp"];
+    &["new", "add", "check", "build", "test", "why", "graph", "migrate", "schema", "cache", "lsp"];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -421,6 +430,15 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             }
             Command::Why { target: positional[0].clone(), property: positional[1].clone() }
         }
+        "migrate" => match positional.as_slice() {
+            [sub, reference] if sub == "verify" => {
+                Command::MigrateVerify { reference: reference.clone() }
+            }
+            [sub] if sub == "verify" => {
+                return Err("`migrate verify` takes the reference: <compile_commands.json>".into())
+            }
+            _ => return Err("write `migrate verify <compile_commands.json>`".into()),
+        },
         "cache" => match positional.first().map(|s| s.as_str()) {
             Some("info") => Command::CacheInfo,
             Some("gc") => Command::CacheGc,
