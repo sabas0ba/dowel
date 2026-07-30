@@ -260,6 +260,40 @@ The report has four buckets:
 Exit status is nonzero only when a ported source differs. `--format=json`
 prints the same report as one JSON object on stdout.
 
+## `dowel migrate import`
+
+```
+dowel migrate import <cmake-build-dir>
+```
+
+Drafts `dowel.toml` / `dowel.build` from a CMake File API reply
+(`codemodel-v2`), writing them **into the CMake source directory** — next to
+the code they describe. Existing manifests are never overwritten. To make
+CMake produce the reply:
+
+```sh
+mkdir -p build/.cmake/api/v1/query && touch build/.cmake/api/v1/query/codemodel-v2
+cmake -B build ...
+dowel migrate import build
+```
+
+The output is a draft, not a finished artifact
+([40-migration.md](40-migration.md) section 3): it is a snapshot of one
+configuration, conditionals are lost, and the public/private intent of
+includes and defines is unknowable from the File API — everything lands in
+`private` blocks, and sources are listed explicitly rather than globbed.
+Each generated file opens with an **UNVERIFIED DRAFT** header that says so
+and points at the follow-up:
+
+```sh
+dowel migrate verify <old-build>/compile_commands.json
+```
+
+Mapping: `EXECUTABLE` → `bin`; `STATIC_LIBRARY` / `OBJECT_LIBRARY` (and,
+with a note, `SHARED_LIBRARY`) → `lib`; in-project `dependencies` →
+`target(...)`; external `-l...` libraries → `link_flags`; includes outside
+the source tree → `-I` flags. Target names are mapped to valid identifiers.
+
 ## `dowel schema dump`
 
 ```

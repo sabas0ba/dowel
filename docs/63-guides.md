@@ -192,14 +192,24 @@ dowel schema dump                    # the schema and configuration vocabulary, 
 - The output of `dowel schema dump` is also intended as context for LLM agents
   ([30-devexp.md](30-devexp.md) section 4)
 
-## 9. Verifying a migration
+## 9. Migrating from CMake
 
-When porting a project from another build system, keep the old system's
-`compile_commands.json` and check the ported targets against it:
+Start from a draft extracted out of the real configuration, then keep
+checking against the old build until the port is equivalent:
 
 ```sh
-dowel migrate verify path/to/old/compile_commands.json
+# 1. have CMake emit its model, and draft manifests from it
+mkdir -p build/.cmake/api/v1/query && touch build/.cmake/api/v1/query/codemodel-v2
+cmake -B build ...
+dowel migrate import build       # writes UNVERIFIED dowel.toml / dowel.build
+
+# 2. edit the draft (promote public headers, restore conditionals), then
+dowel migrate verify build/compile_commands.json
 ```
+
+The draft is deliberately conservative — everything private, sources listed
+explicitly — because it is a snapshot of one configuration and the intent is
+lost ([60-cli.md](60-cli.md)).
 
 Sources are matched one by one and their compile arguments compared after
 normalization (spelling differences like `-DX` vs `-D X`, relative vs

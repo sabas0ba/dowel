@@ -8,6 +8,7 @@
 //! これにより `dowel graph --format=dot | dot -Tsvg` がログ水準に関わらず動く。
 
 mod args;
+mod import;
 mod scaffold;
 
 use args::{Command, GraphKind, MessageFormat, Options, OutFormat, Parsed};
@@ -80,6 +81,11 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         eprintln!("removed {removed} store(s) left by older formats");
         return Ok(ExitCode::SUCCESS);
     }
+    // 下書きの生成はマニフェストを要さない。読むのは CMake の reply である。
+    if let Command::MigrateImport { reply } = &opts.command {
+        import::import(&opts.directory.join(reply))?;
+        return Ok(ExitCode::SUCCESS);
+    }
     // 雛型の生成もマニフェストを要さない（`add` は自分で読む）。
     if let Command::New { path } = &opts.command {
         scaffold::new_package(&opts.directory.join(path), opts.lib)?;
@@ -136,7 +142,8 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         | Command::CacheGc
         | Command::Lsp
         | Command::New { .. }
-        | Command::Add { .. } => {
+        | Command::Add { .. }
+        | Command::MigrateImport { .. } => {
             unreachable!("handled above")
         }
 

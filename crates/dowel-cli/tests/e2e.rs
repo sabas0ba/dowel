@@ -1467,3 +1467,78 @@ fn migrate_verify_compares_against_a_reference_compdb() {
     r.stdout_contains("\"equivalent\"");
     r.stdout_contains("\"unported\"");
 }
+
+/// `migrate import`。CMake File API の reply から下書きを生成し、
+/// そのままビルド・実行できることまで確かめる。
+///
+/// reply は手書きのフィクスチャで持つ。cmake の実行を要さず、
+/// File API の形式（安定な JSON）に対する検査として十分である。
+#[test]
+fn migrate_import_drafts_manifests_from_a_cmake_reply() {
+    let p = Project::new("cmake-import");
+    let src = p.path(".").display().to_string();
+    p.write("lib/len.h", "#pragma once\nint len_of(const char *s);\n");
+    p.write(
+        "lib/len.c",
+        "#include \"len.h\"\nint len_of(const char *s) { int n = 0; while (s[n]) n++; return n + LIMIT - LIMIT; }\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"len.h\"\nint main(void) { printf(\"n=%d\\n\", len_of(\"abcd\")); return 0; }\n",
+    );
+
+    let reply = "build/.cmake/api/v1/reply";
+    p.write(
+        &format!("{reply}/codemodel-v2-0000.json"),
+        &format!(
+            r#"{{"configurations": [{{"name": "Debug",
+                 "projects": [{{"name": "demo"}}],
+                 "targets": [{{"name": "len", "jsonFile": "target-len.json"}},
+                             {{"name": "app", "jsonFile": "target-app.json"}}]}}],
+                "paths": {{"source": "{src}", "build": "{src}/build"}}}}"#
+        ),
+    );
+    p.write(
+        &format!("{reply}/target-len.json"),
+        &format!(
+            r#"{{"name": "len", "type": "STATIC_LIBRARY",
+                "sources": [{{"path": "lib/len.c"}}, {{"path": "lib/len.h"}}],
+                "compileGroups": [{{"language": "C",
+                    "defines": [{{"define": "LIMIT=64"}}],
+                    "includes": [{{"path": "{src}/lib"}}],
+                    "compileCommandFragments": [{{"fragment": "-Wall"}}]}}]}}"#
+        ),
+    );
+    p.write(
+        &format!("{reply}/target-app.json"),
+        &format!(
+            r#"{{"name": "app", "type": "EXECUTABLE",
+                "sources": [{{"path": "src/main.c"}}],
+                "compileGroups": [{{"language": "C",
+                    "includes": [{{"path": "{src}/lib"}}]}}],
+                "dependencies": [{{"id": "len::@6890427a1f51a3e7e1df"}}],
+                "link": {{"commandFragments": [{{"role": "libraries", "fragment": "-lm"}}]}}}}"#
+        ),
+    );
+
+    let r = p.run(".", &["migrate", "import", "build"]);
+    r.success();
+    r.stderr_contains("imported 2 target(s)");
+    r.stderr_contains("UNVERIFIED");
+
+    // 生成物は未検証の印を持ち、意図の欠落と検証の導線を説明する。
+    let build_file = std::fs::read_to_string(p.path("dowel.build")).unwrap();
+    assert!(build_file.contains("UNVERIFIED DRAFT"), "{build_file}");
+    assert!(build_file.contains("migrate verify"), "{build_file}");
+
+    // 下書きはそのまま計画・ビルド・実行まで通る。
+    p.run(".", &["check"]).success();
+    p.run(".", &["build"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "n=4\n");
+
+    // 既存のマニフェストは上書きしない。
+    let again = p.run(".", &["migrate", "import", "build"]);
+    again.failure();
+    assert!(again.stderr.contains("already exists"), "{again}");
+}

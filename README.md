@@ -69,9 +69,10 @@ anywhere in its closure uses the C++ driver. Runners for cross execution
 and the language server (diagnostics and hover) all work.
 
 The main things not implemented yet: registry dependencies and `dowel.lock`
-(local `path` and sha-pinned `git` dependencies work), `dowel debug`, and
-`migrate import` (`migrate verify` — the equivalence check against an
-existing build system's compile database — works). See
+(local `path` and sha-pinned `git` dependencies work), and `dowel debug`.
+Migration from CMake works: `migrate import` drafts manifests from the File
+API and `migrate verify` checks them against the old build's compile
+database. See
 [docs/91-implementation-status.md](docs/91-implementation-status.md) for the
 full list and measurements, and [docs/90-roadmap.md](docs/90-roadmap.md) for
 the implementation plan.
