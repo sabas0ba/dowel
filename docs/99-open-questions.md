@@ -84,8 +84,10 @@ Options:
 - Fail and require fixes
 - Mark extracted output "unverified" and enable verification incrementally
 
-The third is favored, but the granularity of the mark and the conditions for
-clearing it are undecided.
+The third is favored. The current implementation carries the mark as an
+UNVERIFIED header comment on the generated files (human-facing, pointing at
+`migrate verify`); whether a machine-readable mark should gate verification
+per target — and what clears it — remains undecided.
 
 ## Q7. C++20 modules
 

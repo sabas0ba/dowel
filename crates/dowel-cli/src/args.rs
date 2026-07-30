@@ -29,6 +29,8 @@ Commands:
     graph              Dump the dependency graph or the action graph.
     migrate verify <compile_commands.json>
                        Compare a reference compile database with dowel's plan.
+    migrate import <cmake-build-dir>
+                       Draft manifests from a CMake File API reply (unverified).
     schema dump        Print the schema and configuration vocabulary in machine-readable form.
     cache info         Report the size and record count of the on-disk store.
     cache gc           Remove stores left by older formats.
@@ -117,6 +119,10 @@ pub enum Command {
     /// 参照の compile_commands.json と計画の等価性検査（docs/40-migration.md 4節）
     MigrateVerify {
         reference: String,
+    },
+    /// CMake File API からの下書き生成（import.rs）
+    MigrateImport {
+        reply: String,
     },
     SchemaDump,
     CacheInfo,
@@ -434,10 +440,19 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             [sub, reference] if sub == "verify" => {
                 Command::MigrateVerify { reference: reference.clone() }
             }
+            [sub, reply] if sub == "import" => Command::MigrateImport { reply: reply.clone() },
             [sub] if sub == "verify" => {
                 return Err("`migrate verify` takes the reference: <compile_commands.json>".into())
             }
-            _ => return Err("write `migrate verify <compile_commands.json>`".into()),
+            [sub] if sub == "import" => {
+                return Err("`migrate import` takes the CMake build (or reply) directory".into())
+            }
+            _ => {
+                return Err(
+                    "write `migrate verify <compile_commands.json>` or `migrate import <dir>`"
+                        .into(),
+                )
+            }
         },
         "cache" => match positional.first().map(|s| s.as_str()) {
             Some("info") => Command::CacheInfo,

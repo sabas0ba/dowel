@@ -294,6 +294,14 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   (docs/40-migration.md 4)
 - Both reference forms are read (`arguments` array and shell-quoted
   `command` string). Output is text or `--format=json`
+- `dowel migrate import <cmake-build-dir>` drafts `dowel.toml` /
+  `dowel.build` into the CMake source directory from a File API
+  `codemodel-v2` reply, refusing to overwrite. The draft is marked
+  **UNVERIFIED** in a header comment (the favored shape of Q6; a machine
+  gate on unverified targets remains open) and points at `migrate verify`.
+  Everything lands in `private` blocks — the public/private intent is
+  unknowable from the File API — and sources are listed explicitly, not
+  globbed, so the draft stays faithful to the extracted projection
 
 ### Scaffolding (`dowel-cli`)
 
@@ -361,16 +369,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (397 tests):
+Current breakdown (401 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 261 |
+| `unit-*` | per-crate unit tests | 264 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 53 |
+| `e2e` | compile real C and C++, run it, check the output | 54 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -441,7 +449,7 @@ cannot be measured with the current fixtures; the scale fixture
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
 | the probe-fact DB | Phase 2 |
 | the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
-| `migrate import` (drafting manifests from the CMake File API) | Phase 3; `migrate verify` is implemented |
+| Meson `introspect` import | Phase 3 backlog; CMake File API import and `migrate verify` are implemented |
 | `dowel debug` | Phase 4 |
 | plan-stage language-server diagnostics (glob expansion, path resolution, toolchain probing) | Phase 4; model-stage cross-file diagnostics are implemented, the rest is listed in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
