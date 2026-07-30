@@ -289,6 +289,20 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
 - `stable` cannot resolve until a release tag appears upstream. Prebuilt
   binary distribution is not started (Q10)
 
+### Scaffolding (`dowel-cli`)
+
+- `dowel new <path>` generates a working `bin` package, or a library with a
+  passing test target under `--lib`. The skeletons match `examples/hello`,
+  and e2e builds and runs every generated form, so they cannot silently rot
+- `dowel add <path>` creates a library package in a subdirectory and appends
+  the `[[dependencies]]` entry to `dowel.toml` (an append preserves the
+  existing text; array-table position carries no meaning in strict TOML).
+  Wiring `deps = [dep("...")]` into a target stays explicit — the command
+  prints the line to add
+- `dowel add --git <url> [--rev <rev>]` declares a git dependency. The
+  manifest only receives a full 40-digit sha: a name (or omitted rev = HEAD)
+  is resolved once via `git ls-remote`, the same judgment as `dowelup pin`
+
 ### Diagnostics and logging
 
 - Severity, stable codes, multiple labels, notes, mechanically applicable fix
@@ -341,16 +355,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (383 tests):
+Current breakdown (390 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 252 |
+| `unit-*` | per-crate unit tests | 255 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 48 |
+| `e2e` | compile real C and C++, run it, check the output | 52 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

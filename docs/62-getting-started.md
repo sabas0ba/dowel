@@ -45,9 +45,19 @@ dowel test                       # build and run the test targets
 
 ## 3. Create a minimal project
 
-Two files are required: `dowel.toml` (package information; strict TOML read
-and written by machines) and `dowel.build` (target definitions; written by
-humans). The reasons for the split are in [10-manifest.md](10-manifest.md).
+```sh
+dowel new myapp
+cd myapp
+dowel build
+./.dowel/build/*/bin/myapp
+```
+
+`dowel new` scaffolds a working `bin` package (`--lib` for a library, which
+comes with a passing `dowel test` target). What it generates is exactly the
+minimal form below — two files plus a source. `dowel.toml` holds package
+information (strict TOML read and written by machines) and `dowel.build`
+holds target definitions (written by humans); the reasons for the split are
+in [10-manifest.md](10-manifest.md).
 
 ```
 myapp/
@@ -85,6 +95,16 @@ Deleting `.dowel/` is always safe: correctness is never lost, only the cached
 speedup (see the store section of [60-cli.md](60-cli.md)).
 
 ## 4. Split out a library and depend on it
+
+```sh
+dowel add libs/util                       # scaffold a library and declare the dependency
+dowel add --git https://github.com/x/y    # declare a git dependency, pinned to HEAD's sha
+```
+
+`dowel add` creates a library package in a subdirectory (or, with `--git`,
+declares an external repository pinned to a full commit sha) and appends the
+`[[dependencies]]` entry to your `dowel.toml`; wiring it into a target
+(below) stays your choice, and the command prints the exact line to add.
 
 Dependencies between packages are declared in `dowel.toml` — as a local
 `path`, or as a `git` URL pinned to a full commit sha

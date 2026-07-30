@@ -18,6 +18,9 @@ Usage:
     dowel <command> [options]
 
 Commands:
+    new <path>         Create a package in a new directory (default: bin; --lib for a library).
+    add <path>         Create a lib package in a subdirectory and declare it as a path dependency.
+                       With --git <url>, declare a pinned git dependency instead.
     check              Evaluate the manifests and report diagnostics. Does not build.
     build [target]     Build. With no target, builds every bin and test.
     test [target]      Build and run test targets. With no target, runs every test.
@@ -45,6 +48,15 @@ Common options:
         --color <when>       auto | always | never
     -h, --help               Show this help
     -V, --version            Show the version
+
+new options:
+        --lib                Generate a library package instead of an executable
+
+add options:
+        --git <url>          Declare a git dependency instead of scaffolding a package
+        --rev <rev>          Commit sha to pin. A name (or, when omitted, HEAD) is
+                             resolved once via `git ls-remote`; only the sha is written
+        --name <name>        Dependency name (default: the last path or URL component)
 
 build options:
         --executor <name>    ninja | direct (default: ninja when available)
@@ -76,6 +88,15 @@ Examples:
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Command {
+    /// 雛型の生成（scaffold.rs）
+    New {
+        path: String,
+    },
+    /// サブパッケージの追加と `dowel.toml` への配線（scaffold.rs）。
+    /// `--git` の宣言だけを行う形では位置引数を取らない
+    Add {
+        path: Option<String>,
+    },
     Check,
     Build {
         targets: Vec<String>,
@@ -118,6 +139,14 @@ pub enum OutFormat {
 pub struct Options {
     pub command: Command,
     pub directory: PathBuf,
+    /// `new` がライブラリの雛型を作るか
+    pub lib: bool,
+    /// `add --git <url>`
+    pub git: Option<String>,
+    /// `add --rev <rev>`
+    pub rev: Option<String>,
+    /// `add --name <name>`
+    pub dep_name: Option<String>,
     pub config: String,
     pub target: Option<String>,
     pub features: Vec<String>,
@@ -144,6 +173,10 @@ impl Default for Options {
         Options {
             command: Command::Check,
             directory: PathBuf::from("."),
+            lib: false,
+            git: None,
+            rev: None,
+            dep_name: None,
             config: "debug".into(),
             target: None,
             features: Vec::new(),
@@ -173,7 +206,8 @@ pub enum Parsed {
     Version,
 }
 
-const COMMANDS: &[&str] = &["check", "build", "test", "why", "graph", "schema", "cache", "lsp"];
+const COMMANDS: &[&str] =
+    &["new", "add", "check", "build", "test", "why", "graph", "schema", "cache", "lsp"];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -217,6 +251,10 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
 
         match name.as_str() {
             "-C" | "--directory" => opts.directory = PathBuf::from(take("--directory")?),
+            "--lib" => opts.lib = true,
+            "--git" => opts.git = Some(take("--git")?),
+            "--rev" => opts.rev = Some(take("--rev")?),
+            "--name" => opts.dep_name = Some(take("--name")?),
             "--config" => opts.config = take("--config")?,
             "--target" => opts.target = Some(take("--target")?),
             "--features" => {
@@ -307,6 +345,10 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             other if other.starts_with('-') => {
                 let known = [
                     "--directory",
+                    "--lib",
+                    "--git",
+                    "--rev",
+                    "--name",
                     "--config",
                     "--target",
                     "--features",
@@ -359,6 +401,15 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
 
     let Some(cmd) = command else { return Ok(Parsed::Help) };
     opts.command = match cmd.as_str() {
+        "new" => match positional.as_slice() {
+            [path] => Command::New { path: path.clone() },
+            _ => return Err("`new` takes one argument: <path>".into()),
+        },
+        "add" => match positional.as_slice() {
+            [] => Command::Add { path: None },
+            [path] => Command::Add { path: Some(path.clone()) },
+            _ => return Err("`add` takes at most one argument: <path>".into()),
+        },
         "check" => Command::Check,
         "build" => Command::Build { targets: positional },
         "test" => Command::Test { targets: positional },
@@ -462,6 +513,30 @@ mod tests {
     #[test]
     fn no_arguments_prints_help() {
         assert!(matches!(parse(Vec::<String>::new()).unwrap(), Parsed::Help));
+    }
+
+    #[test]
+    fn new_takes_a_path_and_the_lib_flag() {
+        let o = run(&["new", "myapp"]).unwrap();
+        assert_eq!(o.command, Command::New { path: "myapp".into() });
+        assert!(!o.lib);
+        assert!(run(&["new", "mylib", "--lib"]).unwrap().lib);
+        assert!(run(&["new"]).is_err(), "`new` requires a path");
+        assert!(run(&["new", "a", "b"]).is_err(), "`new` takes exactly one path");
+    }
+
+    #[test]
+    fn add_takes_a_path_or_a_git_url() {
+        let o = run(&["add", "libs/util"]).unwrap();
+        assert_eq!(o.command, Command::Add { path: Some("libs/util".into()) });
+
+        // `--git` の形は位置引数を取らない。組み合わせの検証は起動側にある。
+        let o =
+            run(&["add", "--git", "https://example.com/x", "--rev", "abc", "--name", "x"]).unwrap();
+        assert_eq!(o.command, Command::Add { path: None });
+        assert_eq!(o.git.as_deref(), Some("https://example.com/x"));
+        assert_eq!(o.rev.as_deref(), Some("abc"));
+        assert_eq!(o.dep_name.as_deref(), Some("x"));
     }
 
     #[test]

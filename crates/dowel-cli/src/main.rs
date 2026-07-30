@@ -8,6 +8,7 @@
 //! これにより `dowel graph --format=dot | dot -Tsvg` がログ水準に関わらず動く。
 
 mod args;
+mod scaffold;
 
 use args::{Command, GraphKind, MessageFormat, Options, OutFormat, Parsed};
 use dowel_build::{compdb, exec, plan as build_plan, testing};
@@ -79,6 +80,29 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         eprintln!("removed {removed} store(s) left by older formats");
         return Ok(ExitCode::SUCCESS);
     }
+    // 雛型の生成もマニフェストを要さない（`add` は自分で読む）。
+    if let Command::New { path } = &opts.command {
+        scaffold::new_package(&opts.directory.join(path), opts.lib)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Command::Add { path } = &opts.command {
+        match (&opts.git, path) {
+            (Some(url), None) => scaffold::add_git_dependency(
+                &opts.directory,
+                url,
+                opts.rev.as_deref(),
+                opts.dep_name.as_deref(),
+            )?,
+            (None, Some(rel)) => {
+                scaffold::add_package(&opts.directory, rel, opts.dep_name.as_deref())?
+            }
+            (Some(_), Some(_)) => {
+                return Err("`add` takes either <path> or `--git <url>`, not both".into())
+            }
+            (None, None) => return Err("write `add <path>` or `add --git <url>`".into()),
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
 
     // 機能フラグの選択は読み込みより前に要る。有効でない任意の依存は
     // 読み込まないため（docs/10-manifest.md）。
@@ -107,7 +131,12 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     sess.diagnostics.extend(idiags);
 
     match &opts.command {
-        Command::SchemaDump | Command::CacheInfo | Command::CacheGc | Command::Lsp => {
+        Command::SchemaDump
+        | Command::CacheInfo
+        | Command::CacheGc
+        | Command::Lsp
+        | Command::New { .. }
+        | Command::Add { .. } => {
             unreachable!("handled above")
         }
 
