@@ -1426,3 +1426,44 @@ fn add_git_declares_a_pinned_dependency() {
     assert!(manifest.contains("name = \"remote\""), "{manifest}");
     assert!(manifest.contains(&format!("rev  = \"{rev}\"")), "resolved HEAD differs\n{manifest}");
 }
+
+/// `migrate verify`。参照の compile_commands.json と計画の等価性を検査する。
+///
+/// dowel 自身の出力を参照に使えば完全一致になる（正規化の恒等性）。
+/// 参照側の define を変えると、そのソースが差分として名指しされる。
+/// 未移植（参照側にだけあるソース）は報告されるが失敗にはしない。
+#[test]
+fn migrate_verify_compares_against_a_reference_compdb() {
+    let p = two_package_project("migrate-verify");
+    p.run("app", &["build"]).success();
+    let compdb = std::fs::read_to_string(p.path("app/compile_commands.json")).unwrap();
+
+    // 自分自身とは等価。
+    p.write("ref.json", &compdb);
+    let r = p.run("app", &["migrate", "verify", "../ref.json"]);
+    r.success();
+    r.stdout_contains("2 equivalent, 0 differing, 0 not ported");
+
+    // 参照側の define が違えば、そのソースと引数が名指しされて失敗する。
+    p.write("ref.json", &compdb.replace("-DAPP_OPT=0", "-DAPP_OPT=9"));
+    let r = p.run("app", &["migrate", "verify", "../ref.json"]);
+    r.failure();
+    r.stdout_contains("main.c");
+    r.stdout_contains("-DAPP_OPT=9");
+    r.stdout_contains("(in the reference, not in dowel)");
+
+    // 未移植は途中経過であり、報告はするが失敗にしない。
+    let unported = compdb.trim_end().trim_end_matches(']').to_string()
+        + ",{\"directory\": \"/b\", \"file\": \"/old/legacy.c\", \"arguments\": [\"cc\", \"-c\", \"/old/legacy.c\"]}]";
+    p.write("ref.json", &unported);
+    let r = p.run("app", &["migrate", "verify", "../ref.json"]);
+    r.success();
+    r.stdout_contains("1 not ported");
+    r.stdout_contains("legacy.c");
+
+    // 機械可読の形も出る。
+    let r = p.run("app", &["migrate", "verify", "../ref.json", "--format=json"]);
+    r.success();
+    r.stdout_contains("\"equivalent\"");
+    r.stdout_contains("\"unported\"");
+}

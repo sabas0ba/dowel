@@ -1,7 +1,8 @@
 # Migration from existing build systems
 
-> This is a design document. `dowel migrate verify` / `import` are not
-> implemented ([91-implementation-status.md](91-implementation-status.md)).
+> This is a design document. `dowel migrate verify` is implemented
+> ([60-cli.md](60-cli.md)); `import` is not
+> ([91-implementation-status.md](91-implementation-status.md)).
 
 The decision is [ADR-0005](adr/0005-migration.md). In short: no static
 translation; dynamic extraction only.

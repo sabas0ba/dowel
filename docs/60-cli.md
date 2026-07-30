@@ -228,6 +228,38 @@ Dumps a graph to stdout.
 | `--kind <kind>` | `target` / `action` | `target` | target dependency graph / action graph |
 | `--format <fmt>` | `text` / `dot` / `json` | `text` | output format; `dot` can be fed straight to Graphviz |
 
+## `dowel migrate verify`
+
+```
+dowel migrate verify <compile_commands.json> [--format <text|json>]
+```
+
+Compares a reference compile database — what the existing build system
+actually does — against dowel's plan, source by source
+([13-semantics.md](13-semantics.md); the design is
+[40-migration.md](40-migration.md) section 4). Migration becomes a
+continuous equivalence check instead of a one-shot conversion: "this target
+is ported and produces the same compile arguments" is confirmed
+mechanically.
+
+Commands are normalized before comparison, so equivalent-but-differently-
+spelled commands match: `-D NAME` / `-DNAME` / `-DNAME=1` are the same
+define, `-I` paths are resolved against each entry's `directory`, and the
+compiler name, `-c` / `-o`, and depfile flags (`-MD` family) are ignored.
+Remaining flags are compared as a multiset.
+
+The report has four buckets:
+
+| Bucket | Meaning | Fails the run |
+|---|---|---|
+| equivalent | same source, same normalized arguments | — |
+| differing | same source, different arguments; each difference is listed with its direction | **yes** |
+| not ported | sources only in the reference | no (porting is incremental) |
+| only in dowel | sources only in dowel's plan (tests, new targets) | no |
+
+Exit status is nonzero only when a ported source differs. `--format=json`
+prints the same report as one JSON object on stdout.
+
 ## `dowel schema dump`
 
 ```

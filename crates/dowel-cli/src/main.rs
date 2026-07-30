@@ -162,6 +162,28 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             Ok(exit_code(failed))
         }
 
+        Command::MigrateVerify { reference } => {
+            // 参照は既存システムの compile_commands.json。dowel の計画を
+            // 全ターゲットで立て、正規化した引数を突き合わせる
+            // （docs/40-migration.md 4節）。未移植は途中経過であり失敗にしない。
+            let text = std::fs::read_to_string(reference)
+                .map_err(|e| format!("cannot read the reference `{reference}`: {e}"))?;
+            let entries = dowel_build::migrate::read_reference(&text)
+                .map_err(|e| format!("cannot use `{reference}`: {e}"))?;
+            let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
+            let (p, pdiags) = build_plan::plan(&sess, &g, &cfg, &all);
+            sess.diagnostics.extend(pdiags);
+            if report(&sess, opts) {
+                return Ok(ExitCode::FAILURE);
+            }
+            let verdict = dowel_build::migrate::compare(&p, &entries);
+            match opts.out_format {
+                OutFormat::Json => println!("{}", dowel_build::migrate::render_json(&verdict)),
+                _ => print!("{}", dowel_build::migrate::render_text(&verdict)),
+            }
+            Ok(exit_code(!verdict.ported_sources_are_equivalent()))
+        }
+
         Command::Graph => {
             if report(&sess, opts) {
                 return Ok(ExitCode::FAILURE);
