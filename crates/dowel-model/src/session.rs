@@ -185,10 +185,8 @@ impl Session {
             deps: Vec::new(),
             features: BTreeMap::new(),
             features_site: None,
-            toolchain_c: None,
-            toolchain_site: None,
-            toolchain_cxx: None,
-            toolchain_cxx_site: None,
+            toolchain: crate::package::ToolchainDecl::default(),
+            toolchains: BTreeMap::new(),
         });
         let strs = |words: &[String]| {
             Value::list(
