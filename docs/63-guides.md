@@ -92,8 +92,18 @@ The per-source breakdown of trace output is in
 
 ## 5. Cross compilation and runners
 
-Declare an execution wrapper per target triple with `[runner.<triple>]`, and
-`dowel test --target=<triple>` launches through the wrapper transparently.
+Declare the toolchain per target triple with `[toolchain.<triple>]` in
+`dowel.toml`, and an execution wrapper with `[runner.<triple>]` in
+`dowel.build`. `dowel build --target=<triple>` compiles with the declared
+toolchain, and `dowel test --target=<triple>` launches through the wrapper
+transparently. A `--target` with no declared toolchain is refused before
+building (`missing-toolchain`) — the host compiler is never substituted.
+
+```toml
+# dowel.toml
+[toolchain.riscv64gc-unknown-linux-gnu]
+c = "riscv64-linux-gnu-gcc"
+```
 
 qemu:
 

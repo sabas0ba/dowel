@@ -160,6 +160,37 @@ fn touching_a_header_triggers_recompilation() {
 }
 
 #[test]
+fn a_header_change_is_seen_after_building_with_the_other_executor() {
+    // issue #41: ninja で組んだツリーを direct で組み直す。依存の記録が
+    // 実行器の実装詳細に畳まれていると、ヘッダの変更が黙って見落とされ、
+    // 古い成果物が残る。
+    let p = two_package_project("cross-executor-header");
+    p.run("app", &["build"]).success(); // 既定の ninja
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
+
+    p.write(
+        "libfoo/src/internal.h",
+        "#pragma once\n#define FOO_BIAS 100\nstatic inline int bias(void) { return FOO_BIAS; }\n",
+    );
+    let r = p.run("app", &["build", "--executor=direct", "--log-level=trace"]);
+    r.success();
+    assert!(!r.stderr.contains("ran 0 actions"), "the header change did not propagate\n{r}");
+    assert_eq!(run_artifact(&bin), "sum=105 opt=0 api=1\n");
+}
+
+#[test]
+fn the_artifact_is_up_to_date_after_crossing_executors() {
+    // issue #41 の裏面。何も変えずに実行器を替えただけなら、全てを
+    // 作り直すのではなく最新と判定される。依存の記録（depfile）が
+    // 実行器を跨いで残っていることの検査である。
+    let p = two_package_project("cross-executor-clean");
+    p.run("app", &["build"]).success(); // 既定の ninja
+    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
+    r.success().stderr_contains("ran 0 actions");
+}
+
+#[test]
 fn writes_compile_commands() {
     let p = two_package_project("compdb");
     p.run("app", &["build"]).success();
@@ -779,17 +810,109 @@ fn without_a_runner_a_foreign_target_is_refused_before_launching() {
     // 起動後では `Exec format error` になり、構成の誤りが
     // テストの失敗として報告される。
     let p = Project::new("runner-missing");
-    p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");
+    // ツールチェーンの宣言が無いトリプルは、ビルドより前に拒まれる（issue #42）。
+    // ここで見たいのはランナーの検査なので、ホストのコンパイラを
+    // そのトリプル向けとして宣言し、ビルドは通す。
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n\n\
+         [toolchain.riscv64gc-unknown-linux-gnu]\nc = \"cc\"\n",
+    );
     p.write("dowel.build", "[test.t]\nsources = glob(\"*.c\")\n");
     p.write("t.c", "int main(void) { return 0; }\n");
 
-    // ビルドはホストのコンパイラで通るが、起動は拒まれる。
+    // ビルドは宣言されたコンパイラで通るが、起動は拒まれる。
     let r = p.run(".", &["test", "--target=riscv64gc-unknown-linux-gnu", "--no-run"]);
     r.success();
     let r = p.run(".", &["test", "--target=riscv64gc-unknown-linux-gnu"]);
     r.failure();
     r.stderr_contains("missing-runner");
     r.stderr_contains("riscv64gc-unknown-linux-gnu");
+}
+
+// --- ターゲットごとのツールチェーン（issue #42）---------------------------
+
+#[test]
+fn a_target_without_a_declared_toolchain_is_refused_before_building() {
+    // ホストのコンパイラで組んで別トリプルの名前を付けると、誤りは
+    // qemu の `Invalid ELF image` などとして1段あとに現れる。
+    // 宣言が無いことを、組む前に宣言の不足として述べる。
+    let p = Project::new("toolchain-missing");
+    p.write("dowel.toml", "[package]\nname    = \"t\"\nversion = \"0.1.0\"\n");
+    p.write("dowel.build", "[bin.t]\nsources = glob(\"*.c\")\n");
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["build", "--target=riscv64gc-unknown-linux-gnu"]);
+    r.failure();
+    r.stderr_contains("missing-toolchain");
+    r.stderr_contains("riscv64gc-unknown-linux-gnu");
+    // 何も組まれていないこと。
+    assert!(
+        !p.path(".dowel").join("build").exists(),
+        "artifacts were produced for a refused target"
+    );
+}
+
+#[test]
+fn a_toolchain_declared_for_the_target_triple_is_used() {
+    // `[toolchain.<triple>]` が `--target` に追随することを、宣言した
+    // コンパイラが実際に呼ばれることで確かめる。本物のクロスコンパイラを
+    // 要求せず、呼ばれたことを記録するラッパを使う。
+    let p = Project::new("toolchain-cross");
+    let marker = p.path("cc-was-called");
+    let wrapper = p.path("fake-cc");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ntouch {}\nexec cc \"$@\"\n", marker.display()))
+        .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // 無印の `[toolchain]` も並べ、別トリプルのビルドがそちらへ
+    // 落ちないこと（そして mismatch 警告が出ないこと）を同時に見る。
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"t\"\nversion = \"0.1.0\"\n\n\
+             [toolchain]\nc = \"cc\"\n\n\
+             [toolchain.riscv64gc-unknown-linux-gnu]\nc = \"{}\"\n",
+            wrapper.display()
+        ),
+    );
+    p.write("dowel.build", "[bin.t]\nsources = glob(\"*.c\")\n");
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["build", "--target=riscv64gc-unknown-linux-gnu"]);
+    r.success();
+    assert!(marker.exists(), "the declared cross toolchain was not invoked\n{r}");
+    assert!(
+        !r.stderr.contains("toolchain-mismatch"),
+        "the host declaration was compared against the cross build\n{r}"
+    );
+    // 成果物はそのトリプルの名前のディレクトリに置かれる。
+    let bin = p.path(".dowel/build/riscv64gc-unknown-linux-gnu-debug/bin/t");
+    assert!(bin.exists(), "the artifact is missing: {}", bin.display());
+}
+
+#[test]
+fn a_target_toolchain_without_a_c_compiler_is_refused() {
+    // トリプル向けの宣言は、そのトリプルのビルド全体を担う。`c` が無いと
+    // C のコンパイルがホストの既定へ落ち、成果物のアーキテクチャが
+    // 黙って食い違う。
+    let p = Project::new("toolchain-no-c");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"t\"\nversion = \"0.1.0\"\n\n\
+         [toolchain.riscv64gc-unknown-linux-gnu]\ncxx = \"c++\"\n",
+    );
+    p.write("dowel.build", "[bin.t]\nsources = glob(\"*.c\")\n");
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("missing-field");
+    r.stderr_contains("has no `c`");
 }
 
 #[test]

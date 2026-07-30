@@ -319,6 +319,15 @@ fn is_up_to_date(action: &Action) -> bool {
 
     let mut inputs: Vec<PathBuf> = action.inputs.clone();
     if let Some(d) = &action.depfile {
+        // depfile が宣言されているのに無い場合、このアクションのヘッダ依存は
+        // 1件も分からない。情報が無い状態で「最新である」と結論すると、
+        // 別の機構（かつての ninja の `deps = gcc` など）が `.d` を畳んだ
+        // ツリーで、ヘッダの変更が黙って見落とされる（issue #41）。
+        // 保守的に組み直し、`.d` を作り直す。
+        if !d.exists() {
+            log_trace!("  stale: no dependency record ({} is missing)", d.display());
+            return false;
+        }
         inputs.extend(read_depfile(d));
     }
     for input in &inputs {

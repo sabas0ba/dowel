@@ -389,7 +389,15 @@ const CASES: &[Case] = &[
     Case {
         code: "missing-runner",
         why: "the target triple is not the host and no runner is declared",
-        files: &[("app/dowel.build", "[test.t]\nsources = glob(\"src/*.c\")\n")],
+        // ツールチェーンは宣言してある。宣言が無いと `missing-toolchain` が
+        // ビルドより前に出て、ランナーの検査まで到達しない（issue #42）。
+        files: &[
+            (
+                "app/dowel.toml",
+                "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain.riscv64gc-unknown-linux-gnu]\nc = \"cc\"\n",
+            ),
+            ("app/dowel.build", "[test.t]\nsources = glob(\"src/*.c\")\n"),
+        ],
         args: &["test", "--target=riscv64gc-unknown-linux-gnu", "--message-format=json"],
     },
     Case {
@@ -448,6 +456,30 @@ const CASES: &[Case] = &[
         files: &[(
             "app/dowel.toml",
             "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain]\nc = \"no-such-compiler-19\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "missing-toolchain",
+        why: "the target triple is not the host and no toolchain is declared",
+        files: &[],
+        args: &["check", "--target=riscv64gc-unknown-linux-gnu", "--message-format=json"],
+    },
+    Case {
+        code: "missing-field",
+        why: "a toolchain declared for a target triple must name its C compiler",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain.riscv64gc-unknown-linux-gnu]\ncxx = \"c++\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "unknown-table",
+        why: "`[toolchain.<triple>]` takes exactly one segment after `toolchain`",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain.riscv64gc-unknown-linux-gnu.extra]\nc = \"cc\"\n",
         )],
         args: CHECK,
     },
@@ -683,6 +715,7 @@ const WITHOUT_LOCATION: &[(&str, &str)] = &[
     ("missing-manifest", "the directory has no `dowel.toml`"),
     // トリプルは `--target` で与えられる。どのマニフェストにも書かれていない。
     ("missing-runner", "the target triple is not the host and no runner is declared"),
+    ("missing-toolchain", "the target triple is not the host and no toolchain is declared"),
 ];
 
 #[test]

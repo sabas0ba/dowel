@@ -441,11 +441,37 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
         // 読み込みの段で解決した集合をそのまま使う。二重に求めると、
         // 「読み込んだ依存」と「有効な機能」が食い違いうる。
         cfg.features = sess.active_features().clone();
-        if let Some(tc) = &root.toolchain_c {
-            cfg.tc_c = tc.clone();
-        }
-        if let Some(tc) = &root.toolchain_cxx {
-            cfg.tc_cxx = tc.clone();
+
+        // ツールチェーンはターゲットトリプルで選ぶ。`[runner.<triple>]` と
+        // 同じ形である。宣言の無いトリプルはここで拒む。ホストのコンパイラで
+        // 組んで別トリプルの名前を付けると、誤りが qemu の
+        // `Invalid ELF image` などとして1段あとに現れる（issue #42）。
+        let host = dowel_eval::config::default_triple();
+        match root.toolchain_for(&cfg.target, &host) {
+            Some(decl) => {
+                if let Some(tc) = &decl.c {
+                    cfg.tc_c = tc.clone();
+                }
+                if let Some(tc) = &decl.cxx {
+                    cfg.tc_cxx = tc.clone();
+                }
+            }
+            None => {
+                let declared: Vec<&str> = root.toolchains.keys().map(|s| s.as_str()).collect();
+                let mut d = Diagnostic::error(
+                    "missing-toolchain",
+                    format!("no toolchain is declared for target `{}`", cfg.target),
+                )
+                .note("building with the host toolchain would produce artifacts for the wrong architecture under this target's name")
+                .note(format!(
+                    "declare one, for example `[toolchain.{}]` with `c = \"...\"` in dowel.toml",
+                    cfg.target
+                ));
+                if !declared.is_empty() {
+                    d = d.note(format!("toolchains are declared for: {}", declared.join(", ")));
+                }
+                diags.push(d);
+            }
         }
     }
     Ok((cfg, diags))
