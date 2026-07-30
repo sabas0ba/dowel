@@ -58,7 +58,7 @@ rev  = "9f3c0a1e2b7d4856c0f1a93e5d2b8c4770ae6135"
 
 [[dependencies]]
 name     = "zlib"
-version  = "1.3"        # not implemented: registry fetching
+version  = "1.3"        # resolved via the system pkg-config
 optional = true
 ```
 
@@ -72,7 +72,7 @@ it with `dep("name")` in `dowel.build` ([12-build-reference.md](12-build-referen
 | `path` | string | a directory containing another dowel package, relative to this `dowel.toml`. The path must exist and contain a manifest (`missing-manifest` otherwise) |
 | `git` | string | a git URL (anything `git` itself accepts, including local paths). Requires `rev`. Fetched once into `.dowel/deps/<name>-<rev12>/`; later runs never touch the network. A failing fetch is `unfetchable-dependency` |
 | `rev` | string | required with `git`: a **full 40-digit commit sha**. Branches, tags, and abbreviated shas are refused with `unpinned-dependency` — a name-only reference does not count as pinned. Because the rev pins the content exactly, git dependencies need no lock file |
-| `version` | string | registry dependencies; recognized but not fetchable yet: `unsupported-dependency` |
+| `version` | string | a system package, resolved through **pkg-config** ([ADR-0015](adr/0015-version-deps-pkgconfig.md)). `name` is the pkg-config module name; the version is a **minimum** (`--atleast-version`). `--cflags` / `--libs` become the dependency's public flags and link flags. Absent module, too-low version, or missing pkg-config: `unsatisfied-dependency`. Resolutions are recorded in `dowel.lock` (below) |
 | `optional` | bool | default `false`. An optional dependency participates only when a feature flag with the same name is enabled. When inactive, neither the edge nor the node exists — the package is not even loaded |
 | `when` | inline table | reserved for conditional dependencies (`when = { os = "windows" }`). Parsed, but **not yet honored** — the dependency is treated as unconditional |
 
@@ -103,10 +103,33 @@ enables (transitively closed, cycle-safe). Values must be arrays of strings
   are read as `feature.<name>` in `when` conditions
   ([12-build-reference.md](12-build-reference.md))
 
+## `dowel.lock`
+
+`path` dependencies are local content and `git` dependencies are pinned by
+their rev, so neither needs locking. `version` dependencies resolve against
+whatever the system has, so each resolution is recorded in `dowel.lock` at
+the workspace root ([ADR-0015](adr/0015-version-deps-pkgconfig.md)):
+
+```toml
+[[package]]
+name    = "zlib"
+version = "1.3.1"
+source  = "pkg-config"
+```
+
+- A resolution with no entry is **appended**
+- A resolution matching its entry is silent
+- A resolution differing from its entry warns with `lockfile-drift` and the
+  file is **never rewritten silently** — delete the entry (or the file) to
+  accept the new resolution
+
+The lock detects drift; it does not restore anything. A system package
+cannot be fetched, so the promise is "you will notice a changed
+environment", not "you will get the same bits".
+
 ## What is deliberately absent
 
 - **No expressions** — enforced, see above
 - **No target definitions** — targets live in `dowel.build`
-- **`dowel.lock`** — not generated yet. The implemented sources need no
-  locking: `path` points at local content, and `git` is pinned to an exact
-  commit sha. A lock file arrives with registry dependencies
+- **No version ranges** — a `version` constraint is a lower bound only;
+  comparison is delegated to pkg-config itself

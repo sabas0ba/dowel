@@ -43,6 +43,14 @@ its targets.
   atomically; because the rev pins the content, later runs reuse the
   checkout without touching the network. Deleting `.dowel/deps` is safe but,
   unlike the cache, rebuilding it needs the network again
+- `version` dependencies resolve during loading through the system
+  pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)): the module
+  must exist and satisfy the declared **minimum** version, and its
+  `--cflags` / `--libs` appear as the public interface of a synthetic
+  library node. Each resolution is reconciled against `dowel.lock` — a
+  changed environment warns with `lockfile-drift` instead of being silently
+  used. Editor sessions skip this: the language server starts no external
+  processes
 
 - Feature flags are resolved first (requested `--features`, plus `default`
   unless `--no-default-features`, transitively closed). An inactive

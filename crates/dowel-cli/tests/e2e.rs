@@ -661,18 +661,18 @@ deps = [target("a"), target("b")]
 }
 
 #[test]
-fn unfetchable_dependencies_are_refused_explicitly() {
-    let p = Project::new("registry-dep");
+fn a_version_dependency_that_pkg_config_cannot_find_is_refused() {
+    let p = Project::new("pkgconfig-missing");
     p.write(
         "dowel.toml",
-        "[package]\nname = \"p\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"zlib\"\nversion = \"1.3\"\n",
+        "[package]\nname = \"p\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"no-such-module-x9dowel\"\nversion = \"1.3\"\n",
     );
     p.write("dowel.build", "[bin.app]\nsources = glob(\"*.c\")\n");
     p.write("main.c", "int main(void) { return 0; }\n");
     let r = p.run(".", &["check"]);
     r.failure();
-    r.stderr_contains("unsupported-dependency");
-    r.stderr_contains("Phase 5");
+    r.stderr_contains("unsatisfied-dependency");
+    r.stderr_contains("pkg-config");
 }
 
 #[test]
@@ -1418,4 +1418,79 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
     let again = p.run(".", &["migrate", "import", "build"]);
     again.failure();
     assert!(again.stderr.contains("already exists"), "{again}");
+}
+
+/// pkg-config で解決する `version` 依存の全経路。
+///
+/// システムのモジュールに依存すると環境で揺れるため、`.pc` と実体の
+/// 静的ライブラリをテスト自身が用意し、`PKG_CONFIG_PATH` で向ける。
+/// `${pcfiledir}` 基点の .pc は場所に依らず成立する。
+#[test]
+fn a_version_dependency_resolves_through_pkg_config_and_locks() {
+    let p = Project::new("pkgconfig-dep");
+    // 「システムパッケージ」の実体を作る。ヘッダ + 静的ライブラリ + .pc。
+    p.write("ext/include/mylib.h", "#pragma once\nint mylib_answer(void);\n");
+    p.write("ext/mylib.c", "int mylib_answer(void) { return 42; }\n");
+    let ext = p.path("ext");
+    let sh = |cmd: &mut std::process::Command| {
+        let out = cmd.current_dir(&ext).output().expect("cannot run the tool");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    sh(std::process::Command::new("cc").args(["-c", "mylib.c", "-o", "mylib.o"]));
+    sh(std::process::Command::new("ar").args(["rcs", "libmylib.a", "mylib.o"]));
+    p.write(
+        "ext/mylib.pc",
+        "Name: mylib\nDescription: test module\nVersion: 2.5.0\n\
+         Cflags: -I${pcfiledir}/include\nLibs: -L${pcfiledir} -lmylib\n",
+    );
+    let pc_path = ext.display().to_string();
+    let env: &[(&str, &str)] = &[("PKG_CONFIG_PATH", &pc_path)];
+
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"mylib\"\nversion = \"2.0\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"mylib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include <mylib.h>\nint main(void) { printf(\"a=%d\\n\", mylib_answer()); return 0; }\n",
+    );
+
+    // 解決 → ビルド → 実行。cflags/libs が伝播していなければ通らない。
+    p.run_env("app", &["build"], env).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "a=42\n");
+
+    // 解決結果が dowel.lock に記録される。
+    let lock = std::fs::read_to_string(p.path("app/dowel.lock")).unwrap();
+    assert!(lock.contains("name    = \"mylib\""), "{lock}");
+    assert!(lock.contains("version = \"2.5.0\""), "{lock}");
+    assert!(lock.contains("source  = \"pkg-config\""), "{lock}");
+
+    // 一致していれば静か。
+    let r = p.run_env("app", &["check"], env);
+    r.success();
+    assert!(!r.stderr.contains("lockfile-drift"), "{r}");
+
+    // 記録と食い違えば警告し、ロックは書き換えない。
+    p.write("app/dowel.lock", &lock.replace("2.5.0", "9.9.9"));
+    let r = p.run_env("app", &["check"], env);
+    r.success();
+    r.stderr_contains("lockfile-drift");
+    r.stderr_contains("9.9.9");
+    let after = std::fs::read_to_string(p.path("app/dowel.lock")).unwrap();
+    assert!(after.contains("9.9.9"), "the lock was rewritten silently\n{after}");
+
+    // 版の下限を満たさなければ失敗する。
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"mylib\"\nversion = \"3.0\"\n",
+    );
+    let r = p.run_env("app", &["check"], env);
+    r.failure();
+    r.stderr_contains("unsatisfied-dependency");
+    r.stderr_contains("does not satisfy >= 3.0");
 }

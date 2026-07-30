@@ -75,6 +75,8 @@ pub struct Session {
     /// git 依存の取得を行うか。エディタからは打鍵ごとにネットワークへ
     /// 触れないよう、取得済みの checkout の再利用だけを行う
     fetch: bool,
+    /// 外部依存の名前 → 合成パッケージ。pkg-config で解決したもの（ADR-0015）
+    externals: BTreeMap<String, PackageId>,
 }
 
 impl Session {
@@ -116,6 +118,7 @@ impl Session {
             max_nesting,
             overlay: BTreeMap::new(),
             fetch: true,
+            externals: BTreeMap::new(),
         };
         sess.walk();
         sess
@@ -146,6 +149,7 @@ impl Session {
             max_nesting: dowel_syntax::MAX_NESTING,
             overlay,
             fetch: false,
+            externals: BTreeMap::new(),
         };
         sess.walk();
         sess
@@ -160,6 +164,64 @@ impl Session {
             }
             None => self.sm.load(path),
         }
+    }
+
+    /// pkg-config で解決した外部依存を、合成パッケージとして繋ぐ。
+    ///
+    /// 実体はソースを持たない `lib` ターゲット1つで、`--cflags` / `--libs` を
+    /// 公開の `flags` / `link_flags` として供給する。専用のノード種別を
+    /// 設けないのは、伝播・併合・`why` の全経路をそのまま通すためである。
+    /// 来歴は `pkg-config(...)` として現れる。
+    fn insert_external(&mut self, name: &str, site: Site, r: &crate::pkgconfig::Resolved) {
+        use dowel_eval::value::{Origin, Prov, Type};
+        let pid = PackageId(self.packages.len());
+        self.packages.push(Package {
+            id: pid,
+            name: name.to_string(),
+            version: r.version.clone(),
+            root: PathBuf::new(),
+            manifest_file: site.file,
+            build_file: None,
+            deps: Vec::new(),
+            features: BTreeMap::new(),
+            features_site: None,
+            toolchain_c: None,
+            toolchain_site: None,
+            toolchain_cxx: None,
+            toolchain_cxx_site: None,
+        });
+        let strs = |words: &[String]| {
+            Value::list(
+                Type::Str,
+                words
+                    .iter()
+                    .map(|w| {
+                        Value::str(w.clone(), Prov::at(Origin::Call("pkg-config".into()), site))
+                    })
+                    .collect(),
+                Prov::at(Origin::Call("pkg-config".into()), site),
+            )
+        };
+        let mut public = PropMap::new();
+        if !r.cflags.is_empty() {
+            public.insert("flags".to_string(), strs(&r.cflags));
+        }
+        if !r.libs.is_empty() {
+            public.insert("link_flags".to_string(), strs(&r.libs));
+        }
+        let tid = TargetId(self.targets.len());
+        self.targets.push(Target {
+            id: tid,
+            package: pid,
+            kind: TableKind::Lib,
+            name: name.to_string(),
+            site,
+            root: PropMap::new(),
+            public,
+            private: PropMap::new(),
+        });
+        self.externals.insert(name.to_string(), pid);
+        log_debug!("external dependency `{name}` {} via pkg-config", r.version);
     }
 
     /// 有効な機能フラグ。根の `[features]` から解決したもの。
@@ -179,6 +241,7 @@ impl Session {
         self.runners.clear();
         self.by_root.clear();
         self.active.clear();
+        self.externals.clear();
         self.db.reset_stats();
         self.walk();
     }
@@ -291,6 +354,29 @@ impl Session {
                             // エディタからは取得しない。checkout が無ければ
                             // 静かに読み飛ばす（CLI が取得と診断を担う）。
                             queue.push((canonical(&d), Some(dep.source_site)));
+                        }
+                    }
+                    // `version` 依存はシステムの pkg-config で解決する（ADR-0015）。
+                    // 解決結果は合成パッケージとして繋ぎ、dowel.lock と突き合わせる。
+                    // エディタからは外部プロセスを起動しない（git と同じ扱い）。
+                    DepKind::PkgConfig { min_version } => {
+                        if self.fetch {
+                            match crate::pkgconfig::resolve(&dep.name, min_version, dep.source_site)
+                            {
+                                Ok(r) => {
+                                    if let Some(d) = crate::lock::reconcile(
+                                        &self.root,
+                                        &dep.name,
+                                        &r.version,
+                                        "pkg-config",
+                                        dep.source_site,
+                                    ) {
+                                        self.diagnostics.push(d);
+                                    }
+                                    self.insert_external(&dep.name, dep.source_site, &r);
+                                }
+                                Err(d) => self.diagnostics.push(*d),
+                            }
                         }
                     }
                     DepKind::Unsupported(_) => {}
@@ -873,6 +959,7 @@ impl Session {
                 .by_root
                 .get(&canonical(&crate::fetch::checkout_dir(&self.root, &dep.name, rev)))
                 .copied(),
+            DepKind::PkgConfig { .. } => self.externals.get(dep_name).copied(),
             DepKind::Unsupported(_) => None,
         }
     }

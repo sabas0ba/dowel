@@ -279,13 +279,15 @@ zlib = ["libz"]
 }
 
 #[test]
-fn dependencies_needing_a_fetch_are_diagnosed_as_unimplemented() {
-    let s = Scratch::new("registry-dep");
+fn version_dependencies_that_pkg_config_cannot_find_are_diagnosed() {
+    // `version` 依存は pkg-config で解決する（ADR-0015）。実在する
+    // モジュール名を使うと環境に依存するため、確実に無い名前で確かめる。
+    let s = Scratch::new("pkgconfig-dep");
     s.write(
         "dowel.toml",
-        "[package]\nname = \"p\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"zlib\"\nversion = \"1.3\"\n",
+        "[package]\nname = \"p\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"no-such-module-x9dowel\"\nversion = \"1.3\"\n",
     );
     s.write("dowel.build", "[bin.a]\nsources = []\n");
     let sess = Session::load(&s.root);
-    assert!(codes(&sess).contains(&"unsupported-dependency"), "{:?}", codes(&sess));
+    assert!(codes(&sess).contains(&"unsatisfied-dependency"), "{:?}", codes(&sess));
 }

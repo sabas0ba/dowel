@@ -157,13 +157,22 @@ changes, only the speed.
 
 ### Model (`dowel-model`)
 
-- Loading multiple packages by following `path` and `git` dependencies
+- Loading multiple packages by following `path`, `git`, and `version`
+  dependencies
 - git dependencies are pinned to a full 40-digit commit sha (anything else
   is `unpinned-dependency`) and fetched once into
   `.dowel/deps/<name>-<rev12>/` by delegating to the `git` command; the
   checkout is placed atomically with a completion marker, and later runs
   never touch the network. Because the rev pins the content exactly, no
   lock file is involved
+- `version` dependencies resolve through the system pkg-config
+  ([ADR-0015](adr/0015-version-deps-pkgconfig.md)): the constraint is a
+  minimum (`--atleast-version`), and `--cflags` / `--libs` become the
+  public flags and link flags of a synthetic external node. Failure is
+  `unsatisfied-dependency`. Each resolution is reconciled against
+  `dowel.lock` — appended when new, silent when matching, `lockfile-drift`
+  (never a silent rewrite) when differing. Editor sessions skip resolution
+  entirely: the LSP starts no external processes
 - Diagnostics for unknown properties and type mismatches against the schema
   (with suggestions)
 - The `interface(T)` / `compile_env(T)` split: `private` dependencies affect
@@ -369,16 +378,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (401 tests):
+Current breakdown (403 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 264 |
+| `unit-*` | per-crate unit tests | 265 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 54 |
+| `e2e` | compile real C and C++, run it, check the output | 55 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (47 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -453,7 +462,7 @@ cannot be measured with the current fixtures; the scale fixture
 | `dowel debug` | Phase 4 |
 | plan-stage language-server diagnostics (glob expansion, path resolution, toolchain probing) | Phase 4; model-stage cross-file diagnostics are implemented, the rest is listed in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
-| registry / tarball dependencies, `dowel.lock` | Phase 5; today `path` and sha-pinned `git` work, neither of which needs a lock |
+| a native registry / tarball dependency source | Phase 5; `version` deps delegate to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and `dowel.lock` records their resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi` |
 | a typed C/C++ standard property (`cxx_std = "c++20"`) | undecided; today the standard is written through `cxx_flags = ["-std=c++20"]`. A typed property would feed the ABI label (Q2) |
