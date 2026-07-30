@@ -69,6 +69,12 @@ pub struct Session {
     active: std::collections::BTreeSet<String>,
     /// 値の入れ子の上限（`--max-nesting`）。既定は `dowel_syntax::MAX_NESTING`
     max_nesting: usize,
+    /// エディタの緩衝。ここに在るパスはディスクより優先して読む。
+    /// 保存されていない内容で解析するための経路（docs/20-architecture.md 6節）
+    overlay: BTreeMap<PathBuf, String>,
+    /// git 依存の取得を行うか。エディタからは打鍵ごとにネットワークへ
+    /// 触れないよう、取得済みの checkout の再利用だけを行う
+    fetch: bool,
 }
 
 impl Session {
@@ -108,9 +114,52 @@ impl Session {
             features,
             active: std::collections::BTreeSet::new(),
             max_nesting,
+            overlay: BTreeMap::new(),
+            fetch: true,
         };
         sess.walk();
         sess
+    }
+
+    /// エディタのために読み込む。
+    ///
+    /// 開いている緩衝（`overlay`）がディスクより優先され、正本になる。
+    /// ストアは読みも書きもしない（未保存の内容から得た結果を書かないため —
+    /// docs/20-architecture.md 6節）。git 依存の取得も行わず、取得済みの
+    /// checkout の再利用に留める。打鍵ごとに作って捨てる前提であり、常駐しない。
+    pub fn load_for_editor(root: &Path, overlay: BTreeMap<PathBuf, String>) -> Session {
+        let overlay = overlay.into_iter().map(|(p, t)| (canonical(&p), t)).collect();
+        let mut sess = Session {
+            sm: SourceMap::new(),
+            diagnostics: Vec::new(),
+            packages: Vec::new(),
+            targets: Vec::new(),
+            runners: BTreeMap::new(),
+            by_root: BTreeMap::new(),
+            root: canonical(root),
+            db: Db::new(),
+            inputs: Inputs::new(),
+            previous: Inputs::new(),
+            cache: Rc::new(Cache::disabled()),
+            features: Features::default(),
+            active: std::collections::BTreeSet::new(),
+            max_nesting: dowel_syntax::MAX_NESTING,
+            overlay,
+            fetch: false,
+        };
+        sess.walk();
+        sess
+    }
+
+    /// ファイルを読む。エディタの緩衝が在ればそちらが正本。
+    fn read_source(&mut self, path: &Path) -> std::io::Result<FileId> {
+        match self.overlay.get(path) {
+            Some(text) => {
+                let text = text.clone();
+                Ok(self.sm.add(path, text))
+            }
+            None => self.sm.load(path),
+        }
     }
 
     /// 有効な機能フラグ。根の `[features]` から解決したもの。
@@ -227,10 +276,21 @@ impl Session {
                     // 取得はここで行う。rev が固定されているため、2回目以降は
                     // ネットワークに触れない（crate::fetch のモジュール説明）。
                     DepKind::Git { url, rev } => {
-                        match crate::fetch::ensure(&self.root, &dep.name, url, rev, dep.source_site)
-                        {
-                            Ok(d) => queue.push((canonical(&d), Some(dep.source_site))),
-                            Err(d) => self.diagnostics.push(*d),
+                        if self.fetch {
+                            match crate::fetch::ensure(
+                                &self.root,
+                                &dep.name,
+                                url,
+                                rev,
+                                dep.source_site,
+                            ) {
+                                Ok(d) => queue.push((canonical(&d), Some(dep.source_site))),
+                                Err(d) => self.diagnostics.push(*d),
+                            }
+                        } else if let Some(d) = crate::fetch::existing(&self.root, &dep.name, rev) {
+                            // エディタからは取得しない。checkout が無ければ
+                            // 静かに読み飛ばす（CLI が取得と診断を担う）。
+                            queue.push((canonical(&d), Some(dep.source_site)));
                         }
                     }
                     DepKind::Unsupported(_) => {}
@@ -256,7 +316,7 @@ impl Session {
 
     fn load_package(&mut self, dir: &Path, from: Option<Site>) -> Option<PackageId> {
         let manifest_path = dir.join(MANIFEST_NAME);
-        let manifest_file = match self.sm.load(&manifest_path) {
+        let manifest_file = match self.read_source(&manifest_path) {
             Ok(f) => f,
             Err(e) => {
                 let mut d = Diagnostic::error(
@@ -289,8 +349,8 @@ impl Session {
             .unwrap_or(Site::new(manifest_file, Span::EMPTY));
 
         let build_path = dir.join(BUILD_NAME);
-        if build_path.exists() {
-            match self.sm.load(&build_path) {
+        if self.overlay.contains_key(&build_path) || build_path.exists() {
+            match self.read_source(&build_path) {
                 Ok(f) => {
                     pkg.build_file = Some(f);
                     let build = self.parse_and_eval(f, false);
@@ -926,7 +986,25 @@ fn path_hint(expected: &dowel_eval::Type, actual: &dowel_eval::Type) -> String {
 
 /// 正規化に失敗しても落とさない。存在しないパスを指す診断は後段で出す。
 fn canonical(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    std::fs::canonicalize(p).unwrap_or_else(|_| lexical(p))
+}
+
+/// 実在しないパスの字句的な正規化。`.` と `..` を畳む。
+///
+/// エディタの緩衝は保存前の（ディスクに無い）パスを持ちうる。畳まないと
+/// `dir/../lib` と `lib` が別の鍵になり、緩衝の重ね合わせが一致しない。
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// 位置を持たない診断のための空スパン。

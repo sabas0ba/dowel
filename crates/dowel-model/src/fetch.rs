@@ -30,6 +30,16 @@ pub fn checkout_dir(root: &Path, name: &str, rev: &str) -> PathBuf {
     root.join(".dowel").join("deps").join(format!("{name}-{}", &rev[..12]))
 }
 
+/// 取得済みの checkout。完了印が rev と一致する場合にのみ返す。
+pub fn existing(root: &Path, name: &str, rev: &str) -> Option<PathBuf> {
+    let dir = checkout_dir(root, name, rev);
+    if std::fs::read_to_string(dir.join(MARKER)).is_ok_and(|s| s.trim() == rev) {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
 /// checkout を確保して、そのディレクトリを返す。既に在ればネットワークに触れない。
 pub fn ensure(
     root: &Path,
@@ -38,11 +48,11 @@ pub fn ensure(
     rev: &str,
     site: Site,
 ) -> Result<PathBuf, Box<Diagnostic>> {
-    let dir = checkout_dir(root, name, rev);
-    if std::fs::read_to_string(dir.join(MARKER)).is_ok_and(|s| s.trim() == rev) {
+    if let Some(dir) = existing(root, name, rev) {
         log_debug!("git dependency `{name}` is already at {}", dir.display());
         return Ok(dir);
     }
+    let dir = checkout_dir(root, name, rev);
 
     let fail = |e: String| {
         Box::new(

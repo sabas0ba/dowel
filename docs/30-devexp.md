@@ -130,12 +130,14 @@ The VS Code client lives in `editors/vscode/`. It starts `dowel lsp`,
 receives diagnostics and hover, and adds syntax highlighting for
 `dowel.build`.
 
-The diagnostics published are the result of parsing and evaluating the single
-open file. Cross-file diagnostics (`undeclared-dependency`, merge conflicts,
-planning-stage path resolution) require a workspace model and are not
-produced yet. What is not produced is listed with reasons in
-`dowel_lsp::UNSUPPORTED`, and the check fails if a listed diagnostic is in
-fact being emitted.
+Diagnostics come from a workspace model rebuilt per change: the open buffers
+overlay the disk, and the model is loaded from every open manifest's
+directory, so cross-file checks (`undeclared-dependency`, the feature
+vocabulary, merge conflicts, cycles) reach the editor. The editor session
+never fetches, never touches the store, and is dropped after each change.
+What is still not produced — plan-stage checks that scan the file system —
+is listed with reasons in `dowel_lsp::UNSUPPORTED`, and the check fails if a
+listed diagnostic is in fact being emitted.
 
 ## 4. Designing for LLM assistance
 

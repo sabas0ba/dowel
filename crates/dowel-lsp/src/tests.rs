@@ -169,7 +169,9 @@ fn the_manifest_is_held_to_strict_toml() {
     let expr = "flags = match cfg.opt { debug => [\"-O0\"], release => [\"-O2\"] }\n";
     let manifest =
         exchange(&[did_open("file:///w/dowel.toml", &format!("[package]\nname = \"a\"\n{expr}"))]);
-    assert_eq!(codes(&manifest[0]), ["expression-in-strict-toml"]);
+    // マニフェストだけが開いているため、パッケージの模型は `dowel.build` の
+    // 不在も併せて指摘する。
+    assert_eq!(codes(&manifest[0]), ["expression-in-strict-toml", "missing-build"]);
 
     let build = exchange(&[did_open(
         "file:///w/dowel.build",
@@ -382,4 +384,77 @@ fn declared_codes() -> std::collections::BTreeSet<String> {
         }
     }
     out
+}
+
+#[test]
+fn cross_file_diagnostics_come_from_the_package_model() {
+    // `[features]` の語彙は `dowel.toml` が決める。両方が開いていれば、
+    // `dowel.build` 側の未知の機能名はファイルを跨いで検査される（issue #38）。
+    let toml = "[package]\nname = \"a\"\n\n[features]\ndefault = []\nreal    = []\n";
+    let build = "[bin.a]\nsources = glob(\"src/*.c\")\n\n[bin.a.private]\nflags = [\"-DX\"] when feature.raal\n";
+    let out = exchange(&[
+        did_open("file:///w/dowel.toml", toml),
+        did_open("file:///w/dowel.build", build),
+    ]);
+    let last_for = |name: &str| {
+        out.iter()
+            .rev()
+            .find(|m| {
+                m.path("params.uri").and_then(|u| u.as_str()).is_some_and(|u| u.ends_with(name))
+            })
+            .expect("the document got a notification")
+    };
+    assert_eq!(codes(last_for("dowel.build")), ["unknown-feature"]);
+    assert!(codes(last_for("dowel.toml")).is_empty());
+
+    // 語彙の側を直せば、`dowel.build` の診断も消える。
+    let fixed = exchange(&[
+        did_open("file:///w/dowel.toml", toml),
+        did_open("file:///w/dowel.build", build),
+        did_change(
+            "file:///w/dowel.toml",
+            "[package]\nname = \"a\"\n\n[features]\ndefault = []\nraal    = []\n",
+        ),
+    ]);
+    let last = fixed
+        .iter()
+        .rev()
+        .find(|m| {
+            m.path("params.uri")
+                .and_then(|u| u.as_str())
+                .is_some_and(|u| u.ends_with("dowel.build"))
+        })
+        .expect("the build file got a notification");
+    assert!(codes(last).is_empty(), "{:?}", codes(last));
+}
+
+#[test]
+fn a_conflict_in_a_dependency_is_reported_at_the_arriving_value() {
+    // 併合の衝突の主ラベルは依存側のファイルにある。依存元のマニフェストが
+    // 開いていれば、その模型が依存先の文書にも診断を届ける。
+    let out = exchange(&[
+        did_open(
+            "file:///w/app/dowel.toml",
+            "[package]\nname = \"app\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+        ),
+        did_open(
+            "file:///w/app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps    = [dep(\"lib\")]\ndefines = { LIMIT = 128 }\n",
+        ),
+        did_open("file:///w/lib/dowel.toml", "[package]\nname = \"lib\"\nversion = \"0\"\n"),
+        did_open(
+            "file:///w/lib/dowel.build",
+            "[lib.lib]\nsources = glob(\"src/*.c\")\n\n[lib.lib.public]\ndefines = { LIMIT = 64 }\n",
+        ),
+    ]);
+    let last = out
+        .iter()
+        .rev()
+        .find(|m| {
+            m.path("params.uri")
+                .and_then(|u| u.as_str())
+                .is_some_and(|u| u.ends_with("lib/dowel.build"))
+        })
+        .expect("the dependency's build file got a notification");
+    assert_eq!(codes(last), ["merge-conflict"]);
 }

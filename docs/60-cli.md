@@ -301,8 +301,11 @@ it exits with the editor (it is not a resident daemon —
 server's existence.
 
 - Diagnostics: full-document sync; `publishDiagnostics` in response to
-  changes. The unit is the single open file; cross-file diagnostics are not
-  produced yet (`dowel_lsp::UNSUPPORTED` lists them with reasons)
+  changes. Cross-file diagnostics (the feature vocabulary, `dep(...)` /
+  `target(...)` resolution, merge conflicts, cycles) come from a workspace
+  model in which the open buffers overlay the disk. The editor session never
+  fetches and never touches the store. Plan-stage checks that scan the file
+  system are not produced (`dowel_lsp::UNSUPPORTED` lists them with reasons)
 - Hover: property types and merge rules, builtin function signatures,
   configuration key domains
 - `dowel.toml` is recognized by name and held to strict TOML validation

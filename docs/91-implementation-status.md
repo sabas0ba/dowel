@@ -257,8 +257,15 @@ which distinguishes it from the resident daemon rejected by
   discarded and the next one read, so one bad message does not drop the
   connection
 
-What it sees is the single open file. Cross-file diagnostics are listed with
-reasons in `dowel_lsp::UNSUPPORTED`.
+Cross-file diagnostics come from a workspace model built per change: the
+open buffers overlay the disk (the buffer is the source of truth), and the
+model is loaded from every open manifest's directory — a document edited as
+someone's dependency gets its diagnostics (e.g. its half of a merge
+conflict) from the dependent's model. The editor session never touches the
+network (git checkouts are reused, not fetched), never reads or writes the
+store, and is created and dropped per change — it is not a daemon. What
+remains excluded — plan-stage checks that scan the file system, and
+fetching — is listed with reasons in `dowel_lsp::UNSUPPORTED`.
 
 ### VS Code extension (`editors/vscode`)
 
@@ -367,12 +374,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (395 tests):
+Current breakdown (397 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 259 |
+| `unit-*` | per-crate unit tests | 261 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
@@ -449,7 +456,7 @@ cannot be measured with the current fixtures; the scale fixture
 | the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
 | `migrate import` (drafting manifests from the CMake File API) | Phase 3; `migrate verify` is implemented |
 | `dowel debug` | Phase 4 |
-| cross-file language-server diagnostics | Phase 4; per-file diagnostics are implemented (`dowel_lsp::UNSUPPORTED`) |
+| plan-stage language-server diagnostics (glob expansion, path resolution, toolchain probing) | Phase 4; model-stage cross-file diagnostics are implemented, the rest is listed in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | registry / tarball dependencies, `dowel.lock` | Phase 5; today `path` and sha-pinned `git` work, neither of which needs a lock |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |

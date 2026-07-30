@@ -1000,10 +1000,11 @@ fn lsp_codes_for(files: &[(&str, &str)]) -> BTreeSet<String> {
         };
         send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string());
         send(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#.to_string());
-        for (i, (rel, text)) in files.iter().enumerate() {
-            let name = rel.rsplit('/').next().expect("the path has a file name");
+        // 相対の構造を保って1つの根の下に開く。ファイルを跨ぐ診断は、
+        // 同じパッケージ（と path 依存の隣）に属することを前提とする。
+        for (rel, text) in files.iter() {
             send(format!(
-                r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///case{i}/{name}","languageId":"dowel","version":1,"text":{}}}}}}}"#,
+                r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///case/{rel}","languageId":"dowel","version":1,"text":{}}}}}}}"#,
                 json_string(text)
             ));
         }
@@ -1038,6 +1039,18 @@ fn every_case_reaches_the_editor_or_is_listed_as_unsupported() {
     let mut failures = Vec::new();
     for case in CASES {
         if unsupported.contains(case.code) {
+            continue;
+        }
+        // `files` が空の事例は、基本形からのファイル削除が引き金である
+        // （`codes_of` の特例）。緩衝は在るから開けているのであって、
+        // 無いものは開けない。エディタでは原理的に再現できない。
+        if case.files.is_empty() {
+            continue;
+        }
+        // 引き金がコマンドラインにある事例も同様（`--features` の綴り誤り等）。
+        // エディタに対応する入力が無い。同じコードのマニフェスト側の事例は
+        // この免除を受けず、届くことが検査される。
+        if case.args.iter().any(|a| a.starts_with("--features")) {
             continue;
         }
         let published = lsp_codes_for(&effective_files(case));
