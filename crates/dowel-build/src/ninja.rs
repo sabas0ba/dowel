@@ -18,9 +18,13 @@ pub fn generate(plan: &Plan) -> String {
     out.push_str("rule cc\n");
     out.push_str("  command = $cmd\n");
     out.push_str("  description = $desc\n");
-    out.push_str("  depfile = $depfile\n");
-    // ヘッダ依存は深さ優先の再走査ではなくコンパイラの出力から取る。
-    out.push_str("  deps = gcc\n\n");
+    // ヘッダ依存は深さ優先の再走査ではなくコンパイラの出力（depfile）から取る。
+    //
+    // `deps = gcc` は使わない。あれは読み取った `.d` を `.ninja_deps` へ畳んで
+    // 消すため、依存の記録が ninja の実装詳細の中に閉じる。direct 実行器も
+    // 同じ `.d` を読んで最新性を判定するので、記録は実行器を跨いで
+    // ディスク上に残す（issue #41）。
+    out.push_str("  depfile = $depfile\n\n");
 
     out.push_str("rule ar\n");
     out.push_str("  command = rm -f $out && $cmd\n");

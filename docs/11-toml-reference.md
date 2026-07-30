@@ -27,22 +27,38 @@ A missing `[package]` table is `missing-table`. A `dowel.toml` whose
 directory has no `dowel.build` defines no targets but can still be depended
 on for its metadata (in practice every package has both).
 
-## `[toolchain]`
+## `[toolchain]` and `[toolchain.<triple>]`
 
 ```toml
-[toolchain]
+[toolchain]                              # applies to host builds
 c   = "clang-19"
 cxx = "clang++-19"
+
+[toolchain.aarch64-unknown-linux-gnu]    # applies to --target=aarch64-unknown-linux-gnu
+c   = "aarch64-linux-gnu-gcc"
+cxx = "aarch64-linux-gnu-g++"
 ```
 
 | Key | Type | Behavior |
 |---|---|---|
-| `c` | string | the C compiler command, default `cc`. It must be on PATH at plan time — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain` |
-| `cxx` | string | the C++ compiler command, default `c++`. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
+| `c` | string | the C compiler command, default `cc` for host builds. It must be on PATH at plan time (a value containing a path separator is probed as a path) — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain`. Required in `[toolchain.<triple>]`: missing there is `missing-field` |
+| `cxx` | string | the C++ compiler command, default `c++` for host builds. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
+
+The toolchain is selected by the target triple, the same way
+`[runner.<triple>]` is (issue #42). The plain `[toolchain]` table is the
+declaration for host builds; it never applies to another triple. Passing
+`--target=<triple>` for a triple with no `[toolchain.<triple>]` declaration
+is refused before building with `missing-toolchain` — building with the
+host compiler would silently place host artifacts under that triple's name,
+and the mistake would only surface later (a runner's
+`Invalid ELF image for this architecture`, or a debugger showing the wrong
+architecture). Likewise, a cross build whose sources contain C++ requires
+`cxx` in the triple's table; falling back to the host `c++` is refused.
 
 If a dependency package declares a toolchain different from the one the
 build uses, planning warns with `toolchain-mismatch` — ABI checking assumes
-a single pinned toolchain per build.
+a single pinned toolchain per build. Only declarations that apply to the
+current target triple participate in this comparison.
 
 ## `[[dependencies]]`
 
