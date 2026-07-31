@@ -13,12 +13,15 @@
 //!
 //! ## 現時点で見ているもの
 //!
-//! 開いているファイル1つを単位として、構文解析・評価・型検査の診断を出す。
-//! 型検査は CLI と同じ実装（`dowel_model::session::check_build_file` /
-//! `check_manifest_file`）を1ファイルの範囲で呼ぶ（issue #38）。
-//! ファイルを跨ぐ診断（`undeclared-dependency`、併合の衝突）と計画段の診断は
-//! ワークスペースの模型や実際のファイル走査を要するため、まだ出さない。
+//! パッケージの中の文書は、`check` と同じ範囲（[ADR-0010]、計画段まで）で
+//! 診断する。ファイルを跨ぐ検査（`undeclared-dependency`、併合の衝突）は
+//! ワークスペースの模型から、計画段の検査（glob 展開・パス解決・
+//! ツールチェーン探索）は実際のファイル走査から出る。どちらも読むだけで、
+//! 何も書かず、外部プロセスも起動しない。孤立した文書は1ファイルで決まる
+//! 範囲に留める（issue #38）。
 //! 何を出さないかは [`UNSUPPORTED`] に列挙し、検査で追跡する。
+//!
+//! [ADR-0010]: ../../../docs/adr/0010-check-scope.md
 
 mod hover;
 mod rpc;
@@ -33,13 +36,8 @@ use std::io::{BufRead, Write};
 /// 空にするのが目標である。「言語サーバでは出ない」ことを知らずに使うと、
 /// 誤りのあるマニフェストが正しいものに見える。
 pub const UNSUPPORTED: &[(&str, &str)] = &[
-    ("invalid-source", "path resolution happens at plan time, which scans the file system"),
-    ("unresolved-path", "path resolution happens at plan time, which scans the file system"),
-    ("empty-glob", "glob expansion happens at plan time, which scans the file system"),
-    ("no-sources", "whether `sources` ends up empty is decided at plan time, after glob expansion"),
     ("unreadable-build", "the buffer overlay cannot reproduce an unreadable file on disk"),
     ("missing-runner", "triggered by `--target`, which is not part of any manifest"),
-    ("missing-toolchain", "probing PATH for the compiler happens at plan time"),
     (
         "unfetchable-dependency",
         "the server never touches the network; fetching and its diagnostic belong to the CLI",
@@ -260,6 +258,30 @@ fn package_root(path: &std::path::Path, docs: &Documents) -> Option<std::path::P
 /// 根からは何も採られず、同じ診断が複数の根から届いた場合は1つに畳む。
 ///
 /// [ADR-0002]: ../../../docs/adr/0002-no-daemon.md
+/// エディタ用の構成。CLI の `configure` と同じ判断で組む。
+///
+/// 機能フラグは読み込みの段で解決した集合をそのまま使い、ツールチェーンは
+/// 根のパッケージの宣言を反映する。反映しないと、宣言されたコンパイラでは
+/// なく既定の `cc` を探してしまい、`missing-toolchain` が manifest の記述と
+/// 食い違う。対象はホストのトリプルに固定する（`--target` に相当する入力は
+/// エディタに無い）。
+fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
+    let mut cfg = dowel_eval::Config::host_default();
+    if let Some(root) = sess.root_package() {
+        cfg.features = sess.active_features().clone();
+        let host = dowel_eval::config::default_triple();
+        if let Some(decl) = root.toolchain_for(&cfg.target, &host) {
+            if let Some(tc) = &decl.c {
+                cfg.tc_c = tc.clone();
+            }
+            if let Some(tc) = &decl.cxx {
+                cfg.tc_cxx = tc.clone();
+            }
+        }
+    }
+    cfg
+}
+
 fn publish_workspace(docs: &Documents, uri: &str, path: &std::path::Path) -> String {
     let overlay: BTreeMap<std::path::PathBuf, String> =
         docs.text.iter().map(|(u, t)| (path_of(u), t.clone())).collect();
@@ -278,18 +300,19 @@ fn publish_workspace(docs: &Documents, uri: &str, path: &std::path::Path) -> Str
         std::collections::BTreeSet::new();
     for root in &roots {
         let sess = dowel_model::Session::load_for_editor(root, overlay.clone());
-        let cfg = dowel_eval::Config::host_default();
+        let cfg = editor_config(&sess);
         let (graph, gdiags) = dowel_model::graph::build(&sess, &cfg);
         let idiags = dowel_model::interface::prepare(&sess, &graph, &cfg);
         let mut diags = sess.diagnostics.clone();
         diags.extend(gdiags);
         diags.extend(idiags);
-        // 併合の診断（衝突・ABI 不一致）は `compile_env` を経由して出るものが
-        // ある（`private` と依存の `public` の衝突は interface では起きない）。
-        // `check` が計画段で通るのと同じ経路をここでも通す。
-        for t in &sess.targets {
-            dowel_model::interface::compile_env(&sess, t.id, &mut diags);
-        }
+        // 計画段まで通す（`check` と同じ範囲、ADR-0010）。glob 展開・
+        // パス解決・ツールチェーンの実在検査はファイルシステムを読むだけで、
+        // 何も書かず、外部プロセスも起動しない。併合の診断（衝突・ABI
+        // 不一致）も `compile_env` を経由してこの中で出る。
+        let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
+        let (_, pdiags) = dowel_build::plan::plan(&sess, &graph, &cfg, &all);
+        diags.extend(pdiags);
         // この文書に主ラベルを持つものだけを、この文書へ出す。他の開いている
         // 文書に掛かる診断は、その文書の publish が同じ模型から拾い直す。
         let kept: Vec<Diagnostic> = diags

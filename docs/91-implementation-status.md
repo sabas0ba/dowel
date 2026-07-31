@@ -266,15 +266,21 @@ which distinguishes it from the resident daemon rejected by
   discarded and the next one read, so one bad message does not drop the
   connection
 
-Cross-file diagnostics come from a workspace model built per change: the
-open buffers overlay the disk (the buffer is the source of truth), and the
-model is loaded from every open manifest's directory — a document edited as
-someone's dependency gets its diagnostics (e.g. its half of a merge
-conflict) from the dependent's model. The editor session never touches the
+Documents inside a package are diagnosed to the same depth as `check`
+([ADR-0010](adr/0010-check-scope.md)): a workspace model is built per
+change — the open buffers overlay the disk (the buffer is the source of
+truth), and the model is loaded from every open manifest's directory, so a
+document edited as someone's dependency gets its diagnostics (e.g. its half
+of a merge conflict) from the dependent's model — and then the plan stage
+runs over it, producing glob-expansion, path-resolution, and
+toolchain-existence diagnostics (`empty-glob` / `unresolved-path` /
+`invalid-source` / `no-sources` / `missing-toolchain`) from real file-system
+scans. Everything is read-only: the editor session never touches the
 network (git checkouts are reused, not fetched), never reads or writes the
-store, and is created and dropped per change — it is not a daemon. What
-remains excluded — plan-stage checks that scan the file system, and
-fetching — is listed with reasons in `dowel_lsp::UNSUPPORTED`.
+store, starts no external processes, and is created and dropped per
+change — it is not a daemon. What remains excluded — fetching, `--target`
+triggered checks, and system-package resolution — is listed with reasons
+in `dowel_lsp::UNSUPPORTED`.
 
 ### VS Code extension (`editors/vscode`)
 
@@ -473,7 +479,7 @@ cannot be measured with the current fixtures; the scale fixture
 | the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
 | Meson `introspect` import | Phase 3 backlog; CMake File API import and `migrate verify` are implemented |
 | `dowel debug` | Phase 4 |
-| plan-stage language-server diagnostics (glob expansion, path resolution, toolchain probing) | Phase 4; model-stage cross-file diagnostics are implemented, the rest is listed in `dowel_lsp::UNSUPPORTED` |
+| language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry / tarball dependency source | Phase 5; `version` deps delegate to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and `dowel.lock` records their resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
