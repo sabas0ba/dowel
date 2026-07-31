@@ -21,3 +21,4 @@ was originally written in.
 | [0012](0012-store-contents.md) | The store holds evaluation results only; files with diagnostics are not stored | Accepted |
 | [0013](0013-self-acquisition.md) | dowel acquires itself via a separate binary; references are pinned to commit shas | Accepted |
 | [0014](0014-name-final.md) | Adopt `dowel` as the official name | Accepted |
+| [0015](0015-version-deps-pkgconfig.md) | Resolve `version` dependencies through pkg-config, record them in `dowel.lock` | Accepted |

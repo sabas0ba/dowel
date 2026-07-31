@@ -38,14 +38,22 @@ impl Project {
 
     /// `dowel` を `dir`（プロジェクトからの相対）で起動する。
     pub fn run(&self, dir: &str, args: &[&str]) -> Run {
+        self.run_env(dir, args, &[])
+    }
+
+    /// 環境変数を与えて起動する。pkg-config の探索先（`PKG_CONFIG_PATH`）等、
+    /// 外部委譲の検査で要る。
+    pub fn run_env(&self, dir: &str, args: &[&str], envs: &[(&str, &str)]) -> Run {
         let cwd = self.root.join(dir);
-        let out = Command::new(env!("CARGO_BIN_EXE_dowel"))
-            .args(args)
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_dowel"));
+        cmd.args(args)
             .current_dir(&cwd)
             // ログ水準を環境から漏らさない。テストの出力を安定させる。
-            .env_remove("DOWEL_LOG")
-            .output()
-            .expect("cannot start dowel");
+            .env_remove("DOWEL_LOG");
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("cannot start dowel");
         Run::new(args, out)
     }
 }

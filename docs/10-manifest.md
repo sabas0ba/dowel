@@ -22,7 +22,7 @@ deliberate ([ADR-0003](adr/0003-manifest-split.md)).
 |---|---|---|---|
 | `dowel.toml` | strict TOML | machines (read and write) | package identity, dependencies, toolchain, feature flags |
 | `dowel.build` | TOML-style dialect | humans | target definitions, propagated properties, conditionals |
-| `dowel.lock` | generated (not implemented) | machines | resolution results, hashes, transitive dependencies |
+| `dowel.lock` | generated | machines | resolved external dependencies (`version` deps via pkg-config); detects environment drift ([11-toml-reference.md](11-toml-reference.md)) |
 
 `dowel.toml` stays strict TOML — expressions are rejected in value position
 (diagnostic `expression-in-strict-toml`) — so third-party tools (SBOM

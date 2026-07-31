@@ -107,10 +107,10 @@ declares an external repository pinned to a full commit sha) and appends the
 (below) stays your choice, and the command prints the exact line to add.
 
 Dependencies between packages are declared in `dowel.toml` — as a local
-`path`, or as a `git` URL pinned to a full commit sha
-([11-toml-reference.md](11-toml-reference.md); registry fetching is not
-implemented yet). Which target uses a dependency is written in
-`dowel.build`.
+`path`, as a `git` URL pinned to a full commit sha, or as a `version`
+constraint resolved through the system pkg-config
+([11-toml-reference.md](11-toml-reference.md)). Which target uses a
+dependency is written in `dowel.build`.
 
 `app/dowel.toml`:
 

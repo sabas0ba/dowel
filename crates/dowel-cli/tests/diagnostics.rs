@@ -314,11 +314,11 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
-        code: "unsupported-dependency",
-        why: "fetching from a registry is not implemented",
+        code: "unsatisfied-dependency",
+        why: "pkg-config does not know the module the `version` dependency names",
         files: &[(
             "app/dowel.toml",
-            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"libfoo\"\nversion = \"1\"\n",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"no-such-module-x9dowel\"\nversion = \"1\"\n",
         )],
         args: CHECK,
     },
@@ -853,6 +853,11 @@ const UNCOVERED: &[(&str, &str)] = &[
     (
         "dependency-cycle",
         "covered by the model integration tests, which can build the cycle directly",
+    ),
+    (
+        "lockfile-drift",
+        "needs a resolvable system package; the case harness cannot set PKG_CONFIG_PATH. \
+         covered by the e2e with a .pc fixture",
     ),
 ];
 

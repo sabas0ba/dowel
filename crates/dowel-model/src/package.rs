@@ -87,6 +87,9 @@ pub enum DepKind {
     /// ブランチ・タグでの解決は許さない。名前だけの参照は固定とみなさない
     /// （docs/11-toml-reference.md）
     Git { url: String, rev: String },
+    /// `version` 依存。システムの pkg-config で解決する（ADR-0015）。
+    /// 値は版の下限
+    PkgConfig { min_version: String },
     /// 未実装の供給形態。診断済みで、下流はターゲットを見つけられない
     Unsupported(&'static str),
 }
@@ -279,9 +282,14 @@ pub fn from_document(
                     DepKind::Unsupported("git")
                 }
             }
-        } else if t.entry("version").is_some() {
-            unsupported(diags, manifest_file, t.site, "registry dependencies");
-            DepKind::Unsupported("registry")
+        } else if let Some(e) = t.entry("version") {
+            match e.value.as_str() {
+                Some(v) => DepKind::PkgConfig { min_version: v.to_string() },
+                None => {
+                    type_err(diags, e.site, "dependencies.version", "a string");
+                    DepKind::Unsupported("version")
+                }
+            }
         } else {
             diags.push(
                 Diagnostic::error(
@@ -350,15 +358,6 @@ fn type_err(diags: &mut Vec<Diagnostic>, site: Site, field: &str, expected: &str
         site.span,
         format!("write {expected}"),
     ));
-}
-
-fn unsupported(diags: &mut Vec<Diagnostic>, file: FileId, site: Site, what: &str) {
-    diags.push(
-        Diagnostic::error("unsupported-dependency", format!("{what} cannot be fetched yet"))
-            .with_label(Label::primary(file, site.span, "this dependency cannot be resolved yet"))
-            .note("only `path` and pinned `git` dependencies are implemented; the registry is Phase 5 (docs/90-roadmap.md)")
-            .note("replacing it with a `path` or `git` dependency lets the build proceed"),
-    );
 }
 
 /// 有効化する機能の集合を求める。

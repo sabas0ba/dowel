@@ -44,6 +44,14 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
         "unfetchable-dependency",
         "the server never touches the network; fetching and its diagnostic belong to the CLI",
     ),
+    (
+        "unsatisfied-dependency",
+        "resolving system packages runs pkg-config; the server starts no external processes",
+    ),
+    (
+        "lockfile-drift",
+        "reconciling the lock happens when the CLI resolves; the server starts no external processes",
+    ),
 ];
 
 /// 開いている文書。エディタの緩衝が正本であり、ディスクは見ない。

@@ -68,8 +68,10 @@ anywhere in its closure uses the C++ driver. Runners for cross execution
 (`[runner.<triple>]`), incremental evaluation, persisted evaluation results,
 and the language server (diagnostics and hover) all work.
 
-The main things not implemented yet: registry dependencies and `dowel.lock`
-(local `path` and sha-pinned `git` dependencies work), and `dowel debug`.
+Dependencies come as local `path`, sha-pinned `git`, or `version`
+constraints resolved through the system pkg-config and recorded in
+`dowel.lock`. The main things not implemented yet: `dowel debug` and the
+`bench` kind.
 Migration from CMake works: `migrate import` drafts manifests from the File
 API and `migrate verify` checks them against the old build's compile
 database. See
