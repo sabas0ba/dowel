@@ -133,11 +133,14 @@ receives diagnostics and hover, and adds syntax highlighting for
 Diagnostics come from a workspace model rebuilt per change: the open buffers
 overlay the disk, and the model is loaded from every open manifest's
 directory, so cross-file checks (`undeclared-dependency`, the feature
-vocabulary, merge conflicts, cycles) reach the editor. The editor session
-never fetches, never touches the store, and is dropped after each change.
-What is still not produced — plan-stage checks that scan the file system —
-is listed with reasons in `dowel_lsp::UNSUPPORTED`, and the check fails if a
-listed diagnostic is in fact being emitted.
+vocabulary, merge conflicts, cycles) reach the editor. The plan stage then
+runs over the model, so glob expansion, path resolution, and toolchain
+existence are checked from real file-system scans — the same depth as
+`check`. The editor session only reads: it never fetches, never touches the
+store, starts no external processes, and is dropped after each change.
+What is still not produced — checks that need fetching, `--target`, or
+external processes — is listed with reasons in `dowel_lsp::UNSUPPORTED`,
+and the check fails if a listed diagnostic is in fact being emitted.
 
 ## 4. Designing for LLM assistance
 

@@ -37,6 +37,7 @@ dependencies = [
 name = "dowel-lsp"
 version = "0.0.1"
 dependencies = [
+ "dowel-build",
  "dowel-eval",
  "dowel-model",
  "dowel-query",

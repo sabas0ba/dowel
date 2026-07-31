@@ -971,8 +971,9 @@ fn the_uncovered_list_has_no_stale_entries() {
 // マニフェストがエディタでは無傷に見え、しかも誰も気づけない（issue #38）。
 // ---------------------------------------------------------------------------
 
-/// 事例のファイル一覧。基準プロジェクトに上書きを重ねた結果。
-fn effective_files(case: &Case) -> Vec<(&'static str, &'static str)> {
+/// 事例のマニフェスト一覧。基準プロジェクトに上書きを重ねた結果のうち、
+/// エディタで開くもの（`dowel.toml` / `dowel.build`）。
+fn effective_manifests(case: &Case) -> Vec<(&'static str, &'static str)> {
     let mut files: Vec<(&str, &str)> = vec![
         ("app/dowel.toml", "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n"),
         ("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n"),
@@ -988,8 +989,19 @@ fn effective_files(case: &Case) -> Vec<(&'static str, &'static str)> {
 }
 
 /// 各ファイルを言語サーバに開かせ、届いた診断コードを全て集める。
-fn lsp_codes_for(files: &[(&str, &str)]) -> BTreeSet<String> {
+///
+/// 計画段の診断（glob 展開・パス解決）は実際のファイル走査から出るため、
+/// 事例は CLI の実行と同じ基準プロジェクトとしてディスクに置き、実在する
+/// URI で開く。エディタが実在するプロジェクトを開くのと同じ条件である。
+/// 緩衝が正本である点は変わらない：マニフェストの本文は didOpen で渡し、
+/// ソースだけをディスクが供給する。
+fn lsp_codes_for(case: &Case) -> BTreeSet<String> {
     use std::io::Write;
+    let p = Project::new("diag-lsp");
+    base(&p);
+    for (rel, text) in case.files {
+        p.write(rel, text);
+    }
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_dowel"))
         .arg("lsp")
         .stdin(std::process::Stdio::piped())
@@ -1005,11 +1017,13 @@ fn lsp_codes_for(files: &[(&str, &str)]) -> BTreeSet<String> {
         };
         send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_string());
         send(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#.to_string());
-        // 相対の構造を保って1つの根の下に開く。ファイルを跨ぐ診断は、
-        // 同じパッケージ（と path 依存の隣）に属することを前提とする。
-        for (rel, text) in files.iter() {
+        // エディタは正規化済みの URI を送る。`..` を含む生成パスをそのまま
+        // 使うと、模型側の正規化と食い違い、主ラベルの照合が外れる。
+        let root = std::fs::canonicalize(&p.root).expect("the project exists");
+        for (rel, text) in effective_manifests(case) {
             send(format!(
-                r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///case/{rel}","languageId":"dowel","version":1,"text":{}}}}}}}"#,
+                r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file://{}","languageId":"dowel","version":1,"text":{}}}}}}}"#,
+                root.join(rel).display(),
                 json_string(text)
             ));
         }
@@ -1058,7 +1072,7 @@ fn every_case_reaches_the_editor_or_is_listed_as_unsupported() {
         if case.args.iter().any(|a| a.starts_with("--features")) {
             continue;
         }
-        let published = lsp_codes_for(&effective_files(case));
+        let published = lsp_codes_for(case);
         if !published.contains(case.code) {
             failures.push(format!("  {} ({})", case.code, case.why));
         }
@@ -1084,7 +1098,7 @@ fn the_unsupported_list_of_the_lsp_has_no_stale_entries() {
             continue;
         }
         for case in CASES.iter().filter(|c| c.code == *code) {
-            if lsp_codes_for(&effective_files(case)).contains(*code) {
+            if lsp_codes_for(case).contains(*code) {
                 stale.push(format!("  {code}: published for `{}`", case.why));
             }
         }

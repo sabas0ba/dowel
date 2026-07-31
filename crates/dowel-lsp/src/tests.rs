@@ -386,16 +386,44 @@ fn declared_codes() -> std::collections::BTreeSet<String> {
     out
 }
 
+/// 実在するパッケージの根。計画段は実際のファイル走査で診断するため、
+/// ワークスペースの検査はディスクにソースを置いて行う（エディタが実在する
+/// プロジェクトを開くのと同じ条件）。
+struct TempRoot(std::path::PathBuf);
+
+impl TempRoot {
+    fn new(name: &str, sources: &[&str]) -> TempRoot {
+        let dir = std::env::temp_dir().join(format!("dowel-lsp-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for s in sources {
+            let p = dir.join(s);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "int f(void) { return 0; }\n").unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        TempRoot(dir)
+    }
+
+    fn uri(&self, rel: &str) -> String {
+        format!("file://{}", self.0.join(rel).display())
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn cross_file_diagnostics_come_from_the_package_model() {
     // `[features]` の語彙は `dowel.toml` が決める。両方が開いていれば、
     // `dowel.build` 側の未知の機能名はファイルを跨いで検査される（issue #38）。
+    let w = TempRoot::new("cross-file", &["src/main.c"]);
     let toml = "[package]\nname = \"a\"\n\n[features]\ndefault = []\nreal    = []\n";
     let build = "[bin.a]\nsources = glob(\"src/*.c\")\n\n[bin.a.private]\nflags = [\"-DX\"] when feature.raal\n";
-    let out = exchange(&[
-        did_open("file:///w/dowel.toml", toml),
-        did_open("file:///w/dowel.build", build),
-    ]);
+    let out =
+        exchange(&[did_open(&w.uri("dowel.toml"), toml), did_open(&w.uri("dowel.build"), build)]);
     let last_for = |name: &str| {
         out.iter()
             .rev()
@@ -409,10 +437,10 @@ fn cross_file_diagnostics_come_from_the_package_model() {
 
     // 語彙の側を直せば、`dowel.build` の診断も消える。
     let fixed = exchange(&[
-        did_open("file:///w/dowel.toml", toml),
-        did_open("file:///w/dowel.build", build),
+        did_open(&w.uri("dowel.toml"), toml),
+        did_open(&w.uri("dowel.build"), build),
         did_change(
-            "file:///w/dowel.toml",
+            &w.uri("dowel.toml"),
             "[package]\nname = \"a\"\n\n[features]\ndefault = []\nraal    = []\n",
         ),
     ]);
@@ -432,18 +460,19 @@ fn cross_file_diagnostics_come_from_the_package_model() {
 fn a_conflict_in_a_dependency_is_reported_at_the_arriving_value() {
     // 併合の衝突の主ラベルは依存側のファイルにある。依存元のマニフェストが
     // 開いていれば、その模型が依存先の文書にも診断を届ける。
+    let w = TempRoot::new("dep-conflict", &["app/src/main.c", "lib/src/lib.c"]);
     let out = exchange(&[
         did_open(
-            "file:///w/app/dowel.toml",
+            &w.uri("app/dowel.toml"),
             "[package]\nname = \"app\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
         ),
         did_open(
-            "file:///w/app/dowel.build",
+            &w.uri("app/dowel.build"),
             "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps    = [dep(\"lib\")]\ndefines = { LIMIT = 128 }\n",
         ),
-        did_open("file:///w/lib/dowel.toml", "[package]\nname = \"lib\"\nversion = \"0\"\n"),
+        did_open(&w.uri("lib/dowel.toml"), "[package]\nname = \"lib\"\nversion = \"0\"\n"),
         did_open(
-            "file:///w/lib/dowel.build",
+            &w.uri("lib/dowel.build"),
             "[lib.lib]\nsources = glob(\"src/*.c\")\n\n[lib.lib.public]\ndefines = { LIMIT = 64 }\n",
         ),
     ]);
