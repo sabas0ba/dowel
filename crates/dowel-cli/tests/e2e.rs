@@ -1512,6 +1512,14 @@ fn migrate_verify_compares_against_a_reference_compdb() {
     r.success();
     r.stdout_contains("2 equivalent, 0 differing, 0 not ported");
 
+    // 構成のフラグは両側から等しく除かれる。参照が別の build type
+    // （release 相当の -O2 -DNDEBUG）でも、それは移行の差ではない
+    // （issue #54）。
+    p.write("ref.json", &compdb.replace("\"cc\",", "\"cc\", \"-O2\", \"-DNDEBUG\","));
+    let r = p.run("app", &["migrate", "verify", "../ref.json"]);
+    r.success();
+    r.stdout_contains("2 equivalent, 0 differing");
+
     // 参照側の define が違えば、そのソースと引数が名指しされて失敗する。
     p.write("ref.json", &compdb.replace("-DAPP_OPT=0", "-DAPP_OPT=9"));
     let r = p.run("app", &["migrate", "verify", "../ref.json"]);
@@ -1574,7 +1582,8 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
                 "compileGroups": [{{"language": "C",
                     "defines": [{{"define": "LIMIT=64"}}],
                     "includes": [{{"path": "{src}/lib"}}],
-                    "compileCommandFragments": [{{"fragment": "-Wall"}}]}}]}}"#
+                    "compileCommandFragments": [{{"fragment": "-Wall"}},
+                                                {{"fragment": "-O3 -DNDEBUG -g"}}]}}]}}"#
         ),
     );
     p.write(
@@ -1598,6 +1607,20 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
     let build_file = std::fs::read_to_string(p.path("dowel.build")).unwrap();
     assert!(build_file.contains("UNVERIFIED DRAFT"), "{build_file}");
     assert!(build_file.contains("migrate verify"), "{build_file}");
+
+    // 構成レベルのフラグ（build type 由来の -O / -g / -DNDEBUG）は写らない。
+    // 写すと無条件のフラグになり、release から取り込んだ下書きの debug
+    // ビルドが最適化された NDEBUG 付きになる（issue #54）。
+    // ヘッダのコメントもその旨を述べる。
+    assert!(build_file.contains("were NOT copied"), "{build_file}");
+    let flags_line = build_file
+        .lines()
+        .find(|l| l.trim_start().starts_with("flags"))
+        .expect("the draft declares flags");
+    assert!(flags_line.contains("-Wall"), "{flags_line}");
+    for dropped in ["-O3", "-DNDEBUG", "-g"] {
+        assert!(!flags_line.contains(dropped), "`{dropped}` was copied: {flags_line}");
+    }
 
     // 下書きはそのまま計画・ビルド・実行まで通る。
     p.run(".", &["check"]).success();

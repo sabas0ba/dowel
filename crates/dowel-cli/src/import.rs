@@ -20,6 +20,9 @@
 //!   公開ヘッダの昇格は人間の仕事として残る
 //! - 外部ライブラリ（`-l...`）は `link_flags` へ。同一プロジェクト内の
 //!   依存は `dependencies` から `target(...)` に写す
+//! - 構成レベルのフラグ（build type 由来の `-O` / `-g` / `-DNDEBUG`）は
+//!   写さない。dowel では `cfg.opt` が供給するものであり、無条件の
+//!   `flags` に写すと構成の切り替えと衝突する（issue #54）
 
 use dowel_support::json::{parse, Json};
 use std::path::{Path, PathBuf};
@@ -190,6 +193,14 @@ fn extract(t: &Json, source_dir: &Path) -> Option<Imported> {
         for f in g.get("compileCommandFragments").and_then(Json::as_array).unwrap_or(&[]) {
             if let Some(frag) = f.get("fragment").and_then(Json::as_str) {
                 for word in frag.split_whitespace() {
+                    // 構成レベルのフラグ（`CMAKE_<LANG>_FLAGS_<CONFIG>` 由来の
+                    // `-O` / `-g` / `-DNDEBUG`）は写さない。dowel では `cfg.opt`
+                    // が供給するもので、写すと無条件のフラグになり、release
+                    // から取り込んだ下書きの debug ビルドが最適化された
+                    // `NDEBUG` 付きになる（issue #54）。
+                    if dowel_build::migrate::is_config_flag(word) {
+                        continue;
+                    }
                     push_unique(&mut out.flags, word.to_string());
                 }
             }
@@ -265,6 +276,9 @@ const HEADER: &str = "\
 # to a `public` block, then verify against the old build:
 #
 #   dowel migrate verify <old-build>/compile_commands.json
+#
+# Configuration-level flags (-O / -g / -DNDEBUG from the CMake build type)
+# were NOT copied: dowel's own debug/release configuration supplies them.
 #
 ";
 

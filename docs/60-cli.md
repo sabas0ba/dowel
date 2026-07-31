@@ -246,7 +246,11 @@ Commands are normalized before comparison, so equivalent-but-differently-
 spelled commands match: `-D NAME` / `-DNAME` / `-DNAME=1` are the same
 define, `-I` paths are resolved against each entry's `directory`, and the
 compiler name, `-c` / `-o`, and depfile flags (`-MD` family) are ignored.
-Remaining flags are compared as a multiset.
+Configuration-level flags (optimization, debug info, `NDEBUG`) are dropped
+from **both** sides: dowel's debug/release configuration supplies them on
+one side and the reference's build type on the other, so they say nothing
+about whether the port is faithful. Remaining flags are compared as a
+multiset.
 
 The report has four buckets:
 
@@ -293,6 +297,10 @@ Mapping: `EXECUTABLE` → `bin`; `STATIC_LIBRARY` / `OBJECT_LIBRARY` (and,
 with a note, `SHARED_LIBRARY`) → `lib`; in-project `dependencies` →
 `target(...)`; external `-l...` libraries → `link_flags`; includes outside
 the source tree → `-I` flags. Target names are mapped to valid identifiers.
+Configuration-level flags coming from the CMake build type (`-O` / `-g` /
+`-DNDEBUG`) are **not** copied — dowel's own `--config` supplies them, and
+copying them unconditionally would make a draft imported from Release
+produce optimized `NDEBUG` "debug" builds. The draft header states this.
 
 ## `dowel schema dump`
 
