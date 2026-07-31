@@ -44,6 +44,11 @@ pub struct ToolchainDecl {
     pub cxx: Option<String>,
     /// その宣言が書かれた位置
     pub cxx_site: Option<Site>,
+    /// `ar = "..."`。書庫の作成もツールチェーンの一部である（issue #50）。
+    /// 宣言しなければ既定の `ar` が使われ、従来の挙動と変わらない
+    pub ar: Option<String>,
+    /// その宣言が書かれた位置
+    pub ar_site: Option<Site>,
 }
 
 impl Package {
@@ -184,6 +189,15 @@ pub fn from_document(
                     decl.cxx_site = Some(e.site);
                 }
                 None => type_err(diags, e.site, &format!("{label}.cxx"), "a string"),
+            }
+        }
+        if let Some(e) = t.entry("ar") {
+            match e.value.as_str() {
+                Some(s) => {
+                    decl.ar = Some(s.to_string());
+                    decl.ar_site = Some(e.site);
+                }
+                None => type_err(diags, e.site, &format!("{label}.ar"), "a string"),
             }
         }
         match triple {

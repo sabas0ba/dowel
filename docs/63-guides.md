@@ -102,7 +102,8 @@ building (`missing-toolchain`) — the host compiler is never substituted.
 ```toml
 # dowel.toml
 [toolchain.riscv64gc-unknown-linux-gnu]
-c = "riscv64-linux-gnu-gcc"
+c  = "riscv64-linux-gnu-gcc"
+ar = "riscv64-linux-gnu-ar"     # archives too — do not fall back to the host's ar
 ```
 
 qemu:

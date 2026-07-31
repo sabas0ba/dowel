@@ -143,6 +143,7 @@ implemented; `dowel schema dump` prints the live version.)
 | `feature.<name>` | boolean | feature flags declared in `[features]` of `dowel.toml`; undeclared names are diagnosed with a suggestion |
 | `tc.c` | open | identifier of the selected C toolchain |
 | `tc.cxx` | open | identifier of the selected C++ toolchain |
+| `tc.ar` | open | identifier of the selected archiver |
 
 ### `match`
 

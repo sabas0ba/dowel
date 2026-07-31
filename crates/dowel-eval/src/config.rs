@@ -50,6 +50,8 @@ pub struct Config {
     pub tc_c: String,
     /// 選択された C++ ツールチェーンの識別子
     pub tc_cxx: String,
+    /// 選択された書庫作成器（archiver）の識別子
+    pub tc_ar: String,
 }
 
 impl Config {
@@ -62,6 +64,7 @@ impl Config {
             features: BTreeSet::new(),
             tc_c: "cc".to_string(),
             tc_cxx: "c++".to_string(),
+            tc_ar: "ar".to_string(),
         }
     }
 
@@ -83,6 +86,7 @@ impl Config {
             (Ns::Host, "arch") => Some(CfgValue::Str(self.host_arch.clone())),
             (Ns::Tc, "c") => Some(CfgValue::Str(self.tc_c.clone())),
             (Ns::Tc, "cxx") => Some(CfgValue::Str(self.tc_cxx.clone())),
+            (Ns::Tc, "ar") => Some(CfgValue::Str(self.tc_ar.clone())),
             (Ns::Feature, name) => Some(CfgValue::Bool(self.features.contains(name))),
             _ => None,
         }
@@ -133,6 +137,7 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
     ("feature", "*", Domain::Bool, "feature flag declared in [features] of dowel.toml"),
     ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
     ("tc", "cxx", Domain::Open, "identifier of the selected C++ toolchain"),
+    ("tc", "ar", Domain::Open, "identifier of the selected archiver"),
 ];
 
 /// キーが語彙に存在するか。存在しなければ型検査で落とす。

@@ -198,6 +198,12 @@ changes, only the speed.
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language (the place for
   `-std=...`)
+- The archiver is part of the toolchain: `[toolchain] ar` (default `ar`,
+  also per-triple in `[toolchain.<triple>]`, configuration key `tc.ar`)
+  names the tool that creates static libraries, so cross builds do not fall
+  back to the host's `ar` (issue #50). It is probed — and required — only
+  when the build produces an archive; because the name is part of the
+  action's command line, changing it rebuilds the archive
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
   freshness reading depfiles). Header dependency records (`.d` files) stay

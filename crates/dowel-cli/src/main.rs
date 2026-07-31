@@ -455,6 +455,9 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
                 if let Some(tc) = &decl.cxx {
                     cfg.tc_cxx = tc.clone();
                 }
+                if let Some(tc) = &decl.ar {
+                    cfg.tc_ar = tc.clone();
+                }
             }
             None => {
                 let declared: Vec<&str> = root.toolchains.keys().map(|s| s.as_str()).collect();

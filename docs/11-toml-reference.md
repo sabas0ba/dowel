@@ -43,6 +43,7 @@ cxx = "aarch64-linux-gnu-g++"
 |---|---|---|
 | `c` | string | the C compiler command, default `cc` for host builds. It must be on PATH at plan time (a value containing a path separator is probed as a path) — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain`. Required in `[toolchain.<triple>]`: missing there is `missing-field` |
 | `cxx` | string | the C++ compiler command, default `c++` for host builds. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
+| `ar` | string | the archiver command, default `ar`. Required — and probed — only when the build produces a static library. Cross builds should declare it alongside `c` / `cxx` so archives are not created by the host's tool. Missing from PATH: `missing-toolchain` |
 
 The toolchain is selected by the target triple, the same way
 `[runner.<triple>]` is (issue #42). The plain `[toolchain]` table is the

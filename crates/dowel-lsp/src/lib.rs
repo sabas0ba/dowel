@@ -277,6 +277,9 @@ fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
             if let Some(tc) = &decl.cxx {
                 cfg.tc_cxx = tc.clone();
             }
+            if let Some(tc) = &decl.ar {
+                cfg.tc_ar = tc.clone();
+            }
         }
     }
     cfg

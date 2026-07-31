@@ -916,6 +916,74 @@ fn a_target_toolchain_without_a_c_compiler_is_refused() {
 }
 
 #[test]
+fn the_declared_archiver_is_used_and_changing_it_rebuilds_the_archive() {
+    // 書庫の作成もツールチェーンの一部である（issue #50）。宣言した
+    // archiver が実際に呼ばれることと、宣言を変えると書庫が作り直される
+    // ことを、呼ばれたことを記録するラッパで確かめる。
+    let p = Project::new("toolchain-ar");
+    let marker = p.path("ar-was-called");
+    let wrapper = p.path("fake-ar");
+    std::fs::write(&wrapper, format!("#!/bin/sh\ntouch {}\nexec ar \"$@\"\n", marker.display()))
+        .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let manifest = |ar: &str| {
+        format!("[package]\nname    = \"t\"\nversion = \"0.1.0\"\n\n[toolchain]\nar = \"{ar}\"\n")
+    };
+    p.write("dowel.toml", &manifest("ar"));
+    p.write(
+        "dowel.build",
+        "[lib.x]\nsources = glob(\"src/x.c\")\n\n\
+         [bin.t]\nsources = glob(\"src/main.c\")\n\n[bin.t.private]\ndeps = [target(\"x\")]\n",
+    );
+    p.write("src/x.c", "int x_answer(void) { return 7; }\n");
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint x_answer(void);\nint main(void) { printf(\"%d\\n\", x_answer()); return 0; }\n",
+    );
+
+    // 既定の `ar` で一度組む。宣言はまだラッパを指していない。
+    p.run(".", &["build"]).success();
+    assert!(!marker.exists(), "the wrapper ran before it was declared");
+
+    // 宣言をラッパへ変えると、書庫のコマンドラインが変わり、組み直される。
+    p.write("dowel.toml", &manifest(&wrapper.display().to_string()));
+    p.run(".", &["build"]).success();
+    assert!(marker.exists(), "the declared archiver was not invoked after the change");
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/t")), "7\n");
+}
+
+#[test]
+fn a_missing_archiver_is_refused_only_when_an_archive_is_needed() {
+    // 実在検査はコンパイラと同じく計画段で行う。ただし書庫を作らない
+    // ビルドには要求しない（C++ ツールチェーンと同じ扱い）。
+    let p = Project::new("toolchain-ar-missing");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"t\"\nversion = \"0.1.0\"\n\n[toolchain]\nar = \"no-such-ar-x9\"\n",
+    );
+    p.write("dowel.build", "[bin.t]\nsources = glob(\"*.c\")\n");
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    // bin だけなら書庫は要らず、宣言が悪くても通る。
+    p.run(".", &["build"]).success();
+
+    // lib が加わると計画段で拒まれる。
+    p.write(
+        "dowel.build",
+        "[lib.x]\nsources = glob(\"*.c\")\n\n[bin.t]\nsources = glob(\"*.c\")\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("missing-toolchain");
+    r.stderr_contains("no-such-ar-x9");
+}
+
+#[test]
 fn a_runner_for_another_triple_is_not_used_for_the_host() {
     let p = Project::new("runner-other-triple");
     p.write("dowel.toml", "[package]\nname    = \"r\"\nversion = \"0.1.0\"\n");

@@ -78,8 +78,11 @@ pub fn plan(
     // 宣言は、このビルドに対する要求ではない。
     for p in &sess.packages {
         let Some(decl) = p.toolchain_for(&cfg.target, &host) else { continue };
-        let mismatches: [(&Option<String>, &str, &str); 2] =
-            [(&decl.c, "C", &cfg.tc_c), (&decl.cxx, "C++", &cfg.tc_cxx)];
+        let mismatches: [(&Option<String>, &str, &str); 3] = [
+            (&decl.c, "C", &cfg.tc_c),
+            (&decl.cxx, "C++", &cfg.tc_cxx),
+            (&decl.ar, "archiver", &cfg.tc_ar),
+        ];
         for (declared, lang, used) in mismatches {
             if let Some(tc) = declared {
                 if tc != used {
@@ -136,6 +139,8 @@ pub fn plan(
     // C++ コンパイラの実在検査は C++ ソースが現れたときに1度だけ行う。
     // C だけのビルドに C++ ツールチェーンを要求しないため
     let mut cxx_toolchain_checked = false;
+    // 書庫作成器も同じ扱い。書庫を作らないビルドには要求しない
+    let mut ar_toolchain_checked = false;
 
     // `graph.order` は依存が先。成果物ができてからリンクする順になる。
     for &tid in &graph.order {
@@ -286,6 +291,29 @@ pub fn plan(
         // --- 集約（アーカイブ／リンク） ---
         match target.kind {
             TableKind::Lib => {
+                // 書庫作成器の実在検査は、書庫を作るときに1度だけ行う。
+                // コンパイラと同じく、固定した対象の実在は計画段で確かめる
+                // （issue #50）。
+                if !ar_toolchain_checked {
+                    ar_toolchain_checked = true;
+                    if !crate::exec::program_exists(&cfg.tc_ar) {
+                        let mut d = Diagnostic::error(
+                            "missing-toolchain",
+                            format!("cannot find the archiver `{}`", cfg.tc_ar),
+                        );
+                        match root_toolchain.and_then(|t| t.ar_site) {
+                            Some(s) => d = d.at(s.file, s.span, "declared here"),
+                            None => {
+                                d = d.note(
+                                    "no `[toolchain] ar` is declared, so the default `ar` is used",
+                                )
+                            }
+                        }
+                        diags.push(d.note(
+                            "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
+                        ));
+                    }
+                }
                 let out = build_dir.join("lib").join(format!("lib{}.a", target.name));
                 let mut args = vec!["rcs".to_string(), out.display().to_string()];
                 args.extend(objects.iter().map(|o| o.display().to_string()));
@@ -294,7 +322,7 @@ pub fn plan(
                     id,
                     kind: ActionKind::Archive,
                     target: tid,
-                    program: "ar".into(),
+                    program: cfg.tc_ar.clone(),
                     args,
                     inputs: objects.clone(),
                     outputs: vec![out.clone()],
