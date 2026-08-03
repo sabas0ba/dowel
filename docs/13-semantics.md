@@ -141,6 +141,14 @@ Planning turns merged property maps into an action graph.
 - **Actions**: one compile per source (with `-I` / `-D` / flags from
   `compile_env`), one archive per `lib` (`ar`), one link per `bin` / `test`
   (own objects, dependency archives in graph order, `link_flags`)
+- **`link_flags` ride the link closure**, `private` included: a static
+  archive cannot carry its own link requirements, so the flags a library
+  declares (or a `version` dependency's `--libs` brings in) reach the final
+  link the same way its archive does — across `private` edges. The
+  `public` / `private` split controls **translation** propagation
+  (`includes` / `defines` / `flags`); it does not control link
+  reachability. A library can keep a system dependency's headers private
+  and still be linkable (issue #56)
 - **The compiler is chosen per source by extension**: C++ extensions
   (`.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`) compile with the C++
   toolchain (`[toolchain] cxx`, default `c++`), everything else with the C

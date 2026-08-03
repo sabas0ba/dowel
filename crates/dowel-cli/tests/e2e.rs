@@ -1708,3 +1708,119 @@ fn a_version_dependency_resolves_through_pkg_config_and_locks() {
     r.stderr_contains("unsatisfied-dependency");
     r.stderr_contains("does not satisfy >= 3.0");
 }
+
+/// 外部の静的ライブラリを1つ作る。`-L<dir> -l<name>` で繋ぐ検査の材料。
+fn build_external_lib(p: &Project, dir: &str, name: &str, source: &str) {
+    p.write(&format!("{dir}/{name}.c"), source);
+    let cwd = p.path(dir);
+    let sh = |cmd: &mut std::process::Command| {
+        let out = cmd.current_dir(&cwd).output().expect("cannot run the tool");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    sh(std::process::Command::new("cc").args(["-c", &format!("{name}.c"), "-o", "x.o"]));
+    sh(std::process::Command::new("ar").args(["rcs", &format!("lib{name}.a"), "x.o"]));
+}
+
+#[test]
+fn private_link_flags_of_a_library_ride_the_link_closure() {
+    // 静的な書庫は自分のリンク要件を運べない。lib が private に持つ
+    // link_flags は、書庫と同じくリンクの閉包（private の段を跨いで）を
+    // 辿って最終リンクに乗る。閉包を辿らなければ undefined reference に
+    // なる形として、外部の書庫を -L / -l で繋ぐ（issue #56）。
+    let p = Project::new("private-link-flags");
+    build_external_lib(&p, "ext", "extra", "int extra_answer(void) { return 40; }\n");
+
+    // top → mid → leaf。private を2段跨ぐ。
+    p.write(
+        "top/dowel.toml",
+        "[package]\nname = \"top\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"mid\"\npath = \"../mid\"\n",
+    );
+    p.write(
+        "top/dowel.build",
+        "[bin.top]\nsources = [file(\"src/main.c\")]\n\n[bin.top.private]\ndeps = [dep(\"mid\")]\n",
+    );
+    p.write(
+        "top/src/main.c",
+        "#include <stdio.h>\nint mid_value(void);\nint main(void) { printf(\"v=%d\\n\", mid_value()); return 0; }\n",
+    );
+    p.write(
+        "mid/dowel.toml",
+        "[package]\nname = \"mid\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"leaf\"\npath = \"../leaf\"\n",
+    );
+    p.write(
+        "mid/dowel.build",
+        "[lib.mid]\nsources = [file(\"src/mid.c\")]\n\n[lib.mid.private]\ndeps = [dep(\"leaf\")]\n",
+    );
+    p.write(
+        "mid/src/mid.c",
+        "int leaf_value(void);\nint mid_value(void) { return leaf_value() + 1; }\n",
+    );
+    p.write("leaf/dowel.toml", "[package]\nname = \"leaf\"\nversion = \"0\"\n");
+    p.write(
+        "leaf/dowel.build",
+        &format!(
+            "[lib.leaf]\nsources = [file(\"src/leaf.c\")]\n\n\
+             [lib.leaf.private]\nlink_flags = [\"-L{}\", \"-lextra\"]\n",
+            p.path("ext").display()
+        ),
+    );
+    p.write(
+        "leaf/src/leaf.c",
+        "int extra_answer(void);\nint leaf_value(void) { return extra_answer() + 1; }\n",
+    );
+
+    p.run("top", &["build"]).success();
+    let bin = build_dir(&p.path("top"), "debug").join("bin/top");
+    assert_eq!(run_artifact(&bin), "v=42\n");
+}
+
+#[test]
+fn a_private_system_dependency_of_a_library_still_links_its_dependent() {
+    // mid（lib）が version 依存を private に使い、top（bin）が mid に依存する。
+    // `--libs` はリンクの閉包を辿って top のリンクに乗り、`--cflags` は
+    // private の意味どおり top の翻訳には届かない（issue #56）。
+    // 「ヘッダを漏らさない」と「リンクできる」は同時に成り立つ。
+    let p = Project::new("pkgconfig-private-dep");
+    p.write("ext/include/demokit.h", "#pragma once\n#define DEMOKIT_ANSWER 41\n");
+    build_external_lib(&p, "ext", "demokit", "int demokit_bonus(void) { return 1; }\n");
+    p.write(
+        "ext/demokit.pc",
+        "Name: demokit\nDescription: fixture\nVersion: 2.4.0\n\
+         Cflags: -I${pcfiledir}/include -DDEMOKIT=1\nLibs: -L${pcfiledir} -ldemokit\n",
+    );
+    let pc_path = p.path("ext").display().to_string();
+    let env: &[(&str, &str)] = &[("PKG_CONFIG_PATH", &pc_path)];
+
+    p.write(
+        "top/dowel.toml",
+        "[package]\nname = \"top\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"mid\"\npath = \"../mid\"\n",
+    );
+    p.write(
+        "top/dowel.build",
+        "[bin.top]\nsources = [file(\"src/main.c\")]\n\n[bin.top.private]\ndeps = [dep(\"mid\")]\n",
+    );
+    // private な依存の Cflags が top の翻訳へ漏れたら、ここで止まる。
+    p.write(
+        "top/src/main.c",
+        "#include <stdio.h>\n\
+         #ifdef DEMOKIT\n#error \"the private dependency's cflags leaked\"\n#endif\n\
+         int mid_value(void);\nint main(void) { printf(\"v=%d\\n\", mid_value()); return 0; }\n",
+    );
+    p.write(
+        "mid/dowel.toml",
+        "[package]\nname = \"mid\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"demokit\"\nversion = \"2.0\"\n",
+    );
+    p.write(
+        "mid/dowel.build",
+        "[lib.mid]\nsources = [file(\"src/mid.c\")]\n\n[lib.mid.private]\ndeps = [dep(\"demokit\")]\n",
+    );
+    p.write(
+        "mid/src/mid.c",
+        "#include <demokit.h>\nint demokit_bonus(void);\n\
+         int mid_value(void) { return DEMOKIT_ANSWER + demokit_bonus(); }\n",
+    );
+
+    p.run_env("top", &["build"], env).success();
+    let bin = build_dir(&p.path("top"), "debug").join("bin/top");
+    assert_eq!(run_artifact(&bin), "v=42\n");
+}

@@ -170,7 +170,10 @@ pub fn plan(
         let flags = collect_flags(&env, "flags");
         let c_flags = collect_flags(&env, "c_flags");
         let cxx_flags = collect_flags(&env, "cxx_flags");
-        let link_flags = collect_flags(&env, "link_flags");
+        // `link_flags` だけは compile_env からではなく、リンク閉包から集める。
+        // `private` はリンクの到達可能性を制御しない（issue #56、下の
+        // `closure_link_flags`）。
+        let link_flags = closure_link_flags(sess, graph, cfg, tid);
 
         log_debug!(
             "{}: {} sources, {} includes, {} defines",
@@ -418,6 +421,30 @@ fn require_tool(
     diags.push(d.note(
         "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
     ));
+}
+
+/// リンク閉包から集めた `link_flags`。
+///
+/// 静的な書庫は自分のリンク要件を運べない。書庫が閉包を辿って最終リンクに
+/// 乗る（`libs` の収集）以上、その書庫が要求する `link_flags` も同じ閉包を
+/// 辿らなければ、書庫だけがあって記号が解けない（issue #56）。
+/// `public` / `private` は**翻訳の伝播**（`includes` / `defines` / `flags`）を
+/// 堰き止めるものであり、リンクの到達可能性は制御しない。
+///
+/// 順序は依存元が先・依存が後（書庫と同じ、静的リンクの解決順の要請）。
+/// 重複は畳まない——`link_flags` の併合規則は `append`（順序保持）であり、
+/// 閉包の各ノードは一度しか現れないため、二重取りも起きない。
+fn closure_link_flags(sess: &Session, graph: &Graph, cfg: &Config, tid: TargetId) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in graph.link_closure(tid) {
+        let target = sess.target(t);
+        for block in [&target.public, &target.private] {
+            let Some(v) = block.get("link_flags") else { continue };
+            let Some(v) = dowel_eval::specialize(v, cfg) else { continue };
+            out.extend(flatten(&v).iter().filter_map(|v| v.as_str().map(str::to_string)));
+        }
+    }
+    out
 }
 
 fn collect_sources(

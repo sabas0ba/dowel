@@ -198,6 +198,12 @@ changes, only the speed.
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language (the place for
   `-std=...`)
+- `link_flags` ride the link closure, `private` included: a static archive
+  cannot carry its own link requirements, so the flags a library declares —
+  and the `--libs` of a `version` dependency it keeps private — reach the
+  final link the same way its archive does. The `public` / `private` split
+  keeps controlling translation propagation only, so "do not leak the
+  headers" and "stay linkable" hold at the same time (issue #56)
 - The archiver is part of the toolchain: `[toolchain] ar` (default `ar`,
   also per-triple in `[toolchain.<triple>]`, configuration key `tc.ar`)
   names the tool that creates static libraries, so cross builds do not fall
@@ -417,7 +423,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (414 tests):
+Current breakdown (416 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -426,7 +432,7 @@ Current breakdown (414 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 62 |
+| `e2e` | compile real C and C++, run it, check the output | 64 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (50 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
