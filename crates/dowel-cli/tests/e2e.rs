@@ -958,6 +958,26 @@ fn the_declared_archiver_is_used_and_changing_it_rebuilds_the_archive() {
 }
 
 #[test]
+fn a_misspelled_toolchain_key_is_refused_with_a_suggestion() {
+    // 黙って無視すると、クロスの archiver の綴り間違いが既定値（ホストの
+    // `ar`）への無言の後退になる——#50 が防ごうとした状態が戻る（issue #59）。
+    let p = Project::new("toolchain-typo");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"t\"\nversion = \"0.1.0\"\n\n\
+         [toolchain.aarch64-unknown-linux-gnu]\nc   = \"aarch64-linux-gnu-gcc\"\nar_ = \"aarch64-linux-gnu-ar\"\n",
+    );
+    p.write("dowel.build", "[bin.t]\nsources = glob(\"*.c\")\n");
+    p.write("t.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-property");
+    r.stderr_contains("did you mean `ar`?");
+    r.stderr_contains("accepts: c, cxx, ar");
+}
+
+#[test]
 fn a_missing_archiver_is_refused_only_when_an_archive_is_needed() {
     // 実在検査はコンパイラと同じく計画段で行う。ただし書庫を作らない
     // ビルドには要求しない（C++ ツールチェーンと同じ扱い）。
@@ -1594,7 +1614,8 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
                 "compileGroups": [{{"language": "C",
                     "includes": [{{"path": "{src}/lib"}}]}}],
                 "dependencies": [{{"id": "len::@6890427a1f51a3e7e1df"}}],
-                "link": {{"commandFragments": [{{"role": "libraries", "fragment": "-lm"}}]}}}}"#
+                "link": {{"commandFragments": [{{"role": "libraries", "fragment": "-lm"}},
+                                               {{"role": "flags", "fragment": "-O3 -DNDEBUG -g"}}]}}}}"#
         ),
     );
 
@@ -1620,6 +1641,16 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
     assert!(flags_line.contains("-Wall"), "{flags_line}");
     for dropped in ["-O3", "-DNDEBUG", "-g"] {
         assert!(!flags_line.contains(dropped), "`{dropped}` was copied: {flags_line}");
+    }
+    // リンク側（link.commandFragments）も同じ判定で落ちる。翻訳側だけを
+    // 落とすと、見出しの「写していない」と中身が食い違う（issue #61）。
+    let link_line = build_file
+        .lines()
+        .find(|l| l.trim_start().starts_with("link_flags"))
+        .expect("the draft declares link_flags");
+    assert!(link_line.contains("-lm"), "{link_line}");
+    for dropped in ["-O3", "-DNDEBUG", "-g\""] {
+        assert!(!link_line.contains(dropped), "`{dropped}` was copied: {link_line}");
     }
 
     // 下書きはそのまま計画・ビルド・実行まで通る。

@@ -213,7 +213,9 @@ changes, only the speed.
 - The tool set is table-driven (`dowel_eval::config::TOOLS`): the
   `[toolchain]` keys, the `tc.*` configuration vocabulary, the defaults,
   declaration copying, and the `toolchain-mismatch` comparison all follow
-  the one table, and a `missing-toolchain` probe helper is shared. Adding a
+  the one table, and a `missing-toolchain` probe helper is shared. Keys
+  outside the table are `unknown-property` with a suggestion — a misspelled
+  tool would otherwise silently fall back to its default (issue #59). Adding a
   future utility (a disassembler, `objcopy`, …) is one table row plus the
   plan-stage site that uses it — only *when* a tool is required stays a
   per-use-site judgment (the C compiler always, C++ when C++ sources
@@ -423,7 +425,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (416 tests):
+Current breakdown (417 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -432,10 +434,10 @@ Current breakdown (416 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 64 |
+| `e2e` | compile real C and C++, run it, check the output | 65 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (50 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (51 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

@@ -214,6 +214,13 @@ fn extract(t: &Json, source_dir: &Path) -> Option<Imported> {
         // 指定だけを写す。
         if role == "libraries" || role == "flags" {
             for word in frag.split_whitespace().filter(|w| w.starts_with("-l") || role == "flags") {
+                // 構成レベルのフラグは翻訳側（compileCommandFragments）と
+                // 同じ判定でリンク側からも落とす。落とさないと、見出しの
+                // 「写していない」と中身が食い違い、-flto 構成では debug の
+                // リンク時最適化が -O3 で回る（issue #61）。
+                if dowel_build::migrate::is_config_flag(word) {
+                    continue;
+                }
                 push_unique(&mut out.link_flags, word.to_string());
             }
         }
