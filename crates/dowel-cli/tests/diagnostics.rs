@@ -484,6 +484,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unknown-property",
+        why: "`cx` is not a tool of `[toolchain]`; ignoring the typo would silently fall back to the default (issue #59)",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain]\ncx = \"clang++\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unresolved-path",
         why: "the declared source does not exist",
         files: &[("app/dowel.build", "[bin.app]\nsources = [file(\"src/absent.c\")]\n")],

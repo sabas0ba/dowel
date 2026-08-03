@@ -196,6 +196,26 @@ pub fn from_document(
                 }
             }
         }
+        // 表に無いキーは拒む。黙って無視すると、道具の綴り間違いが既定値への
+        // 無言の後退になる——クロスの archiver を打ち間違えると、ホストの
+        // `ar` が黙って書庫を作る。#50 が防ごうとした状態が戻る（issue #59）
+        let known: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _)| *n).collect();
+        for e in &t.entries {
+            let name = e.key.join(".");
+            if known.contains(&name.as_str()) {
+                continue;
+            }
+            let mut d = Diagnostic::error("unknown-property", format!("unknown property `{name}`"))
+                .at(e.site.file, e.site.span, "this key is not part of the toolchain")
+                .note(format!("`[{label}]` accepts: {}", known.join(", ")));
+            if let (Some(c), Some(&span)) = (
+                dowel_support::diag::closest(&name, known.iter().copied()),
+                e.key_spans.first().filter(|_| e.key.len() == 1),
+            ) {
+                d = d.suggest(e.site.file, span, c, format!("did you mean `{c}`?"));
+            }
+            diags.push(d);
+        }
         match triple {
             Some(triple) => {
                 // トリプル向けの宣言は、そのトリプルのビルド全体を担う。

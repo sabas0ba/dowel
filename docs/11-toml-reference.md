@@ -45,6 +45,10 @@ cxx = "aarch64-linux-gnu-g++"
 | `cxx` | string | the C++ compiler command, default `c++` for host builds. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
 | `ar` | string | the archiver command, default `ar`. Required — and probed — only when the build produces a static library. Cross builds should declare it alongside `c` / `cxx` so archives are not created by the host's tool. Missing from PATH: `missing-toolchain` |
 
+Any other key is `unknown-property`, with a suggestion — a misspelled tool
+would otherwise silently fall back to its default, which for a cross
+archiver means the host's `ar` quietly builds the archives.
+
 The toolchain is selected by the target triple, the same way
 `[runner.<triple>]` is (issue #42). The plain `[toolchain]` table is the
 declaration for host builds; it never applies to another triple. Passing
