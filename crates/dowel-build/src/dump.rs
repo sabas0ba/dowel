@@ -36,6 +36,7 @@ pub fn dot(sess: &Session, plan: &Plan) -> String {
             ActionKind::Compile => "box",
             ActionKind::Archive => "folder",
             ActionKind::Link => "component",
+            ActionKind::Transform => "note",
         };
         out.push_str(&format!(
             "  a{} [shape={shape},label=\"{}\\n{}\"];\n",

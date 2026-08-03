@@ -106,6 +106,28 @@ c  = "riscv64-linux-gnu-gcc"
 ar = "riscv64-linux-gnu-ar"     # archives too — do not fall back to the host's ar
 ```
 
+For bare-metal work, declare the tools that turn the ELF into something a
+programmer can write, and the images become part of the build:
+
+```toml
+# dowel.toml
+[toolchain.thumbv7em-none-eabihf]
+c       = "arm-none-eabi-gcc"
+ar      = "arm-none-eabi-ar"
+objcopy = "arm-none-eabi-objcopy"
+```
+
+```
+# dowel.build
+[bin.firmware.artifacts]
+bin = { tool = "objcopy", args = ["-O", "binary"] }
+hex = { tool = "objcopy", args = ["-O", "ihex"] }
+```
+
+`dowel build --target=thumbv7em-none-eabihf` now produces `firmware.bin` and
+`firmware.hex` next to the ELF, re-running the conversion only when the ELF
+changed ([12-build-reference.md](12-build-reference.md)).
+
 qemu:
 
 ```toml

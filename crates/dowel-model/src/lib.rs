@@ -19,4 +19,4 @@ pub use package::{DepKind, Dependency, Package};
 pub use query::Key as QueryKey;
 pub use runner::Runner;
 pub use session::Session;
-pub use target::{PackageId, PropMap, Target, TargetId};
+pub use target::{ArtifactDecl, PackageId, PropMap, Target, TargetId};

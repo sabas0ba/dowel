@@ -10,9 +10,9 @@ use crate::package::{self, DepKind, Package};
 use crate::persist::Cache;
 use crate::query::{self, Key};
 use crate::runner::Runner;
-use crate::target::{label, PackageId, PropMap, Target, TargetId};
+use crate::target::{label, ArtifactDecl, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
-use dowel_eval::{Document, Ns, Site, Value};
+use dowel_eval::{Data, Document, Ns, Site, Value};
 use dowel_query::{Db, Stats};
 use dowel_store::Inputs;
 use dowel_support::diag::closest;
@@ -25,6 +25,10 @@ use std::sync::Arc;
 
 pub const MANIFEST_NAME: &str = "dowel.toml";
 pub const BUILD_NAME: &str = "dowel.build";
+
+/// `[<kind>.<name>.artifacts]` の見出し。プロパティのブロックではない
+/// （issue #60）。
+const ARTIFACTS_BLOCK: &str = "artifacts";
 
 /// 読み込みの時点で分かっている機能フラグの選択。
 ///
@@ -217,6 +221,7 @@ impl Session {
             root: PropMap::new(),
             public,
             private: PropMap::new(),
+            artifacts: Vec::new(),
         });
         self.externals.insert(name.to_string(), pid);
         log_debug!("external dependency `{name}` {} via pkg-config", r.version);
@@ -618,8 +623,15 @@ impl TargetSink<'_> {
             }
             let name = table.path[1].clone();
 
+            let key = (kind.name().to_string(), name.clone());
+            // `artifacts` はプロパティのブロックではない。伝播の範囲を分ける
+            // `public` / `private` と違い、成果物から成果物を作る宣言である
+            // （issue #60）。ターゲットは先に作っておく必要がある。
+            let is_artifacts = table.path.len() == 3 && table.path[2] == ARTIFACTS_BLOCK;
+
             let block = match table.path.len() {
                 2 => Block::Root,
+                3 if is_artifacts => Block::Root,
                 3 => match Block::parse(&table.path[2]) {
                     Some(b) => b,
                     None => {
@@ -627,10 +639,10 @@ impl TargetSink<'_> {
                             "unknown-block",
                             format!("unknown block `{}`", table.path[2]),
                         )
-                        .at(doc.file, table.site.span, "only `public` or `private`")
+                        .at(doc.file, table.site.span, "only `public`, `private`, or `artifacts`")
                         .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
                         if let (Some(c), Some(&span)) = (
-                            closest(&table.path[2], ["public", "private"]),
+                            closest(&table.path[2], ["public", "private", ARTIFACTS_BLOCK]),
                             table.path_spans.get(2),
                         ) {
                             d = d.suggest(doc.file, span, c, format!("did you mean `{c}`?"));
@@ -655,7 +667,6 @@ impl TargetSink<'_> {
                 }
             };
 
-            let key = (kind.name().to_string(), name.clone());
             let tid = *index.entry(key).or_insert_with(|| {
                 let tid = TargetId(self.targets.len());
                 self.targets.push(Target {
@@ -667,9 +678,15 @@ impl TargetSink<'_> {
                     root: PropMap::new(),
                     public: PropMap::new(),
                     private: PropMap::new(),
+                    artifacts: Vec::new(),
                 });
                 tid
             });
+
+            if is_artifacts {
+                self.declare_artifacts(tid, table);
+                continue;
+            }
 
             for entry in &table.entries {
                 self.assign_prop(
@@ -687,6 +704,109 @@ impl TargetSink<'_> {
             if t.package == pkg {
                 log_trace!("declared target {}.{}", t.kind.name(), t.name);
             }
+        }
+    }
+
+    /// `[<kind>.<name>.artifacts]` を取り込む（issue #60）。
+    ///
+    /// 各項目はインラインテーブルであり、鍵が出力の拡張子になる。
+    /// `tool` は宣言できる道具（`dowel_eval::config::TOOLS`）の名前でなければ
+    /// ならない。実体の名前（`arm-none-eabi-objcopy`）を直に書かせないのは、
+    /// それを書くとトリプルごとの選択も記録された入力も効かなくなるためである。
+    fn declare_artifacts(&mut self, tid: TargetId, table: &dowel_eval::Table) {
+        let known = schema::artifact_props();
+        for entry in &table.entries {
+            let suffix = entry.key.join(".");
+            let Data::Map(fields) = &entry.value.data else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "type-mismatch",
+                        format!(
+                            "`{suffix}` is an inline table but {} was given",
+                            entry.value.ty.display()
+                        ),
+                    )
+                    .at(entry.site.file, entry.site.span, "expected `{ tool = \"...\", ... }`")
+                    .note("write for example `bin = { tool = \"objcopy\", args = [\"-O\", \"binary\"] }`"),
+                );
+                continue;
+            };
+
+            let names: Vec<&str> = known.iter().map(|p| p.name).collect();
+            for (name, value) in fields {
+                match known.iter().find(|p| p.name == name) {
+                    Some(def) if !def.ty.accepts(&value.ty) => self.diagnostics.push(
+                        Diagnostic::error(
+                            "type-mismatch",
+                            format!(
+                                "`{name}` is {} but {} was given",
+                                def.ty.display(),
+                                value.ty.display()
+                            ),
+                        )
+                        .at(
+                            entry.site.file,
+                            entry.site.span,
+                            format!("this value has type {}", value.ty.display()),
+                        ),
+                    ),
+                    Some(_) => {}
+                    None => {
+                        let mut d = Diagnostic::error(
+                            "unknown-property",
+                            format!("unknown property `{name}`"),
+                        )
+                        .at(entry.site.file, entry.site.span, "an artifact has no such property")
+                        .note(format!("an artifact accepts: {}", names.join(", ")));
+                        if let Some(c) = closest(name, names.iter().copied()) {
+                            d = d.note(format!("did you mean `{c}`?"));
+                        }
+                        self.diagnostics.push(d);
+                    }
+                }
+            }
+
+            let Some(tool) = fields.get("tool") else {
+                self.diagnostics.push(
+                    Diagnostic::error("missing-field", format!("`{suffix}` has no `tool`"))
+                        .at(entry.site.file, entry.site.span, "write `tool = \"...\"`")
+                        .note(format!(
+                            "declarable tools: {}",
+                            dowel_eval::config::TOOLS
+                                .iter()
+                                .map(|(n, _)| *n)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
+                );
+                continue;
+            };
+            let Some(tool_name) = tool.as_str() else { continue };
+
+            // 道具の名前は表が決める。実体の選択は `[toolchain]` の仕事。
+            let tools: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _)| *n).collect();
+            if !tools.contains(&tool_name) {
+                let mut d = Diagnostic::error(
+                    "unknown-tool",
+                    format!("`{tool_name}` is not a toolchain tool"),
+                )
+                .at(entry.site.file, entry.site.span, "no such tool")
+                .note(format!("declarable tools: {}", tools.join(", ")))
+                .note("the concrete command comes from `[toolchain]`, so write the tool's name here, not `arm-none-eabi-objcopy`");
+                if let Some(c) = closest(tool_name, tools.iter().copied()) {
+                    d = d.note(format!("did you mean `{c}`?"));
+                }
+                self.diagnostics.push(d);
+                continue;
+            }
+
+            self.targets[tid.0].artifacts.push(ArtifactDecl {
+                suffix,
+                tool: tool_name.to_string(),
+                args: fields.get("args").cloned(),
+                site: entry.site,
+                tool_site: entry.site,
+            });
         }
     }
 

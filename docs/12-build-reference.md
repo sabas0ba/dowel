@@ -90,6 +90,46 @@ affects this target only. (The precise formulas are in
 Unknown properties fail with `unknown-property` and an edit-distance
 suggestion; wrong types with `type-mismatch`.
 
+### `[<kind>.<name>.artifacts]` — deriving files from the artifact
+
+Embedded work needs a step after linking: the ELF is turned into a raw
+image, an Intel HEX file, or a stripped copy. Declaring it here puts that
+step **inside** the build graph, so it is produced by `dowel build`, skipped
+when its input has not changed, and performed by the tool the toolchain
+selects for the target triple.
+
+```toml
+[bin.firmware]
+sources = glob("src/*.c")
+
+[bin.firmware.artifacts]
+bin = { tool = "objcopy", args = ["-O", "binary"] }
+hex = { tool = "objcopy", args = ["-O", "ihex"] }
+```
+
+Each key names the **extension of the produced file**: the output is the
+target's artifact with its extension replaced, so `firmware` yields
+`firmware.bin` and `firmware.hex` next to it in the build directory.
+
+| Property | Type | Meaning |
+|---|---|---|
+| `tool` | `Str` | required. The **name** of a toolchain tool (`objcopy`), not a command. The concrete command comes from `[toolchain]` / `[toolchain.<triple>]`, so a cross build uses `arm-none-eabi-objcopy` without the manifest repeating it. A name outside the tool table is `unknown-tool`; a missing `tool` is `missing-field` |
+| `args` | `List<Str>` | arguments placed before the paths |
+
+The command run is `<tool> <args...> <input> <output>` — the input and
+output are appended positionally and never written in the manifest, the same
+rule runner transfers follow ([ADR-0008](adr/0008-runner-transfer.md)). A
+tool whose invocation does not fit that shape cannot be expressed here; for
+a stripped copy, use `objcopy` with `--strip-all` rather than `strip`.
+
+The tool is probed at plan time only when a declaration uses it — a build
+with no `artifacts` block never requires `objcopy` to exist. Because the
+tool's command is part of the action's command line, changing the
+declaration rebuilds the derived file.
+
+Inspection tools that produce no file (`size`, `nm`, `objdump`) are not
+expressible yet; they need a place that reports rather than builds.
+
 ### `[runner.<triple>]` — execution wrappers
 
 Runners launch cross-compiled test artifacts

@@ -28,12 +28,27 @@ pub struct Plan {
     pub actions: Vec<Action>,
     /// ターゲット → 最終成果物
     pub artifacts: BTreeMap<TargetId, PathBuf>,
+    /// ターゲット → 成果物から派生させたもの（`artifacts` ブロック、issue #60）。
+    /// 宣言順。これらもビルドの成果物であり、既定で作られる
+    pub derived: BTreeMap<TargetId, Vec<PathBuf>>,
     pub compile_commands: Vec<CompileCommand>,
     /// 要求されたターゲット
     pub requested: Vec<TargetId>,
 }
 
 impl Plan {
+    /// 要求されたターゲットが作るもの全て（成果物と、そこからの派生）。
+    ///
+    /// ninja の `default` と「何を作ったか」の表示が同じ一覧を読む。
+    pub fn requested_outputs(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for t in &self.requested {
+            out.extend(self.artifacts.get(t).cloned());
+            out.extend(self.derived.get(t).into_iter().flatten().cloned());
+        }
+        out
+    }
+
     pub fn action(&self, id: ActionId) -> &Action {
         &self.actions[id.0]
     }
@@ -113,6 +128,7 @@ pub fn plan(
         build_dir: build_dir.clone(),
         actions: Vec::new(),
         artifacts: BTreeMap::new(),
+        derived: BTreeMap::new(),
         compile_commands: Vec::new(),
         requested: requested.to_vec(),
     };
@@ -125,6 +141,8 @@ pub fn plan(
     let mut cxx_toolchain_checked = false;
     // 書庫作成器も同じ扱い。書庫を作らないビルドには要求しない
     let mut ar_toolchain_checked = false;
+    // 変換の道具も同じ扱い。使う宣言があったときに1度だけ確かめる
+    let mut probed_tools: BTreeSet<String> = BTreeSet::new();
 
     // `graph.order` は依存が先。成果物ができてからリンクする順になる。
     for &tid in &graph.order {
@@ -353,14 +371,68 @@ pub fn plan(
                 .at(target.site.file, target.site.span, "unimplemented kind"),
             ),
         }
+
+        // --- 成果物からの派生（`artifacts` ブロック、issue #60） ---
+        for decl in &target.artifacts {
+            let (Some(input), Some(&producer_id)) =
+                (plan.artifacts.get(&tid).cloned(), producer.get(&tid))
+            else {
+                // 成果物を作れなかった種類。既に診断は出ている。
+                break;
+            };
+            if probed_tools.insert(decl.tool.clone()) {
+                require_tool(
+                    &mut diags,
+                    cfg,
+                    root_toolchain,
+                    &decl.tool,
+                    &format!("{} tool", decl.tool),
+                );
+            }
+            // 出力は成果物の拡張子を置き換えたもの。`firmware` → `firmware.bin`、
+            // `libfoo.a` → `libfoo.bin`。書式文字列を持ち込まないための規則。
+            let out = input.with_extension(&decl.suffix);
+            let mut args: Vec<String> = decl
+                .args
+                .as_ref()
+                .and_then(|v| dowel_eval::specialize(v, cfg))
+                .map(|v| {
+                    flatten(&v).iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+                })
+                .unwrap_or_default();
+            // 入力と出力は末尾に位置で置く（ADR-0008）。
+            args.push(input.display().to_string());
+            args.push(out.display().to_string());
+
+            let id = ActionId(plan.actions.len());
+            plan.actions.push(Action {
+                id,
+                kind: ActionKind::Transform,
+                target: tid,
+                program: cfg.tool(&decl.tool).to_string(),
+                args,
+                inputs: vec![input],
+                outputs: vec![out.clone()],
+                depfile: None,
+                description: format!(
+                    "{} {}",
+                    decl.tool.to_uppercase(),
+                    rel_display(&build_dir, &out)
+                ),
+                deps: vec![producer_id],
+            });
+            log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
+            plan.derived.entry(tid).or_default().push(out);
+        }
     }
 
     log_debug!(
-        "{} actions ({} compile, {} archive, {} link)",
+        "{} actions ({} compile, {} archive, {} link, {} transform)",
         plan.actions.len(),
         count(&plan, ActionKind::Compile),
         count(&plan, ActionKind::Archive),
-        count(&plan, ActionKind::Link)
+        count(&plan, ActionKind::Link),
+        count(&plan, ActionKind::Transform)
     );
 
     (plan, diags)

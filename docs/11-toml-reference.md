@@ -44,6 +44,7 @@ cxx = "aarch64-linux-gnu-g++"
 | `c` | string | the C compiler command, default `cc` for host builds. It must be on PATH at plan time (a value containing a path separator is probed as a path) — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain`. Required in `[toolchain.<triple>]`: missing there is `missing-field` |
 | `cxx` | string | the C++ compiler command, default `c++` for host builds. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
 | `ar` | string | the archiver command, default `ar`. Required — and probed — only when the build produces a static library. Cross builds should declare it alongside `c` / `cxx` so archives are not created by the host's tool. Missing from PATH: `missing-toolchain` |
+| `objcopy` | string | the object copier, default `objcopy`. Used by `[<kind>.<name>.artifacts]` to derive files from an artifact ([12-build-reference.md](12-build-reference.md)); probed only when such a declaration exists. Missing from PATH: `missing-toolchain` |
 
 Any other key is `unknown-property`, with a suggestion — a misspelled tool
 would otherwise silently fall back to its default, which for a cross

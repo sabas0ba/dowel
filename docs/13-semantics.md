@@ -140,7 +140,9 @@ Planning turns merged property maps into an action graph.
   root). Path values never concatenate as strings
 - **Actions**: one compile per source (with `-I` / `-D` / flags from
   `compile_env`), one archive per `lib` (`ar`), one link per `bin` / `test`
-  (own objects, dependency archives in graph order, `link_flags`)
+  (own objects, dependency archives in graph order, `link_flags`), and one
+  transform per entry of an `artifacts` block, run after the artifact it
+  derives from (`<tool> <args...> <input> <output>`, issue #60)
 - **`link_flags` ride the link closure**, `private` included: a static
   archive cannot carry its own link requirements, so the flags a library
   declares (or a `version` dependency's `--libs` brings in) reach the final

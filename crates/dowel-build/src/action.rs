@@ -15,6 +15,8 @@ pub enum ActionKind {
     Compile,
     Archive,
     Link,
+    /// 成果物から別の成果物を作る（`artifacts` ブロック、issue #60）
+    Transform,
 }
 
 impl ActionKind {
@@ -23,6 +25,7 @@ impl ActionKind {
             ActionKind::Compile => "cc",
             ActionKind::Archive => "ar",
             ActionKind::Link => "link",
+            ActionKind::Transform => "transform",
         }
     }
 }

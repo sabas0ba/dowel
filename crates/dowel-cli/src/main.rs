@@ -237,10 +237,10 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
                 return Ok(ExitCode::FAILURE);
             };
-            for t in &requested {
-                if let Some(path) = p.artifacts.get(t) {
-                    eprintln!("built: {}", path.display());
-                }
+            // 派生した成果物（`artifacts` ブロック）も作ったものとして述べる。
+            // 述べないと、`.bin` が出来ていることが利用者に見えない。
+            for path in p.requested_outputs() {
+                eprintln!("built: {}", path.display());
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -619,6 +619,27 @@ fn schema_dump() -> String {
             w.end_object();
         }
         w.end_array();
+        w.end_object();
+    }
+    w.end_array();
+
+    // `artifacts` はプロパティのブロックではないため、`blocks` とは別に出す
+    // （issue #60）。項目の鍵は出力の拡張子であり、値がこの表を取る。
+    w.key("artifact_properties").begin_array();
+    for p in schema::artifact_props() {
+        w.begin_object();
+        w.field_str("name", p.name);
+        w.field_str("type", &p.ty.display());
+        w.field_str("doc", p.doc);
+        w.end_object();
+    }
+    w.end_array();
+
+    w.key("tools").begin_array();
+    for (name, default) in dowel_eval::config::TOOLS {
+        w.begin_object();
+        w.field_str("name", name);
+        w.field_str("default", default);
         w.end_object();
     }
     w.end_array();

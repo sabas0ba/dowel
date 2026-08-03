@@ -1855,3 +1855,120 @@ fn a_private_system_dependency_of_a_library_still_links_its_dependent() {
     let bin = build_dir(&p.path("top"), "debug").join("bin/top");
     assert_eq!(run_artifact(&bin), "v=42\n");
 }
+
+/// `[<kind>.<name>.artifacts]` — 成果物から別の成果物を作る（issue #60）。
+///
+/// 組み込みで要るのは `objcopy -O binary app.elf app.bin` の形である。
+/// 本物のクロス環境を要求せず、ホストの objcopy で同じ経路を通す。
+#[test]
+fn a_bin_target_can_derive_artifacts_with_objcopy() {
+    if !program_exists("objcopy") {
+        eprintln!("skipping: objcopy is not on PATH");
+        return;
+    }
+    let p = Project::new("artifacts-objcopy");
+    p.write("dowel.toml", "[package]\nname = \"fw\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.firmware]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.firmware.artifacts]\n\
+         bin = { tool = \"objcopy\", args = [\"-O\", \"binary\"] }\n\
+         hex = { tool = \"objcopy\", args = [\"-O\", \"ihex\"] }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["build"]);
+    r.success();
+    let dir = build_dir(&p.path("."), "debug");
+    for derived in ["bin/firmware.bin", "bin/firmware.hex"] {
+        let path = dir.join(derived);
+        assert!(path.exists(), "{} was not produced\n{r}", path.display());
+        assert!(std::fs::metadata(&path).unwrap().len() > 0, "{} is empty", path.display());
+    }
+    // 作ったものは述べる。述べないと `.bin` が出来ていることが見えない。
+    r.stderr_contains("firmware.bin");
+
+    // 元の成果物が変わらなければ作り直さない。
+    let stamp = std::fs::metadata(dir.join("bin/firmware.bin")).unwrap().modified().unwrap();
+    p.run(".", &["build"]).success();
+    assert_eq!(
+        std::fs::metadata(dir.join("bin/firmware.bin")).unwrap().modified().unwrap(),
+        stamp,
+        "the transform ran again although its input did not change"
+    );
+
+    // ソースを変えれば、リンクの後に変換も走り直す。
+    p.write("src/main.c", "int main(void) { return 1; }\n");
+    p.run(".", &["build"]).success();
+    assert_ne!(
+        std::fs::metadata(dir.join("bin/firmware.bin")).unwrap().modified().unwrap(),
+        stamp,
+        "the transform did not re-run after its input changed"
+    );
+}
+
+#[test]
+fn the_transform_tool_is_selected_by_the_toolchain_declaration() {
+    // 変換の道具もトリプルごとに選べる。宣言した実体が呼ばれることを、
+    // 呼ばれたことを記録するラッパで確かめる（issue #60）。
+    let p = Project::new("artifacts-tool-selection");
+    let marker = p.path("objcopy-was-called");
+    let wrapper = p.path("fake-objcopy");
+    std::fs::write(
+        &wrapper,
+        format!("#!/bin/sh\ntouch {}\nshift 2\ncp \"$1\" \"$2\"\n", marker.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"fw\"\nversion = \"0\"\n\n[toolchain]\nobjcopy = \"{}\"\n",
+            wrapper.display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.firmware]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.firmware.artifacts]\nbin = { tool = \"objcopy\", args = [\"-O\", \"binary\"] }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    p.run(".", &["build"]).success();
+    assert!(marker.exists(), "the declared objcopy was not invoked");
+    assert!(build_dir(&p.path("."), "debug").join("bin/firmware.bin").exists());
+}
+
+#[test]
+fn an_artifact_naming_a_tool_that_does_not_exist_is_refused() {
+    // 実体の名前（`arm-none-eabi-objcopy`）を直に書くと、トリプルごとの選択も
+    // 記録された入力も効かない。道具の名前でしか書けないことを述べる。
+    let p = Project::new("artifacts-unknown-tool");
+    p.write("dowel.toml", "[package]\nname = \"fw\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.firmware]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.firmware.artifacts]\nbin = { tool = \"arm-none-eabi-objcopy\" }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-tool");
+    r.stderr_contains("declarable tools:");
+    r.stderr_contains("`[toolchain]`");
+}
+
+/// PATH 上に道具が在るか。テストの前提を確かめるためだけの簡易版。
+fn program_exists(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .any(|dir| std::fs::metadata(dir.join(name)).map(|m| m.is_file()).unwrap_or(false))
+        })
+        .unwrap_or(false)
+}
