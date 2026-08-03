@@ -271,11 +271,10 @@ fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
         cfg.features = sess.active_features().clone();
         let host = dowel_eval::config::default_triple();
         if let Some(decl) = root.toolchain_for(&cfg.target, &host) {
-            if let Some(tc) = &decl.c {
-                cfg.tc_c = tc.clone();
-            }
-            if let Some(tc) = &decl.cxx {
-                cfg.tc_cxx = tc.clone();
+            for (name, _) in dowel_eval::config::TOOLS {
+                if let Some(t) = decl.tool(name) {
+                    cfg.set_tool(name, t.command.clone());
+                }
             }
         }
     }

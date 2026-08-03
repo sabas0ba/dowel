@@ -198,6 +198,20 @@ changes, only the speed.
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language (the place for
   `-std=...`)
+- The archiver is part of the toolchain: `[toolchain] ar` (default `ar`,
+  also per-triple in `[toolchain.<triple>]`, configuration key `tc.ar`)
+  names the tool that creates static libraries, so cross builds do not fall
+  back to the host's `ar` (issue #50). It is probed — and required — only
+  when the build produces an archive; because the name is part of the
+  action's command line, changing it rebuilds the archive
+- The tool set is table-driven (`dowel_eval::config::TOOLS`): the
+  `[toolchain]` keys, the `tc.*` configuration vocabulary, the defaults,
+  declaration copying, and the `toolchain-mismatch` comparison all follow
+  the one table, and a `missing-toolchain` probe helper is shared. Adding a
+  future utility (a disassembler, `objcopy`, …) is one table row plus the
+  plan-stage site that uses it — only *when* a tool is required stays a
+  per-use-site judgment (the C compiler always, C++ when C++ sources
+  appear, the archiver when an archive is produced)
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
   freshness reading depfiles). Header dependency records (`.d` files) stay
@@ -317,9 +331,11 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   compile database against the plan, source by source, after normalization
   (`-DX` ≡ `-D X` ≡ `-DX=1`; `-I` resolved against each entry's
   `directory`; compiler name, `-c`/`-o`, and the `-MD` family ignored;
-  remaining flags as a multiset). Differing ported sources fail the run;
-  unported sources are reported without failing — porting is incremental
-  (docs/40-migration.md 4)
+  configuration-level flags — optimization, debug info, `NDEBUG` — dropped
+  from both sides, since dowel's `cfg.opt` and the reference's build type
+  supply them independently (issue #54); remaining flags as a multiset).
+  Differing ported sources fail the run; unported sources are reported
+  without failing — porting is incremental (docs/40-migration.md 4)
 - Both reference forms are read (`arguments` array and shell-quoted
   `command` string). Output is text or `--format=json`
 - `dowel migrate import <cmake-build-dir>` drafts `dowel.toml` /
@@ -329,7 +345,11 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   gate on unverified targets remains open) and points at `migrate verify`.
   Everything lands in `private` blocks — the public/private intent is
   unknowable from the File API — and sources are listed explicitly, not
-  globbed, so the draft stays faithful to the extracted projection
+  globbed, so the draft stays faithful to the extracted projection.
+  Configuration-level flags from the CMake build type (`-O` / `-g` /
+  `-DNDEBUG`) are not copied: dowel's `--config` supplies them, and copying
+  them unconditionally would make a draft imported from Release produce
+  optimized `NDEBUG` debug builds (issue #54)
 
 ### Scaffolding (`dowel-cli`)
 
@@ -397,16 +417,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (410 tests):
+Current breakdown (414 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 267 |
+| `unit-*` | per-crate unit tests | 269 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 60 |
+| `e2e` | compile real C and C++, run it, check the output | 62 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (50 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

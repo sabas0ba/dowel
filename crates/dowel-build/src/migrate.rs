@@ -12,6 +12,10 @@
 //! - `-D` は `NAME` を `NAME=1` に正規化して集合で比べる（プリプロセッサの意味論）
 //! - `-I` / `-isystem` は各エントリの `directory` 基準で絶対化して集合で比べる
 //! - `-c` / `-o` / depfile 生成（`-MD` 系）/ ソース自身 / コンパイラ名は除く
+//! - **構成のフラグ**（最適化・デバッグ情報・`NDEBUG`、[`is_config_flag`]）は
+//!   両側から等しく除く。これらは dowel では `cfg.opt` が、参照側では
+//!   build type が供給するもので、突き合わせる相手が違う。比較に持ち込むと
+//!   移行の成否と無関係な理由で全ソースが `differing` になる（issue #54）
 //! - 残りのフラグは多重集合で比べる。順序は比べない（順序が意味を持つ
 //!   フラグ列は稀であり、並び替えの差で埋もれる方が害が大きい）
 
@@ -147,6 +151,33 @@ fn diff(file: &Path, theirs: &Normalized, ours: &Normalized) -> SourceDiff {
     SourceDiff { file: file.to_path_buf(), missing, extra }
 }
 
+/// 構成（build type / `cfg.opt`）が供給するフラグか。
+///
+/// 最適化・デバッグ情報・`NDEBUG` は、dowel では構成の語彙が決める
+/// （`default_compile_flags`）。取り込み（`migrate import`）はこれらを
+/// 下書きへ写さず、等価判定（`migrate verify`）は両側から等しく除く。
+/// 写すと下書きのフラグが無条件になり、release から取り込んだ下書きの
+/// debug ビルドが最適化された `NDEBUG` 付きになる（issue #54）。
+pub fn is_config_flag(word: &str) -> bool {
+    if word == "-DNDEBUG" {
+        return true;
+    }
+    if let Some(rest) = word.strip_prefix("-O") {
+        return matches!(rest, "" | "0" | "1" | "2" | "3" | "s" | "z" | "g" | "fast");
+    }
+    if let Some(rest) = word.strip_prefix("-g") {
+        // `-g` `-g3` `-ggdb3` `-gdwarf-5` 等。`-gcc-toolchain` のような
+        // デバッグ情報と無関係な語は写す側に残す。
+        return rest.is_empty()
+            || rest.chars().all(|c| c.is_ascii_digit())
+            || rest.starts_with("gdb")
+            || rest.starts_with("dwarf")
+            || rest == "line-tables-only"
+            || rest == "split-dwarf";
+    }
+    false
+}
+
 /// 引数列を意味に効く部分へ落とす。
 fn normalize(args: &[String], dir: &Path, source: &Path) -> Normalized {
     let mut out = Normalized::default();
@@ -171,6 +202,10 @@ fn normalize(args: &[String], dir: &Path, source: &Path) -> Normalized {
                 let d = attached_or_next(&a[2..], &mut i);
                 // `-DX` は `X=1` の意味（C プリプロセッサの規定）。
                 let d = if d.contains('=') { d } else { format!("{d}=1") };
+                // `NDEBUG` は構成が供給する（is_config_flag と同じ扱い）。
+                if d == "NDEBUG=1" {
+                    continue;
+                }
                 out.defines.insert(d);
             }
             _ if a.starts_with("-I") => {
@@ -182,6 +217,10 @@ fn normalize(args: &[String], dir: &Path, source: &Path) -> Normalized {
                 out.includes.insert(absolute(dir, Path::new(&inc)));
             }
             _ => {
+                // 構成のフラグは両側から等しく除く。
+                if is_config_flag(a) {
+                    continue;
+                }
                 // ソースは相対で書かれることもある。絶対化して一致すれば除く。
                 if absolute(dir, Path::new(a)) == source {
                     continue;

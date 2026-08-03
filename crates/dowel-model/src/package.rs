@@ -32,18 +32,36 @@ pub struct Package {
 }
 
 /// 1つの `[toolchain]`（または `[toolchain.<triple>]`）テーブルの内容。
+///
+/// 受け付ける道具は `dowel_eval::config::TOOLS` の表が決める。
+/// 道具ごとの個別フィールドにしないのは、道具を増やすとき（例: disasm）に
+/// 触る箇所を表1行に留めるためである（issue #50 のレビュー）。
 #[derive(Clone, Debug, Default)]
 pub struct ToolchainDecl {
     /// テーブル見出しの位置。宣言に由来する診断が参照する
     pub site: Option<Site>,
-    /// `c = "..."`
-    pub c: Option<String>,
-    /// その宣言が書かれた位置。実在しないツールチェーンを指す診断が参照する
-    pub c_site: Option<Site>,
-    /// `cxx = "..."`
-    pub cxx: Option<String>,
-    /// その宣言が書かれた位置
-    pub cxx_site: Option<Site>,
+    /// 道具名 → 宣言。宣言の無い道具は表の既定に落ちる
+    tools: BTreeMap<String, ToolDecl>,
+}
+
+/// 1つの道具の宣言。
+#[derive(Clone, Debug)]
+pub struct ToolDecl {
+    /// 起動するコマンド
+    pub command: String,
+    /// 宣言が書かれた位置。実在しない道具を指す診断が参照する
+    pub site: Site,
+}
+
+impl ToolchainDecl {
+    /// 道具の宣言。名前は `dowel_eval::config::TOOLS` のもの。
+    pub fn tool(&self, name: &str) -> Option<&ToolDecl> {
+        self.tools.get(name)
+    }
+
+    pub fn set_tool(&mut self, name: &str, command: String, site: Site) {
+        self.tools.insert(name.to_string(), ToolDecl { command, site });
+    }
 }
 
 impl Package {
@@ -168,22 +186,14 @@ pub fn from_document(
             }
         };
         let mut decl = ToolchainDecl { site: Some(t.site), ..ToolchainDecl::default() };
-        if let Some(e) = t.entry("c") {
-            match e.value.as_str() {
-                Some(s) => {
-                    decl.c = Some(s.to_string());
-                    decl.c_site = Some(e.site);
+        // 受け付ける道具は表が決める。表に1行足せば、ここも `tc.<名前>` の
+        // 語彙も宣言の写しも揃って追随する。
+        for (name, _) in dowel_eval::config::TOOLS {
+            if let Some(e) = t.entry(name) {
+                match e.value.as_str() {
+                    Some(s) => decl.set_tool(name, s.to_string(), e.site),
+                    None => type_err(diags, e.site, &format!("{label}.{name}"), "a string"),
                 }
-                None => type_err(diags, e.site, &format!("{label}.c"), "a string"),
-            }
-        }
-        if let Some(e) = t.entry("cxx") {
-            match e.value.as_str() {
-                Some(s) => {
-                    decl.cxx = Some(s.to_string());
-                    decl.cxx_site = Some(e.site);
-                }
-                None => type_err(diags, e.site, &format!("{label}.cxx"), "a string"),
             }
         }
         match triple {
@@ -191,7 +201,7 @@ pub fn from_document(
                 // トリプル向けの宣言は、そのトリプルのビルド全体を担う。
                 // `c` が無いと C のコンパイルとリンクがホストの既定へ落ち、
                 // 成果物のアーキテクチャが黙って食い違う（issue #42）。
-                if decl.c.is_none() {
+                if decl.tool("c").is_none() {
                     diags.push(
                         Diagnostic::error(
                             "missing-field",
@@ -441,22 +451,24 @@ mod tests {
     fn the_toolchain_is_selected_by_the_target_triple() {
         const HOST: &str = "x86_64-unknown-linux-gnu";
         const CROSS: &str = "riscv64gc-unknown-linux-gnu";
+        let site = Site::new(FileId(0), dowel_support::Span::new(0, 0));
         let mut p = pkg_with(&[]);
-        p.toolchain.c = Some("cc".into());
-        p.toolchains.insert(
-            CROSS.into(),
-            ToolchainDecl { c: Some("riscv64-gcc".into()), ..Default::default() },
-        );
+        p.toolchain.set_tool("c", "cc".into(), site);
+        let mut cross = ToolchainDecl::default();
+        cross.set_tool("c", "riscv64-gcc".into(), site);
+        p.toolchains.insert(CROSS.into(), cross);
 
         // ホストのビルドは無印の宣言、別トリプルはそのトリプルの宣言。
-        assert_eq!(p.toolchain_for(HOST, HOST).unwrap().c.as_deref(), Some("cc"));
-        assert_eq!(p.toolchain_for(CROSS, HOST).unwrap().c.as_deref(), Some("riscv64-gcc"));
+        let command = |d: &ToolchainDecl| d.tool("c").map(|t| t.command.clone());
+        assert_eq!(command(p.toolchain_for(HOST, HOST).unwrap()).as_deref(), Some("cc"));
+        assert_eq!(command(p.toolchain_for(CROSS, HOST).unwrap()).as_deref(), Some("riscv64-gcc"));
     }
 
     #[test]
     fn a_foreign_triple_without_a_declaration_resolves_to_nothing() {
+        let site = Site::new(FileId(0), dowel_support::Span::new(0, 0));
         let mut p = pkg_with(&[]);
-        p.toolchain.c = Some("cc".into());
+        p.toolchain.set_tool("c", "cc".into(), site);
         // 無印の宣言はホスト向けであり、別トリプルのビルドへは落ちない。
         // ここが `Some` になると、ホストの成果物に別トリプルの名前が付く（issue #42）。
         assert!(p

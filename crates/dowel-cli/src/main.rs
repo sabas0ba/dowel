@@ -449,11 +449,11 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
         let host = dowel_eval::config::default_triple();
         match root.toolchain_for(&cfg.target, &host) {
             Some(decl) => {
-                if let Some(tc) = &decl.c {
-                    cfg.tc_c = tc.clone();
-                }
-                if let Some(tc) = &decl.cxx {
-                    cfg.tc_cxx = tc.clone();
+                // 道具の集合は表（dowel_eval::config::TOOLS）が決める。
+                for (name, _) in dowel_eval::config::TOOLS {
+                    if let Some(t) = decl.tool(name) {
+                        cfg.set_tool(name, t.command.clone());
+                    }
                 }
             }
             None => {
