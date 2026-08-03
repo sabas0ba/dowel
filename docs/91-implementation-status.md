@@ -204,6 +204,14 @@ changes, only the speed.
   back to the host's `ar` (issue #50). It is probed — and required — only
   when the build produces an archive; because the name is part of the
   action's command line, changing it rebuilds the archive
+- The tool set is table-driven (`dowel_eval::config::TOOLS`): the
+  `[toolchain]` keys, the `tc.*` configuration vocabulary, the defaults,
+  declaration copying, and the `toolchain-mismatch` comparison all follow
+  the one table, and a `missing-toolchain` probe helper is shared. Adding a
+  future utility (a disassembler, `objcopy`, …) is one table row plus the
+  plan-stage site that uses it — only *when* a tool is required stays a
+  per-use-site judgment (the C compiler always, C++ when C++ sources
+  appear, the archiver when an archive is produced)
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
   freshness reading depfiles). Header dependency records (`.d` files) stay
@@ -409,12 +417,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (412 tests):
+Current breakdown (414 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 267 |
+| `unit-*` | per-crate unit tests | 269 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |

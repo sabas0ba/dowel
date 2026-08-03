@@ -78,26 +78,21 @@ pub fn plan(
     // 宣言は、このビルドに対する要求ではない。
     for p in &sess.packages {
         let Some(decl) = p.toolchain_for(&cfg.target, &host) else { continue };
-        let mismatches: [(&Option<String>, &str, &str); 3] = [
-            (&decl.c, "C", &cfg.tc_c),
-            (&decl.cxx, "C++", &cfg.tc_cxx),
-            (&decl.ar, "archiver", &cfg.tc_ar),
-        ];
-        for (declared, lang, used) in mismatches {
-            if let Some(tc) = declared {
-                if tc != used {
-                    diags.push(
-                        Diagnostic::warning(
-                            "toolchain-mismatch",
-                            format!(
-                                "package `{}` asks for {lang} toolchain `{tc}` but the build uses `{used}`",
-                                p.name
-                            ),
-                        )
-                        .note("fetching and switching toolchains is Phase 5 (docs/90-roadmap.md)")
-                        .note("ABI label checking assumes a single pinned toolchain"),
-                    );
-                }
+        for (name, _) in dowel_eval::config::TOOLS {
+            let Some(t) = decl.tool(name) else { continue };
+            let used = cfg.tool(name);
+            if t.command != used {
+                diags.push(
+                    Diagnostic::warning(
+                        "toolchain-mismatch",
+                        format!(
+                            "package `{}` asks for `{name} = \"{}\"` but the build uses `{used}`",
+                            p.name, t.command
+                        ),
+                    )
+                    .note("fetching and switching toolchains is Phase 5 (docs/90-roadmap.md)")
+                    .note("ABI label checking assumes a single pinned toolchain"),
+                );
             }
         }
     }
@@ -105,19 +100,8 @@ pub fn plan(
     // 固定した対象が実在するかどうかは、記録されない入力を排除する前提である
     // （docs/00-overview.md 2節）。確かめなければ `/bin/sh: not found` が
     // ビルドの失敗として出るだけで、`[toolchain]` のどの行が原因かを示さない。
-    if !crate::exec::program_exists(&cfg.tc_c) {
-        let mut d = Diagnostic::error(
-            "missing-toolchain",
-            format!("cannot find the C compiler `{}`", cfg.tc_c),
-        );
-        match root_toolchain.and_then(|t| t.c_site) {
-            Some(s) => d = d.at(s.file, s.span, "declared here"),
-            None => d = d.note("no `[toolchain]` is declared, so the default `cc` is used"),
-        }
-        diags.push(d.note(
-            "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
-        ));
-    }
+    // C は常に要る。他の道具はそれを使う箇所が要求する（require_tool）。
+    require_tool(&mut diags, cfg, root_toolchain, "c", "C compiler");
 
     // 必要なターゲットの集合。要求されたものとその推移的依存。
     let mut needed: BTreeSet<TargetId> = BTreeSet::new();
@@ -155,7 +139,7 @@ pub fn plan(
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
         if has_cxx[&tid] && !cxx_toolchain_checked {
             cxx_toolchain_checked = true;
-            if cfg.target != host && root_toolchain.is_none_or(|t| t.cxx.is_none()) {
+            if cfg.target != host && root_toolchain.is_none_or(|t| t.tool("cxx").is_none()) {
                 // ホストの `c++` へ落とすと、C++ の翻訳単位だけ別アーキテクチャの
                 // オブジェクトになる。黙って組まず、宣言の不足として述べる。
                 let mut d = Diagnostic::error(
@@ -168,20 +152,8 @@ pub fn plan(
                 diags.push(d.note(
                     "the sources contain C++, and the host `c++` would produce objects for the wrong architecture",
                 ));
-            } else if !crate::exec::program_exists(&cfg.tc_cxx) {
-                let mut d = Diagnostic::error(
-                    "missing-toolchain",
-                    format!("cannot find the C++ compiler `{}`", cfg.tc_cxx),
-                );
-                match root_toolchain.and_then(|t| t.cxx_site) {
-                    Some(s) => d = d.at(s.file, s.span, "declared here"),
-                    None => {
-                        d = d.note("no `[toolchain] cxx` is declared, so the default `c++` is used")
-                    }
-                }
-                diags.push(d.note(
-                    "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
-                ));
+            } else {
+                require_tool(&mut diags, cfg, root_toolchain, "cxx", "C++ compiler");
             }
         }
         if sources.is_empty() && target.kind != TableKind::Lib {
@@ -239,7 +211,7 @@ pub fn plan(
             // 自体は通すが、C++ として組むには標準ライブラリと ABI の前提が
             // 揃った driver（`tc.cxx`）を使う必要がある
             let (compiler, tool) =
-                if is_cxx(src) { (&cfg.tc_cxx, "CXX") } else { (&cfg.tc_c, "CC") };
+                if is_cxx(src) { (cfg.tool("cxx"), "CXX") } else { (cfg.tool("c"), "CC") };
             let obj = object_path(&build_dir, &pkg.name, &target.name, &pkg.root, src);
             let depfile = obj.with_extension("o.d");
             let mut args: Vec<String> = Vec::new();
@@ -267,7 +239,7 @@ pub fn plan(
                 id,
                 kind: ActionKind::Compile,
                 target: tid,
-                program: compiler.clone(),
+                program: compiler.to_string(),
                 args: args.clone(),
                 inputs: vec![src.clone()],
                 outputs: vec![obj.clone()],
@@ -275,7 +247,7 @@ pub fn plan(
                 description: format!("{tool} {}", rel_display(&build_dir, &obj)),
                 deps: Vec::new(),
             });
-            let mut arguments = vec![compiler.clone()];
+            let mut arguments = vec![compiler.to_string()];
             arguments.extend(args);
             plan.compile_commands.push(CompileCommand {
                 directory: build_dir.clone(),
@@ -296,23 +268,7 @@ pub fn plan(
                 // （issue #50）。
                 if !ar_toolchain_checked {
                     ar_toolchain_checked = true;
-                    if !crate::exec::program_exists(&cfg.tc_ar) {
-                        let mut d = Diagnostic::error(
-                            "missing-toolchain",
-                            format!("cannot find the archiver `{}`", cfg.tc_ar),
-                        );
-                        match root_toolchain.and_then(|t| t.ar_site) {
-                            Some(s) => d = d.at(s.file, s.span, "declared here"),
-                            None => {
-                                d = d.note(
-                                    "no `[toolchain] ar` is declared, so the default `ar` is used",
-                                )
-                            }
-                        }
-                        diags.push(d.note(
-                            "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
-                        ));
-                    }
+                    require_tool(&mut diags, cfg, root_toolchain, "ar", "archiver");
                 }
                 let out = build_dir.join("lib").join(format!("lib{}.a", target.name));
                 let mut args = vec!["rcs".to_string(), out.display().to_string()];
@@ -322,7 +278,7 @@ pub fn plan(
                     id,
                     kind: ActionKind::Archive,
                     target: tid,
-                    program: cfg.tc_ar.clone(),
+                    program: cfg.tool("ar").to_string(),
                     args,
                     inputs: objects.clone(),
                     outputs: vec![out.clone()],
@@ -343,7 +299,7 @@ pub fn plan(
                     .link_closure(tid)
                     .into_iter()
                     .any(|t| has_cxx.get(&t).copied().unwrap_or(false));
-                let linker = if link_needs_cxx { &cfg.tc_cxx } else { &cfg.tc_c };
+                let linker = if link_needs_cxx { cfg.tool("cxx") } else { cfg.tool("c") };
                 // リンク順は依存元が先。静的ライブラリの解決順の要請による。
                 let libs: Vec<PathBuf> = graph
                     .link_closure(tid)
@@ -374,7 +330,7 @@ pub fn plan(
                     id,
                     kind: ActionKind::Link,
                     target: tid,
-                    program: linker.clone(),
+                    program: linker.to_string(),
                     args,
                     inputs,
                     outputs: vec![out.clone()],
@@ -429,6 +385,39 @@ const CXX_EXTENSIONS: &[&str] = &["cc", "cp", "cpp", "cxx", "c++", "CPP", "C"];
 
 fn is_cxx(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| CXX_EXTENSIONS.contains(&e))
+}
+
+/// 道具の実在を確かめ、無ければ `missing-toolchain` を積む。
+///
+/// 診断の組み立ては道具に依らない（宣言があればその行を、無ければ既定に
+/// 落ちた旨を指す）。**いつ呼ぶか**だけが道具ごとの判断である：C は常に、
+/// C++ は C++ ソースが現れたとき、archiver は書庫を作るとき。要不要は
+/// 道具を使う側の意味論であり、表には置かない。
+fn require_tool(
+    diags: &mut Vec<Diagnostic>,
+    cfg: &Config,
+    root_toolchain: Option<&dowel_model::package::ToolchainDecl>,
+    name: &str,
+    what: &str,
+) {
+    let command = cfg.tool(name);
+    if crate::exec::program_exists(command) {
+        return;
+    }
+    let mut d =
+        Diagnostic::error("missing-toolchain", format!("cannot find the {what} `{command}`"));
+    match root_toolchain.and_then(|t| t.tool(name)) {
+        Some(t) => d = d.at(t.site.file, t.site.span, "declared here"),
+        None => {
+            d = d.note(format!(
+                "no `[toolchain] {name}` is declared, so the default `{}` is used",
+                dowel_eval::config::default_tool(name)
+            ))
+        }
+    }
+    diags.push(d.note(
+        "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
+    ));
 }
 
 fn collect_sources(

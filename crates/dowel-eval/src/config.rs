@@ -9,7 +9,7 @@
 //! 使用実績から判断できるようになる。
 
 use crate::value::{CfgKey, Ns};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Opt {
@@ -46,12 +46,24 @@ pub struct Config {
     pub host_os: String,
     pub host_arch: String,
     pub features: BTreeSet<String>,
-    /// 選択された C ツールチェーンの識別子
-    pub tc_c: String,
-    /// 選択された C++ ツールチェーンの識別子
-    pub tc_cxx: String,
-    /// 選択された書庫作成器（archiver）の識別子
-    pub tc_ar: String,
+    /// 選択された道具。道具名（[`TOOLS`]）→ コマンド。
+    /// 既定は [`TOOLS`] が与え、`[toolchain]` の宣言が上書きする
+    tools: BTreeMap<String, String>,
+}
+
+/// ツールチェーンを構成する道具の表。（名前, 既定のコマンド）。
+///
+/// 道具を増やすとき（例: disasm、objcopy）はここに1行と、[`VOCABULARY`] の
+/// `tc.<名前>` の行を足す（両者の一致は検査される）。`[toolchain]` のキー・
+/// 既定値・宣言の写し・`toolchain-mismatch` の比較は全てこの表から回る。
+/// **いつ実在を確かめるか**だけは表に置かない。C コンパイラは常に、
+/// C++ は C++ ソースが現れたとき、archiver は書庫を作るときに要る——
+/// 要不要は道具を使う側の意味論であり、使う箇所が判断する。
+pub const TOOLS: &[(&str, &str)] = &[("c", "cc"), ("cxx", "c++"), ("ar", "ar")];
+
+/// 道具の既定のコマンド。
+pub fn default_tool(name: &str) -> &'static str {
+    TOOLS.iter().find(|(n, _)| *n == name).map(|(_, d)| *d).unwrap_or("")
 }
 
 impl Config {
@@ -62,10 +74,18 @@ impl Config {
             host_os: host_os().to_string(),
             host_arch: host_arch().to_string(),
             features: BTreeSet::new(),
-            tc_c: "cc".to_string(),
-            tc_cxx: "c++".to_string(),
-            tc_ar: "ar".to_string(),
+            tools: TOOLS.iter().map(|(n, d)| (n.to_string(), d.to_string())).collect(),
         }
+    }
+
+    /// 道具のコマンド。[`TOOLS`] に無い名前は空文字列（呼び手の誤り）。
+    pub fn tool(&self, name: &str) -> &str {
+        self.tools.get(name).map(String::as_str).unwrap_or("")
+    }
+
+    /// 道具のコマンドを差し替える。`[toolchain]` の宣言の写しに使う。
+    pub fn set_tool(&mut self, name: &str, command: String) {
+        self.tools.insert(name.to_string(), command);
     }
 
     /// 構成を一意に表す短い識別子。ビルドディレクトリ名に使う。
@@ -84,9 +104,7 @@ impl Config {
             (Ns::Cfg, "target") => Some(CfgValue::Str(self.target.clone())),
             (Ns::Host, "os") => Some(CfgValue::Str(self.host_os.clone())),
             (Ns::Host, "arch") => Some(CfgValue::Str(self.host_arch.clone())),
-            (Ns::Tc, "c") => Some(CfgValue::Str(self.tc_c.clone())),
-            (Ns::Tc, "cxx") => Some(CfgValue::Str(self.tc_cxx.clone())),
-            (Ns::Tc, "ar") => Some(CfgValue::Str(self.tc_ar.clone())),
+            (Ns::Tc, name) => self.tools.get(name).map(|t| CfgValue::Str(t.clone())),
             (Ns::Feature, name) => Some(CfgValue::Bool(self.features.contains(name))),
             _ => None,
         }
@@ -224,6 +242,30 @@ mod tests {
         assert_eq!(
             c.lookup(&CfgKey { ns: Ns::Feature, name: "png".into() }),
             Some(CfgValue::Bool(false))
+        );
+    }
+
+    #[test]
+    fn the_tool_table_and_the_vocabulary_agree() {
+        // 道具は TOOLS が正であり、語彙の tc.* はその説明である。
+        // 片方だけに足すと、宣言できるのに参照できない（またはその逆の）
+        // 道具ができる。
+        let vocab: BTreeSet<&str> =
+            VOCABULARY.iter().filter(|(ns, ..)| *ns == "tc").map(|(_, n, ..)| *n).collect();
+        let tools: BTreeSet<&str> = TOOLS.iter().map(|(n, _)| *n).collect();
+        assert_eq!(vocab, tools);
+    }
+
+    #[test]
+    fn tools_default_from_the_table_and_declarations_override() {
+        let mut c = Config::host_default();
+        assert_eq!(c.tool("c"), "cc");
+        assert_eq!(c.tool("ar"), "ar");
+        c.set_tool("ar", "llvm-ar".into());
+        assert_eq!(c.tool("ar"), "llvm-ar");
+        assert_eq!(
+            c.lookup(&CfgKey { ns: Ns::Tc, name: "ar".into() }),
+            Some(CfgValue::Str("llvm-ar".into()))
         );
     }
 
