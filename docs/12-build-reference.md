@@ -83,7 +83,7 @@ affects this target only. (The precise formulas are in
 | `flags` | `List<Str>` | `append` | compile flags for every language, order-preserving |
 | `c_flags` | `List<Str>` | `append` | compile flags for C sources only, placed after `flags` |
 | `cxx_flags` | `List<Str>` | `append` | compile flags for C++ sources only, placed after `flags` (e.g. `["-std=c++20"]`) |
-| `link_flags` | `List<Str>` | `append` | link flags, order-preserving |
+| `link_flags` | `List<Str>` | `append` | link flags, order-preserving. Unlike the translation properties, these follow the **link closure** even across `private` edges — a static archive cannot carry its own link requirements ([13-semantics.md](13-semantics.md)) |
 | `deps` | `List<DepRef \| TargetRef>` | `append` | edges: `dep("name")` is a package dependency declared in `dowel.toml`; `target("name")` is a target in the same package |
 | `abi` | `AbiLabel` | `must_equal` | ABI label. Every target linked together must declare the same value or the build fails (`abi-mismatch`) before linking. Currently a hand-written string; automatic computation is planned |
 
