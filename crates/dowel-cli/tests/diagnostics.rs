@@ -498,6 +498,16 @@ const CASES: &[Case] = &[
         files: &[("app/dowel.build", "[bin.app]\nsources = [file(\"src/absent.c\")]\n")],
         args: CHECK,
     },
+    // --- 成果物の派生 -----------------------------------------------------
+    Case {
+        code: "unknown-tool",
+        why: "an `artifacts` entry names a command instead of a declarable tool",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.artifacts]\nbin = { tool = \"arm-none-eabi-objcopy\" }\n",
+        )],
+        args: CHECK,
+    },
 ];
 
 /// 事例を組み立てて起動し、出た診断コードを集める。

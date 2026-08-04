@@ -31,6 +31,32 @@ pub struct Target {
     pub public: PropMap,
     /// 自身のコンパイルにのみ効くプロパティ
     pub private: PropMap,
+    /// `[<kind>.<name>.artifacts]`。成果物から派生させる変換。宣言順
+    pub artifacts: Vec<ArtifactDecl>,
+}
+
+/// 成果物から別の成果物を作る変換の宣言（issue #60）。
+///
+/// プロパティの写像に載せないのは、これが**伝播しない別の種類の宣言**で
+/// あるためである。`public` / `private` の区別は届く範囲の話であり、
+/// 変換はどちらでもない——自分の成果物から自分の成果物を作る。
+#[derive(Clone, Debug)]
+pub struct ArtifactDecl {
+    /// 出力の拡張子。`bin = { ... }` なら `bin`
+    pub suffix: String,
+    /// 使う道具の名前（`dowel_eval::config::TOOLS` のもの）。
+    ///
+    /// 構成で分岐させない。トリプルごとに別の実体を使うのは
+    /// `[toolchain.<triple>]` の仕事であり、宣言の側は「どの道具か」だけを
+    /// 述べる
+    pub tool: String,
+    /// 道具に渡す引数。入力と出力はこの後ろに実装が付ける（ADR-0008）。
+    /// 具体化前の値であり、`when` / `match` を含みうる
+    pub args: Option<Value>,
+    /// 項目の位置
+    pub site: Site,
+    /// `tool = "..."` の位置。実在しない道具を指す診断が参照する
+    pub tool_site: Site,
 }
 
 impl Target {

@@ -204,6 +204,17 @@ changes, only the speed.
   final link the same way its archive does. The `public` / `private` split
   keeps controlling translation propagation only, so "do not leak the
   headers" and "stay linkable" hold at the same time (issue #56)
+- `[<kind>.<name>.artifacts]` derives files from a target's artifact —
+  the step embedded work needs after linking (`objcopy -O binary` /
+  `-O ihex`, a stripped copy). Each entry names a toolchain tool by name and
+  its arguments; the input and output are appended positionally
+  ([ADR-0008](adr/0008-runner-transfer.md)), the output being the artifact
+  with its extension replaced. The transforms are ordinary graph nodes: they
+  are produced by `dowel build`, skipped when the input has not changed,
+  performed by the tool the triple selects, and rebuilt when the declaration
+  changes. The tool is probed only when a declaration uses it (issue #60).
+  Inspection tools that produce no file (`size`, `nm`, `objdump`) are not
+  expressible yet
 - The archiver is part of the toolchain: `[toolchain] ar` (default `ar`,
   also per-triple in `[toolchain.<triple>]`, configuration key `tc.ar`)
   names the tool that creates static libraries, so cross builds do not fall
@@ -425,7 +436,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (417 tests):
+Current breakdown (420 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -434,10 +445,10 @@ Current breakdown (417 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 65 |
+| `e2e` | compile real C and C++, run it, check the output | 68 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (51 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (52 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

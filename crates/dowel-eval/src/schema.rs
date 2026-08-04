@@ -190,6 +190,37 @@ pub fn runner_props() -> Vec<PropDef> {
     ]
 }
 
+/// `[<kind>.<name>.artifacts]` の1項目に置けるプロパティ（issue #60）。
+///
+/// 項目そのものはインラインテーブルであり、鍵が出力の拡張子になる。
+///
+/// ```toml
+/// [bin.firmware.artifacts]
+/// bin = { tool = "objcopy", args = ["-O", "binary"] }
+/// ```
+///
+/// 入力（元の成果物）と出力は書かせない。書式文字列も置かない。
+/// 位置で渡す（[ADR-0008]）——実行される列は
+/// `<tool> <args...> <入力> <出力>` である。
+///
+/// [ADR-0008]: ../../../docs/adr/0008-runner-transfer.md
+pub fn artifact_props() -> Vec<PropDef> {
+    vec![
+        PropDef {
+            name: "tool",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "the toolchain tool that performs the transform, such as `objcopy`",
+        },
+        PropDef {
+            name: "args",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments placed before the input and output paths",
+        },
+    ]
+}
+
 /// `public` / `private` ブロックに置けるプロパティ。
 ///
 /// 両ブロックで同じ集合とする。伝播するか否かはブロックが決めるのであって

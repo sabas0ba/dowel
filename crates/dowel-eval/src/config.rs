@@ -59,7 +59,8 @@ pub struct Config {
 /// **いつ実在を確かめるか**だけは表に置かない。C コンパイラは常に、
 /// C++ は C++ ソースが現れたとき、archiver は書庫を作るときに要る——
 /// 要不要は道具を使う側の意味論であり、使う箇所が判断する。
-pub const TOOLS: &[(&str, &str)] = &[("c", "cc"), ("cxx", "c++"), ("ar", "ar")];
+pub const TOOLS: &[(&str, &str)] =
+    &[("c", "cc"), ("cxx", "c++"), ("ar", "ar"), ("objcopy", "objcopy")];
 
 /// 道具の既定のコマンド。
 pub fn default_tool(name: &str) -> &'static str {
@@ -156,6 +157,7 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
     ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
     ("tc", "cxx", Domain::Open, "identifier of the selected C++ toolchain"),
     ("tc", "ar", Domain::Open, "identifier of the selected archiver"),
+    ("tc", "objcopy", Domain::Open, "identifier of the selected object copier"),
 ];
 
 /// キーが語彙に存在するか。存在しなければ型検査で落とす。
