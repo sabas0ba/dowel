@@ -82,13 +82,31 @@ affects this target only. (The precise formulas are in
 | `defines` | `Map<Ident, Val>` | `error_on_conflict` | preprocessor definitions (`-D`). Two different values arriving for the same name fail, with both provenances shown |
 | `flags` | `List<Str>` | `append` | compile flags for every language, order-preserving |
 | `c_flags` | `List<Str>` | `append` | compile flags for C sources only, placed after `flags` |
-| `cxx_flags` | `List<Str>` | `append` | compile flags for C++ sources only, placed after `flags` (e.g. `["-std=c++20"]`) |
+| `cxx_flags` | `List<Str>` | `append` | compile flags for C++ sources only, placed after `flags` |
+| `c_std` | `Str` | `max` | the C standard: `c89` `c99` `c11` `c17` `c23`. Becomes `-std=` for C sources |
+| `cxx_std` | `Str` | `max` | the C++ standard: `c++98` `c++03` `c++11` `c++14` `c++17` `c++20` `c++23` `c++26`. Becomes `-std=` for C++ sources |
 | `link_flags` | `List<Str>` | `append` | link flags, order-preserving. Unlike the translation properties, these follow the **link closure** even across `private` edges — a static archive cannot carry its own link requirements ([13-semantics.md](13-semantics.md)) |
 | `deps` | `List<DepRef \| TargetRef>` | `append` | edges: `dep("name")` is a package dependency declared in `dowel.toml`; `target("name")` is a target in the same package |
 | `abi` | `AbiLabel` | `must_equal` | ABI label. Every target linked together must declare the same value or the build fails (`abi-mismatch`) before linking. Currently a hand-written string; automatic computation is planned |
 
 Unknown properties fail with `unknown-property` and an edit-distance
-suggestion; wrong types with `type-mismatch`.
+suggestion; wrong types with `type-mismatch`. `c_std` / `cxx_std` also have
+a closed vocabulary: a value outside it is `unknown-standard`, checked where
+it is written — every `match` arm and `when` branch included — so a
+misspelling does not wait for the configuration that selects it.
+
+**`max` is why a standard is not a flag.** The highest standard reached
+along the closure wins ([ADR-0016](adr/0016-language-standard-property.md)):
+a library requiring `c++17` used by a `c++20` binary compiles fine, and a
+library requiring `c++20` raises a consumer that asked for less — which is
+what its public headers need. Written as `cxx_flags = ["-std=..."]` the two
+would simply concatenate and the last one would silently win.
+
+The generated `-std=` is placed **before** `c_flags` / `cxx_flags`, so an
+explicitly written flag still overrides it. That is the escape hatch for GNU
+dialects (`cxx_flags = ["-std=gnu++20"]`), which are deliberately outside
+the vocabulary — a dialect is a different axis from a standard version and
+cannot be placed in one order.
 
 ### `[<kind>.<name>.artifacts]` — deriving files from the artifact
 

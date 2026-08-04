@@ -19,6 +19,13 @@ pub enum Merge {
     MustEqual,
     /// 後勝ち。伝播しないプロパティにのみ用いる
     Replace,
+    /// 語彙の順序で最も高いものを採る。順序のある閉じた語彙にのみ用いる。
+    ///
+    /// 言語標準がこれである。C++17 を要求するライブラリを C++20 の
+    /// 実行ファイルから使うのは正しい——閉包の中で最も高い標準で組めば、
+    /// どのターゲットの要求も満たされる。`must_equal` にすると、
+    /// 依存とこちらで標準が違うだけでビルドが落ちる
+    Max,
 }
 
 impl Merge {
@@ -29,6 +36,7 @@ impl Merge {
             Merge::ErrorOnConflict => "error_on_conflict",
             Merge::MustEqual => "must_equal",
             Merge::Replace => "replace",
+            Merge::Max => "max",
         }
     }
 }
@@ -130,7 +138,22 @@ pub struct PropDef {
     pub ty: Type,
     pub merge: Merge,
     pub doc: &'static str,
+    /// 閉じた語彙。`Some` なら、この一覧に無い値は診断で落ちる。
+    ///
+    /// 並びは意味のある順序であり、`Merge::Max` はこの添字を比べる。
+    pub domain: Option<&'static [&'static str]>,
 }
+
+/// C の言語標準。低い順に並べる（`Merge::Max` がこの添字を比べる）。
+///
+/// GNU 拡張の方言（`gnu11` 等）は入れない。方言は標準の版とは別の軸であり、
+/// 一列に並べられない。必要なら `c_flags = ["-std=gnu11"]` と書く——
+/// 後に置かれるため、こちらが勝つ。
+pub const C_STANDARDS: &[&str] = &["c89", "c99", "c11", "c17", "c23"];
+
+/// C++ の言語標準。低い順。
+pub const CXX_STANDARDS: &[&str] =
+    &["c++98", "c++03", "c++11", "c++14", "c++17", "c++20", "c++23", "c++26"];
 
 fn list(t: Type) -> Type {
     Type::List(Box::new(t))
@@ -147,6 +170,7 @@ pub fn root_props() -> Vec<PropDef> {
         ty: list(Type::Path),
         merge: Merge::Append,
         doc: "sources to compile. does not propagate",
+        domain: None,
     }]
 }
 
@@ -162,30 +186,35 @@ pub fn runner_props() -> Vec<PropDef> {
             ty: Type::Str,
             merge: Merge::Replace,
             doc: "the program that wraps the artifact, such as `qemu-riscv64`",
+            domain: None,
         },
         PropDef {
             name: "args",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "arguments placed before the artifact path",
+            domain: None,
         },
         PropDef {
             name: "transfer",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "command that copies the artifact. the source and destination are appended",
+            domain: None,
         },
         PropDef {
             name: "remote_dir",
             ty: Type::Str,
             merge: Merge::Replace,
             doc: "directory on the target machine that receives the artifact",
+            domain: None,
         },
         PropDef {
             name: "host",
             ty: Type::Str,
             merge: Merge::Replace,
             doc: "host part of the transfer destination, written as `<host>:<path>`",
+            domain: None,
         },
     ]
 }
@@ -211,12 +240,14 @@ pub fn artifact_props() -> Vec<PropDef> {
             ty: Type::Str,
             merge: Merge::Replace,
             doc: "the toolchain tool that performs the transform, such as `objcopy`",
+            domain: None,
         },
         PropDef {
             name: "args",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "arguments placed before the input and output paths",
+            domain: None,
         },
     ]
 }
@@ -232,48 +263,70 @@ pub fn block_props() -> Vec<PropDef> {
             ty: set(Type::Path),
             merge: Merge::Union,
             doc: "include search paths. ordered along the dependency graph",
+            domain: None,
         },
         PropDef {
             name: "defines",
             ty: Type::Map(Box::new(Type::Val)),
             merge: Merge::ErrorOnConflict,
             doc: "preprocessor definitions. fails when conflicting values arrive",
+            domain: None,
         },
         PropDef {
             name: "flags",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "compile flags for every language. order preserving",
+            domain: None,
         },
         PropDef {
             name: "c_flags",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "compile flags for C sources only, after `flags`. order preserving",
+            domain: None,
         },
         PropDef {
             name: "cxx_flags",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "compile flags for C++ sources only, after `flags`. order preserving",
+            domain: None,
         },
         PropDef {
             name: "link_flags",
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "link flags. order preserving",
+            domain: None,
+        },
+        PropDef {
+            name: "c_std",
+            ty: Type::Str,
+            merge: Merge::Max,
+            doc: "C language standard, such as `c17`. becomes `-std=` for C sources",
+            domain: Some(C_STANDARDS),
+        },
+        PropDef {
+            name: "cxx_std",
+            ty: Type::Str,
+            merge: Merge::Max,
+            doc: "C++ language standard, such as `c++20`. becomes `-std=` for C++ sources",
+            domain: Some(CXX_STANDARDS),
         },
         PropDef {
             name: "deps",
             ty: list(Type::Unknown),
             merge: Merge::Append,
             doc: "dependencies. dep(...) is a package dependency, target(...) is same-package",
+            domain: None,
         },
         PropDef {
             name: "abi",
             ty: Type::AbiLabel,
             merge: Merge::MustEqual,
             doc: "ABI label. mismatches fail before linking",
+            domain: None,
         },
     ]
 }
@@ -376,6 +429,19 @@ pub fn merge_values(def: &PropDef, values: &[Value], diags: &mut Vec<Diagnostic>
             data: Data::Error,
             prov: Prov::none(),
         }),
+        // 語彙の順で最も高いものを採る。語彙の外は既に診断済みで、ここでは
+        // 順序を決められないため最も低いものとして扱う（採られない）。
+        Merge::Max => {
+            let rank = |v: &Value| {
+                v.as_str()
+                    .and_then(|s| def.domain.and_then(|d| d.iter().position(|c| *c == s)))
+                    .map(|i| i as i64)
+                    .unwrap_or(-1)
+            };
+            values.iter().filter(|v| !v.is_error()).max_by_key(|v| rank(v)).cloned().unwrap_or_else(
+                || Value { ty: def.ty.clone(), data: Data::Error, prov: Prov::none() },
+            )
+        }
     }
 }
 

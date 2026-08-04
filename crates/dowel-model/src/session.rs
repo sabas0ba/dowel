@@ -1025,6 +1025,33 @@ impl TargetSink<'_> {
             return;
         }
 
+        // 閉じた語彙を持つプロパティは、値そのものも検査する。型が `Str` で
+        // あることだけでは、`c++2a` のような綴りが素通りして `-std=c++2a` が
+        // コンパイラへ渡り、誤りがコンパイラの言葉で返ってくる。
+        if let Some(domain) = def.domain {
+            for leaf in str_leaves(&value) {
+                let Some(text) = leaf.as_str() else { continue };
+                if domain.contains(&text) {
+                    continue;
+                }
+                let mut d = Diagnostic::error(
+                    "unknown-standard",
+                    format!("`{text}` is not a value of `{name}`"),
+                )
+                .at(
+                    leaf.prov.nearest_site().map(|s| s.file).unwrap_or(site.file),
+                    leaf.prov.nearest_site().map(|s| s.span).unwrap_or(site.span),
+                    "not a known language standard",
+                )
+                .note(format!("`{name}` accepts: {}", domain.join(", ")));
+                if let Some(c) = closest(text, domain.iter().copied()) {
+                    d = d.note(format!("did you mean `{c}`?"));
+                }
+                self.diagnostics.push(d);
+                return;
+            }
+        }
+
         let target = &mut self.targets[tid.0];
         if let Some(prev) = target.props(block).get(&name) {
             let prev_site = prev.prov.nearest_site();
@@ -1170,6 +1197,27 @@ pub fn unknown_feature(
 }
 
 /// 同じ名前が別ブロックに存在するか。診断の注記に使う。
+/// 値の中に現れる文字列の葉を全て集める。
+///
+/// 語彙の検査は具体化の前に行う。`match` の腕も後置 `when` の中身も、
+/// どれか1つは選ばれうる以上、書かれた時点で確かめられる——選ばれるまで
+/// 黙っていると、`--config=release` にした人だけが綴りの誤りに出会う。
+fn str_leaves(value: &Value) -> Vec<&Value> {
+    let mut out = Vec::new();
+    let mut stack = vec![value];
+    while let Some(v) = stack.pop() {
+        match &v.data {
+            Data::Str(_) => out.push(v),
+            Data::List(items) => stack.extend(items),
+            Data::Map(m) => stack.extend(m.values()),
+            Data::Match { arms, .. } => stack.extend(arms.iter().map(|a| &a.value)),
+            Data::When { inner, .. } => stack.push(inner),
+            _ => {}
+        }
+    }
+    out
+}
+
 fn other_block_with(name: &str, block: Block) -> Option<Block> {
     [Block::Root, Block::Public, Block::Private]
         .into_iter()

@@ -110,6 +110,7 @@ order applies.
 | `error_on_conflict` | per map key: the same value may arrive many times, but two different values for one key fail (`merge-conflict`) with both provenance chains in the diagnostic |
 | `must_equal` | all arriving values must be identical or the build fails (`abi-mismatch`). This is the whole ABI check today: `abi` labels are compared before linking, turning a would-be runtime ODR breakage into a build failure |
 | `replace` | last arrival wins (used by runner properties, which do not propagate) |
+| `max` | the highest value in the vocabulary's order wins. Used by `c_std` / `cxx_std`: a library requiring C++17 consumed by a C++20 binary is correct, and a library requiring C++20 raises a consumer that asked for less ([ADR-0016](adr/0016-language-standard-property.md)) |
 
 Nested lists are flattened completely during merging — a `match` written as
 a list element produces a list-in-a-list when specialized, and one level of

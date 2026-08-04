@@ -1972,3 +1972,143 @@ fn program_exists(name: &str) -> bool {
         })
         .unwrap_or(false)
 }
+
+/// 型付きの言語標準（`c_std` / `cxx_std`）。
+///
+/// 要点は併合が `max` であることである。C++17 を要求するライブラリを
+/// C++20 の実行ファイルから使う形は正しく、そこで落ちてはならない。
+#[test]
+fn the_language_standard_is_typed_and_the_highest_in_the_closure_wins() {
+    let p = Project::new("cxx-std");
+    // lib は C++17 を要求し、app は C++20 で組む。
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.cpp\")]\n\n\
+         [bin.app.private]\ndeps    = [dep(\"lib\")]\ncxx_std = \"c++20\"\n",
+    );
+    // C++20 でしか通らない書き方（`consteval`）を使う。
+    p.write(
+        "app/src/main.cpp",
+        "#include <cstdio>\nint lib_value();\n\
+         consteval int twenty() { return 20; }\n\
+         int main() { std::printf(\"v=%d\\n\", lib_value() + twenty()); return 0; }\n",
+    );
+    p.write("lib/dowel.toml", "[package]\nname = \"lib\"\nversion = \"0\"\n");
+    p.write(
+        "lib/dowel.build",
+        "[lib.lib]\nsources = [file(\"src/lib.cpp\")]\n\n[lib.lib.public]\ncxx_std = \"c++17\"\n",
+    );
+    // C++17 でも C++20 でも通る書き方。lib 自身は宣言どおり C++17 で組まれる。
+    p.write(
+        "lib/src/lib.cpp",
+        "#if __cplusplus < 201703L\n#error \"the declared standard did not reach the compiler\"\n#endif\n\
+         int lib_value() { return 22; }\n",
+    );
+
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("app"), "debug").join("bin/app")), "v=42\n");
+
+    // 実際に渡った `-std=` を compile_commands.json で確かめる。
+    let compdb = std::fs::read_to_string(p.path("app/compile_commands.json")).unwrap();
+    // app は自分の c++20。lib の c++17 が届いても下げられない。
+    let app = compdb_entry(&compdb, "main.cpp");
+    assert!(app.contains("-std=c++20"), "{app}");
+    assert!(!app.contains("-std=c++17"), "{app}");
+    // lib は自分の宣言どおり。
+    assert!(compdb_entry(&compdb, "lib.cpp").contains("-std=c++17"));
+}
+
+#[test]
+fn a_public_standard_raises_its_dependents() {
+    // 逆向き: 依存の方が高い標準を要求する。使う側は引き上げられる。
+    // 引き上げなければ、公開ヘッダの C++20 の記述が依存元で通らない。
+    let p = Project::new("cxx-std-raise");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n[[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.cpp\")]\n\n\
+         [bin.app.private]\ndeps    = [dep(\"lib\")]\ncxx_std = \"c++14\"\n",
+    );
+    p.write(
+        "app/src/main.cpp",
+        "#include <cstdio>\n\
+         #if __cplusplus < 202002L\n#error \"the dependency's standard did not raise this target\"\n#endif\n\
+         int lib_value();\nint main() { std::printf(\"v=%d\\n\", lib_value()); return 0; }\n",
+    );
+    p.write("lib/dowel.toml", "[package]\nname = \"lib\"\nversion = \"0\"\n");
+    p.write(
+        "lib/dowel.build",
+        "[lib.lib]\nsources = [file(\"src/lib.cpp\")]\n\n[lib.lib.public]\ncxx_std = \"c++20\"\n",
+    );
+    p.write("lib/src/lib.cpp", "int lib_value() { return 42; }\n");
+
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("app"), "debug").join("bin/app")), "v=42\n");
+}
+
+#[test]
+fn an_explicit_std_flag_still_overrides_the_typed_property() {
+    // 型付きのプロパティは語彙を閉じる。方言（`gnu++17`）は語彙の外なので、
+    // 逃げ道として `cxx_flags` を残し、そちらが後に置かれて勝つ。
+    let p = Project::new("cxx-std-escape");
+    p.write("dowel.toml", "[package]\nname = \"e\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.e]\nsources = [file(\"src/main.cpp\")]\n\n\
+         [bin.e.private]\ncxx_std   = \"c++17\"\ncxx_flags = [\"-std=gnu++17\"]\n",
+    );
+    p.write("src/main.cpp", "int main() { return 0; }\n");
+
+    p.run(".", &["build"]).success();
+    let compdb = std::fs::read_to_string(p.path("compile_commands.json")).unwrap();
+    let entry = compdb_entry(&compdb, "main.cpp");
+    let typed = entry.find("-std=c++17").expect("the typed standard is present");
+    let escape = entry.find("-std=gnu++17").expect("the escape hatch is present");
+    assert!(typed < escape, "the explicit flag must come last to win:\n{entry}");
+}
+
+#[test]
+fn the_c_standard_reaches_c_sources_only() {
+    let p = Project::new("c-std");
+    p.write("dowel.toml", "[package]\nname = \"m\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.m]\nsources = [file(\"src/main.c\"), file(\"src/part.cpp\")]\n\n\
+         [bin.m.private]\nc_std   = \"c11\"\ncxx_std = \"c++17\"\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n\
+         #if __STDC_VERSION__ < 201112L\n#error \"c_std did not reach the C compiler\"\n#endif\n\
+         int part(void);\nint main(void) { printf(\"v=%d\\n\", part()); return 0; }\n",
+    );
+    p.write("src/part.cpp", "extern \"C\" int part(void) { return 42; }\n");
+
+    p.run(".", &["build"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/m")), "v=42\n");
+
+    let compdb = std::fs::read_to_string(p.path("compile_commands.json")).unwrap();
+    // 言語別に分かれる。C のコンパイルに `-std=c++17` が混ざれば C は通らない。
+    let c = compdb_entry(&compdb, "main.c\"");
+    assert!(c.contains("-std=c11"), "{c}");
+    assert!(!c.contains("c++17"), "{c}");
+    let cxx = compdb_entry(&compdb, "part.cpp");
+    assert!(cxx.contains("-std=c++17"), "{cxx}");
+    assert!(!cxx.contains("-std=c11"), "{cxx}");
+}
+
+/// `compile_commands.json` の1項目の本文。整形出力のため、項目は `{` で始まる。
+fn compdb_entry(compdb: &str, file: &str) -> String {
+    compdb
+        .split('{')
+        .find(|chunk| chunk.contains(file))
+        .unwrap_or_else(|| panic!("no entry for {file}\n{compdb}"))
+        .to_string()
+}

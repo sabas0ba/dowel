@@ -186,8 +186,13 @@ pub fn plan(
         let includes = collect_includes(sess, &env, &build_dir, &mut diags);
         let defines = collect_defines(&env);
         let flags = collect_flags(&env, "flags");
-        let c_flags = collect_flags(&env, "c_flags");
-        let cxx_flags = collect_flags(&env, "cxx_flags");
+        // 言語標準は型付きのプロパティであり、`-std=` はここで組み立てる。
+        // 言語別のフラグより前に置く。`c_flags = ["-std=gnu11"]` のような
+        // 方言の指定が後に来て勝つようにするため（後勝ちは -std の慣習）
+        let mut c_flags = std_flag(&env, "c_std").into_iter().collect::<Vec<_>>();
+        c_flags.extend(collect_flags(&env, "c_flags"));
+        let mut cxx_flags = std_flag(&env, "cxx_std").into_iter().collect::<Vec<_>>();
+        cxx_flags.extend(collect_flags(&env, "cxx_flags"));
         // `link_flags` だけは compile_env からではなく、リンク閉包から集める。
         // `private` はリンクの到達可能性を制御しない（issue #56、下の
         // `closure_link_flags`）。
@@ -665,6 +670,15 @@ fn collect_defines(env: &dowel_model::PropMap) -> Vec<(String, String)> {
             (k.clone(), rendered)
         })
         .collect()
+}
+
+/// `c_std` / `cxx_std` から `-std=...` を1つ組み立てる。
+///
+/// 併合は `max` であり、閉包の中で最も高い標準が既に選ばれている
+/// （`dowel_eval::schema::Merge::Max`）。C++17 を要求するライブラリを
+/// C++20 の実行ファイルから使う形が、そのまま通る。
+fn std_flag(env: &dowel_model::PropMap, name: &str) -> Option<String> {
+    env.get(name).and_then(|v| v.as_str()).map(|s| format!("-std={s}"))
 }
 
 fn collect_flags(env: &dowel_model::PropMap, name: &str) -> Vec<String> {
