@@ -498,6 +498,15 @@ const CASES: &[Case] = &[
         files: &[("app/dowel.build", "[bin.app]\nsources = [file(\"src/absent.c\")]\n")],
         args: CHECK,
     },
+    Case {
+        code: "unknown-standard",
+        why: "`c++2a` is a compiler spelling, not a value of `cxx_std`",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ncxx_std = \"c++2a\"\n",
+        )],
+        args: CHECK,
+    },
     // --- 成果物の派生 -----------------------------------------------------
     Case {
         code: "unknown-tool",
