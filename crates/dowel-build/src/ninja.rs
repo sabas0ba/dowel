@@ -59,10 +59,11 @@ pub fn generate(plan: &Plan) -> String {
         out.push('\n');
     }
 
-    // 既定のターゲットは要求されたものの成果物と、そこからの派生。
-    // 派生を外すと、`artifacts` に書いた `.bin` が `dowel build` で作られない。
+    // 既定のターゲットは要求されたものの成果物と、計画に載った全ターゲットの
+    // 派生。派生は誰の入力にもならないため、ここに並べなければ ninja からは
+    // 到達せず、`artifacts` に書いた `.bin` が作られない（issue #60 / #64）。
     let defaults: Vec<String> =
-        plan.requested_outputs().iter().map(|p| path(&p.display().to_string())).collect();
+        plan.default_outputs().iter().map(|p| path(&p.display().to_string())).collect();
     if !defaults.is_empty() {
         out.push_str(&format!("default {}\n", defaults.join(" ")));
     }

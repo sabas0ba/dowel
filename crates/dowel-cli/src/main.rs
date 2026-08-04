@@ -239,7 +239,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             };
             // 派生した成果物（`artifacts` ブロック）も作ったものとして述べる。
             // 述べないと、`.bin` が出来ていることが利用者に見えない。
-            for path in p.requested_outputs() {
+            for path in p.default_outputs() {
                 eprintln!("built: {}", path.display());
             }
             Ok(ExitCode::SUCCESS)

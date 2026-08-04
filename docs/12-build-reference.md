@@ -129,6 +129,12 @@ Each key names the **extension of the produced file**: the output is the
 target's artifact with its extension replaced, so `firmware` yields
 `firmware.bin` and `firmware.hex` next to it in the build directory.
 
+A derived file is produced whenever its target's artifact is, including when
+that target is only reached as someone else's dependency: a library's
+`.stripped` keeps appearing after a binary that links it is added (issue
+#64). Whether a derived file exists is decided by the declaration, never by
+how the target happened to be reached.
+
 | Property | Type | Meaning |
 |---|---|---|
 | `tool` | `Str` | required. The **name** of a toolchain tool (`objcopy`), not a command. The concrete command comes from `[toolchain]` / `[toolchain.<triple>]`, so a cross build uses `arm-none-eabi-objcopy` without the manifest repeating it. A name outside the tool table is `unknown-tool`; a missing `tool` is `missing-field` |
