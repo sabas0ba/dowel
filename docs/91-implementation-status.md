@@ -223,7 +223,14 @@ changes, only the speed.
   A derived file appears whenever its target's artifact does — a library
   reached only as a dependency keeps producing it (issue #64); nothing
   consumes a derived file, so it has to be named as a default explicitly or
-  ninja and the direct executor would produce different trees.
+  ninja and the direct executor would produce different trees
+- `[<kind>.<name>.inspect]` declares reporting tools (`size` / `nm` /
+  `objdump` / `readelf`) run by `dowel inspect`. An inspection produces no
+  file, so it is deliberately outside the build graph: nothing about it can
+  be up to date. The tool is named, not spelled out, so a cross build
+  reports with the triple's tool; output is passed through unparsed and a
+  nonzero exit fails the run, which is how a budget check is expressible
+  without dowel knowing any tool's output format (issue #60)
   Inspection tools that produce no file (`size`, `nm`, `objdump`) are not
   expressible yet
 - The archiver is part of the toolchain: `[toolchain] ar` (default `ar`,
@@ -447,7 +454,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (425 tests):
+Current breakdown (429 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -456,7 +463,7 @@ Current breakdown (425 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 73 |
+| `e2e` | compile real C and C++, run it, check the output | 77 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (53 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

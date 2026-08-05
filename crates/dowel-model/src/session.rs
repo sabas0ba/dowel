@@ -30,6 +30,10 @@ pub const BUILD_NAME: &str = "dowel.build";
 /// （issue #60）。
 const ARTIFACTS_BLOCK: &str = "artifacts";
 
+/// `[<kind>.<name>.inspect]` の見出し。同じく、プロパティのブロックではない。
+/// 変換との違いは出力を持たないことだけである（issue #60）。
+const INSPECT_BLOCK: &str = "inspect";
+
 /// 読み込みの時点で分かっている機能フラグの選択。
 ///
 /// 任意の依存を読むかどうかがこれで決まるため、構成（`Config`）より前に要る。
@@ -222,6 +226,7 @@ impl Session {
             public,
             private: PropMap::new(),
             artifacts: Vec::new(),
+            inspections: Vec::new(),
         });
         self.externals.insert(name.to_string(), pid);
         log_debug!("external dependency `{name}` {} via pkg-config", r.version);
@@ -628,10 +633,11 @@ impl TargetSink<'_> {
             // `public` / `private` と違い、成果物から成果物を作る宣言である
             // （issue #60）。ターゲットは先に作っておく必要がある。
             let is_artifacts = table.path.len() == 3 && table.path[2] == ARTIFACTS_BLOCK;
+            let is_inspect = table.path.len() == 3 && table.path[2] == INSPECT_BLOCK;
 
             let block = match table.path.len() {
                 2 => Block::Root,
-                3 if is_artifacts => Block::Root,
+                3 if is_artifacts || is_inspect => Block::Root,
                 3 => match Block::parse(&table.path[2]) {
                     Some(b) => b,
                     None => {
@@ -639,10 +645,17 @@ impl TargetSink<'_> {
                             "unknown-block",
                             format!("unknown block `{}`", table.path[2]),
                         )
-                        .at(doc.file, table.site.span, "only `public`, `private`, or `artifacts`")
+                        .at(
+                            doc.file,
+                            table.site.span,
+                            "only `public`, `private`, `artifacts`, or `inspect`",
+                        )
                         .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
                         if let (Some(c), Some(&span)) = (
-                            closest(&table.path[2], ["public", "private", ARTIFACTS_BLOCK]),
+                            closest(
+                                &table.path[2],
+                                ["public", "private", ARTIFACTS_BLOCK, INSPECT_BLOCK],
+                            ),
                             table.path_spans.get(2),
                         ) {
                             d = d.suggest(doc.file, span, c, format!("did you mean `{c}`?"));
@@ -679,12 +692,13 @@ impl TargetSink<'_> {
                     public: PropMap::new(),
                     private: PropMap::new(),
                     artifacts: Vec::new(),
+                    inspections: Vec::new(),
                 });
                 tid
             });
 
-            if is_artifacts {
-                self.declare_artifacts(tid, table);
+            if is_artifacts || is_inspect {
+                self.declare_tool_runs(tid, table, is_artifacts);
                 continue;
             }
 
@@ -707,14 +721,20 @@ impl TargetSink<'_> {
         }
     }
 
-    /// `[<kind>.<name>.artifacts]` を取り込む（issue #60）。
+    /// `[<kind>.<name>.artifacts]` / `[<kind>.<name>.inspect]` を取り込む
+    /// （issue #60）。
     ///
-    /// 各項目はインラインテーブルであり、鍵が出力の拡張子になる。
-    /// `tool` は宣言できる道具（`dowel_eval::config::TOOLS`）の名前でなければ
-    /// ならない。実体の名前（`arm-none-eabi-objcopy`）を直に書かせないのは、
-    /// それを書くとトリプルごとの選択も記録された入力も効かなくなるためである。
-    fn declare_artifacts(&mut self, tid: TargetId, table: &dowel_eval::Table) {
-        let known = schema::artifact_props();
+    /// 各項目はインラインテーブルであり、変換なら鍵が出力の拡張子、検査なら
+    /// 表示に使う名前になる。`tool` は宣言できる道具
+    /// （`dowel_eval::config::TOOLS`）の名前でなければならない。実体の名前
+    /// （`arm-none-eabi-objcopy`）を直に書かせないのは、それを書くと
+    /// トリプルごとの選択も記録された入力も効かなくなるためである。
+    ///
+    /// 2つのブロックが同じ読み取りを共有するのは、宣言の形が同じだからで
+    /// ある。違いは出力を持つかどうかだけで、それは置かれたブロックが決める。
+    fn declare_tool_runs(&mut self, tid: TargetId, table: &dowel_eval::Table, transform: bool) {
+        let known = if transform { schema::artifact_props() } else { schema::inspection_props() };
+        let what = if transform { "an artifact" } else { "an inspection" };
         for entry in &table.entries {
             let suffix = entry.key.join(".");
             let Data::Map(fields) = &entry.value.data else {
@@ -756,8 +776,12 @@ impl TargetSink<'_> {
                             "unknown-property",
                             format!("unknown property `{name}`"),
                         )
-                        .at(entry.site.file, entry.site.span, "an artifact has no such property")
-                        .note(format!("an artifact accepts: {}", names.join(", ")));
+                        .at(
+                            entry.site.file,
+                            entry.site.span,
+                            format!("{what} has no such property"),
+                        )
+                        .note(format!("{what} accepts: {}", names.join(", ")));
                         if let Some(c) = closest(name, names.iter().copied()) {
                             d = d.note(format!("did you mean `{c}`?"));
                         }
@@ -800,13 +824,19 @@ impl TargetSink<'_> {
                 continue;
             }
 
-            self.targets[tid.0].artifacts.push(ArtifactDecl {
+            let decl = ArtifactDecl {
                 suffix,
                 tool: tool_name.to_string(),
                 args: fields.get("args").cloned(),
                 site: entry.site,
                 tool_site: entry.site,
-            });
+            };
+            let target = &mut self.targets[tid.0];
+            if transform {
+                target.artifacts.push(decl);
+            } else {
+                target.inspections.push(decl);
+            }
         }
     }
 

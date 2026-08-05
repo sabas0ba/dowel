@@ -33,16 +33,22 @@ pub struct Target {
     pub private: PropMap,
     /// `[<kind>.<name>.artifacts]`。成果物から派生させる変換。宣言順
     pub artifacts: Vec<ArtifactDecl>,
+    /// `[<kind>.<name>.inspect]`。成果物について報告する検査。宣言順
+    pub inspections: Vec<ArtifactDecl>,
 }
 
-/// 成果物から別の成果物を作る変換の宣言（issue #60）。
+/// 成果物に対して道具を1つ走らせる宣言（issue #60）。
+///
+/// `artifacts` の項目（変換）と `inspect` の項目（検査）が同じ形を採る。
+/// 違いは出力があるかどうかだけであり、それは置かれたブロックが決める。
 ///
 /// プロパティの写像に載せないのは、これが**伝播しない別の種類の宣言**で
 /// あるためである。`public` / `private` の区別は届く範囲の話であり、
-/// 変換はどちらでもない——自分の成果物から自分の成果物を作る。
+/// 変換も検査もどちらでもない——自分の成果物に対して自分が行う。
 #[derive(Clone, Debug)]
 pub struct ArtifactDecl {
-    /// 出力の拡張子。`bin = { ... }` なら `bin`
+    /// 変換なら出力の拡張子（`bin = { ... }` なら `bin`）、検査なら
+    /// 表示に使う名前
     pub suffix: String,
     /// 使う道具の名前（`dowel_eval::config::TOOLS` のもの）。
     ///

@@ -694,6 +694,14 @@ fn std_flag(env: &dowel_model::PropMap, name: &str) -> Option<String> {
 
 fn collect_flags(env: &dowel_model::PropMap, name: &str) -> Vec<String> {
     let Some(value) = env.get(name) else { return Vec::new() };
+    flatten_strs(value)
+}
+
+/// 具体化済みの値から文字列の列を取り出す。入れ子は最後まで解く。
+///
+/// 引数の列（`args`）を読む箇所が計画の外にもあるため公開する
+/// （`dowel inspect` は計画に載らない、issue #60）。
+pub fn flatten_strs(value: &Value) -> Vec<String> {
     flatten(value).iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
 }
 

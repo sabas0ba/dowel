@@ -245,6 +245,26 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
 
+        Command::Inspect { targets } => {
+            // 検査は成果物を作らない。作らないため増分の対象にならず、
+            // `build` の既定にも入らない——最新かどうかを判定する出力が無い。
+            // 走らせるのは明示のこのコマンドである（issue #60）。
+            let requested = inspect_targets(&sess, targets)?;
+            if requested.is_empty() {
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+                eprintln!(
+                    "no inspections. declare one with `[<kind>.<name>.inspect]` in dowel.build"
+                );
+                return Ok(ExitCode::SUCCESS);
+            }
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
+                return Ok(ExitCode::FAILURE);
+            };
+            Ok(exit_code(inspect(&sess, &cfg, &p, &requested, opts)))
+        }
+
         Command::Test { targets } => {
             let mut requested = test_targets(&sess, targets)?;
             let build_dir = build_plan::build_dir(
@@ -499,6 +519,109 @@ fn default_targets(
     Ok(out)
 }
 
+/// `inspect` の対象。指定がなければ、検査を宣言している全ターゲット。
+fn inspect_targets(
+    sess: &Session,
+    requested: &[String],
+) -> Result<Vec<dowel_model::TargetId>, String> {
+    if !requested.is_empty() {
+        // 明示された対象は、検査を持たなくても断らない。持たないことは
+        // 誤りではなく、報告するものが無いだけである。
+        return requested.iter().map(|s| sess.find_target(s)).collect();
+    }
+    Ok(sess.targets.iter().filter(|t| !t.inspections.is_empty()).map(|t| t.id).collect())
+}
+
+/// 宣言された検査を走らせ、道具の出力を見せる。真を返せば失敗。
+///
+/// 出力はそのまま通す。dowel は解釈しない——`size` の書式は実装ごとに
+/// 違い、読み解くのは道具の側の仕事である（issue #60）。判定に使う形
+/// （予算の宣言）は、その解釈が要るため別の決定になる。
+fn inspect(
+    sess: &Session,
+    cfg: &Config,
+    plan: &build_plan::Plan,
+    requested: &[dowel_model::TargetId],
+    opts: &Options,
+) -> bool {
+    let mut failed = false;
+    for &tid in requested {
+        let target = sess.target(tid);
+        let Some(artifact) = plan.artifacts.get(&tid) else { continue };
+        for decl in &target.inspections {
+            let mut args: Vec<String> = decl
+                .args
+                .as_ref()
+                .and_then(|v| dowel_eval::specialize(v, cfg))
+                .map(|v| dowel_build::flatten_strs(&v))
+                .unwrap_or_default();
+            // 成果物は末尾に位置で置く（ADR-0008）。
+            args.push(artifact.display().to_string());
+            let program = cfg.tool(&decl.tool);
+
+            let out = std::process::Command::new(program).args(&args).output();
+            let label = sess.label(tid);
+            match out {
+                Ok(out) => {
+                    let ok = out.status.success();
+                    failed |= !ok;
+                    let text = String::from_utf8_lossy(&out.stdout).to_string();
+                    let errors = String::from_utf8_lossy(&out.stderr).to_string();
+                    match opts.message_format {
+                        MessageFormat::Json => {
+                            let mut w = JsonWriter::new();
+                            w.begin_object();
+                            w.field_str("target", &label);
+                            w.field_str("inspection", &decl.suffix);
+                            w.field_str("tool", &decl.tool);
+                            w.key("command").begin_array();
+                            w.str(program);
+                            for a in &args {
+                                w.str(a);
+                            }
+                            w.end_array();
+                            w.field_bool("ok", ok);
+                            w.field_str("output", &text);
+                            w.end_object();
+                            println!("{}", w.finish());
+                        }
+                        MessageFormat::Human => {
+                            eprintln!("== {label}: {} ({}) ==", decl.suffix, decl.tool);
+                            print!("{text}");
+                            if !ok {
+                                eprint!("{errors}");
+                                eprintln!(
+                                    "`{}` exited with {}",
+                                    decl.tool,
+                                    status_text(&out.status)
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // 実在は計画段で確かめていない——検査は計画に載らない。
+                    // ここで断り、宣言と実体の食い違いとして述べる。
+                    failed = true;
+                    eprintln!(
+                        "error: cannot run `{program}` for {label}: {e}\n  \
+                         note: it comes from `[toolchain] {}`; it must be on PATH",
+                        decl.tool
+                    );
+                }
+            }
+        }
+    }
+    failed
+}
+
+fn status_text(status: &std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(c) => format!("exit code {c}"),
+        None => "a signal".to_string(),
+    }
+}
+
 /// `test` の対象。指定がなければ全ての test ターゲット。
 fn test_targets(
     sess: &Session,
@@ -627,6 +750,16 @@ fn schema_dump() -> String {
     // （issue #60）。項目の鍵は出力の拡張子であり、値がこの表を取る。
     w.key("artifact_properties").begin_array();
     for p in schema::artifact_props() {
+        w.begin_object();
+        w.field_str("name", p.name);
+        w.field_str("type", &p.ty.display());
+        w.field_str("doc", p.doc);
+        w.end_object();
+    }
+    w.end_array();
+
+    w.key("inspection_properties").begin_array();
+    for p in schema::inspection_props() {
         w.begin_object();
         w.field_str("name", p.name);
         w.field_str("type", &p.ty.display());

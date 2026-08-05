@@ -12,5 +12,5 @@ pub mod testing;
 
 pub use action::{Action, ActionId, ActionKind};
 pub use exec::Executor;
-pub use plan::{build_dir, plan, CompileCommand, Plan};
+pub use plan::{build_dir, flatten_strs, plan, CompileCommand, Plan};
 pub use testing::{Launcher, Outcome};

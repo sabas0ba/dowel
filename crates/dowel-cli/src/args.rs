@@ -24,6 +24,8 @@ Commands:
     check              Evaluate the manifests and report diagnostics. Does not build.
     build [target]     Build. With no target, builds every bin and test.
     test [target]      Build and run test targets. With no target, runs every test.
+    inspect [target]   Build, then run the tools declared in [<kind>.<name>.inspect] and
+                       show what they report. With no target, inspects everything declared.
     why <target> <property>
                        Show how a value reached a target.
     graph              Dump the dependency graph or the action graph.
@@ -109,6 +111,10 @@ pub enum Command {
         targets: Vec<String>,
     },
     Test {
+        targets: Vec<String>,
+    },
+    /// 宣言された検査を走らせ、道具の出力を見せる（issue #60）
+    Inspect {
         targets: Vec<String>,
     },
     Why {
@@ -221,8 +227,10 @@ pub enum Parsed {
     Version,
 }
 
-const COMMANDS: &[&str] =
-    &["new", "add", "check", "build", "test", "why", "graph", "migrate", "schema", "cache", "lsp"];
+const COMMANDS: &[&str] = &[
+    "new", "add", "check", "build", "test", "inspect", "why", "graph", "migrate", "schema",
+    "cache", "lsp",
+];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
     let args: Vec<String> = argv.into_iter().collect();
@@ -428,6 +436,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
         "check" => Command::Check,
         "build" => Command::Build { targets: positional },
         "test" => Command::Test { targets: positional },
+        "inspect" => Command::Inspect { targets: positional },
         "graph" => Command::Graph,
         "lsp" => Command::Lsp,
         "why" => {

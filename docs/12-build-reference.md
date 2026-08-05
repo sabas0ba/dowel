@@ -151,8 +151,42 @@ with no `artifacts` block never requires `objcopy` to exist. Because the
 tool's command is part of the action's command line, changing the
 declaration rebuilds the derived file.
 
-Inspection tools that produce no file (`size`, `nm`, `objdump`) are not
-expressible yet; they need a place that reports rather than builds.
+### `[<kind>.<name>.inspect]` — reporting on the artifact
+
+The counterpart of `artifacts`: tools that report rather than produce.
+`size` for the flash and RAM budget, `nm` for symbols, `objdump -d` to read
+what the optimizer did, `readelf -S` to check a linker script's answer.
+
+```toml
+[bin.firmware.inspect]
+sections = { tool = "size", args = ["-A"] }
+symbols  = { tool = "nm", args = ["--size-sort"] }
+```
+
+| Property | Type | Meaning |
+|---|---|---|
+| `tool` | `Str` | required. A toolchain tool's **name**, exactly as in `artifacts` — the command comes from `[toolchain]`, so a cross build reports with `arm-none-eabi-size` |
+| `args` | `List<Str>` | arguments placed before the artifact path |
+
+The command run is `<tool> <args...> <artifact>`; the artifact's path is
+appended positionally, never written in the manifest.
+
+An inspection produces **no file**, so there is nothing to be up to date
+about: it is not part of the build graph, not a `dowel build` default, and
+not incremental. It runs when asked:
+
+```sh
+dowel inspect                    # every target that declares an inspection
+dowel inspect firmware           # one target
+dowel inspect --message-format=json
+```
+
+`dowel inspect` builds first, then runs each declared tool and passes its
+output through — dowel does not parse it. A tool exiting nonzero fails the
+run, which is what makes a budget check expressible today as a wrapper
+script. Interpreting a tool's output inside dowel (a `max_flash = ...`
+declaration) needs a decision about per-tool output formats and is not part
+of this.
 
 ### `[runner.<triple>]` — execution wrappers
 

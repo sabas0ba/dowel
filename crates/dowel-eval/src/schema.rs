@@ -252,6 +252,40 @@ pub fn artifact_props() -> Vec<PropDef> {
     ]
 }
 
+/// `[<kind>.<name>.inspect]` の1項目に置けるプロパティ（issue #60）。
+///
+/// 検査は成果物を作らない。作らないため、増分の対象にも `dowel build` の
+/// 既定にもならない——最新かどうかを判定する出力が無い。走らせるのは
+/// `dowel inspect` である。
+///
+/// ```toml
+/// [bin.firmware.inspect]
+/// size = { tool = "size", args = ["-A"] }
+/// ```
+///
+/// 実行される列は `<tool> <args...> <成果物>` である。成果物の位置は
+/// 書かせない（[ADR-0008]）。
+///
+/// [ADR-0008]: ../../../docs/adr/0008-runner-transfer.md
+pub fn inspection_props() -> Vec<PropDef> {
+    vec![
+        PropDef {
+            name: "tool",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "the toolchain tool that reports, such as `size`",
+            domain: None,
+        },
+        PropDef {
+            name: "args",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments placed before the artifact path",
+            domain: None,
+        },
+    ]
+}
+
 /// `public` / `private` ブロックに置けるプロパティ。
 ///
 /// 両ブロックで同じ集合とする。伝播するか否かはブロックが決めるのであって
