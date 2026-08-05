@@ -2112,3 +2112,56 @@ fn compdb_entry(compdb: &str, file: &str) -> String {
         .unwrap_or_else(|| panic!("no entry for {file}\n{compdb}"))
         .to_string()
 }
+
+/// 派生ファイルは、そのターゲットがどう到達されたかとは独立に作られる。
+///
+/// `lib` の `artifacts` が、そのライブラリに依存する `bin` を足した途端に
+/// 黙って作られなくなる形（issue #64）。ninja からは派生が誰の入力にも
+/// ならないため、`default` に並べない限り到達しない。
+#[test]
+fn a_library_keeps_producing_its_derived_file_when_a_binary_depends_on_it() {
+    if !program_exists("objcopy") {
+        eprintln!("skipping: objcopy is not on PATH");
+        return;
+    }
+    let p = Project::new("artifacts-dependency");
+    p.write("dowel.toml", "[package]\nname = \"fw\"\nversion = \"0\"\n");
+    p.write("src/part.c", "int part(void) { return 42; }\n");
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint part(void);\nint main(void) { printf(\"v=%d\\n\", part()); return 0; }\n",
+    );
+    let lib_only = "[lib.part]\nsources = [file(\"src/part.c\")]\n\n\
+                    [lib.part.artifacts]\n\
+                    stripped = { tool = \"objcopy\", args = [\"--strip-all\"] }\n";
+    // A. ライブラリだけ。派生は作られる。
+    p.write("dowel.build", lib_only);
+    p.run(".", &["build"]).success();
+    let dir = build_dir(&p.path("."), "debug");
+    let derived = dir.join("lib/libpart.stripped");
+    assert!(derived.exists(), "the derived file was not produced for a lone library");
+    std::fs::remove_file(&derived).unwrap();
+
+    // B. そのライブラリを使う bin を足す。`artifacts` の宣言は動かしていない。
+    p.write(
+        "dowel.build",
+        &format!(
+            "{lib_only}\n[bin.firmware]\nsources = [file(\"src/main.c\")]\n\n\
+             [bin.firmware.private]\ndeps = [target(\"part\")]\n"
+        ),
+    );
+    let r = p.run(".", &["build"]);
+    r.success();
+    assert!(dir.join("lib/libpart.a").exists(), "the archive is missing\n{r}");
+    assert!(
+        derived.exists(),
+        "adding a dependent binary silently stopped the derived file from being produced\n{r}"
+    );
+    assert_eq!(run_artifact(&dir.join("bin/firmware")), "v=42\n");
+
+    // 実行器を跨いで同じものが出来ること。派生は誰の入力にもならないため、
+    // ninja の `default` から漏れると direct とだけ食い違う（issue #41 と同じ形）。
+    std::fs::remove_file(&derived).unwrap();
+    p.run(".", &["build", "--executor=direct"]).success();
+    assert!(derived.exists(), "the direct executor and ninja disagree about the derived file");
+}

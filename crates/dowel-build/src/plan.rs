@@ -37,14 +37,25 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// 要求されたターゲットが作るもの全て（成果物と、そこからの派生）。
+    /// ビルドが作るもの。ninja の `default` と「何を作ったか」の表示が読む。
     ///
-    /// ninja の `default` と「何を作ったか」の表示が同じ一覧を読む。
-    pub fn requested_outputs(&self) -> Vec<PathBuf> {
+    /// 要求されたターゲットの成果物と、**計画に載った全ターゲット**の派生で
+    /// ある。派生をこの計画の全体から採るのは、それがそのターゲット自身の
+    /// 出力だからである。依存として書庫が作られるなら、その隣に置くと
+    /// 宣言された `.stripped` も作られる——派生が出るかどうかが、自分の
+    /// 宣言ではなく「誰かが自分に依存しているか」で決まってはならない
+    /// （issue #64）。
+    ///
+    /// 派生は誰の入力にもならないため、ninja からは `default` に並べない限り
+    /// 到達しない。一方 direct 実行器は全アクションを走らせる。並べなければ
+    /// 実行器によって出来上がるものが違う（issue #41 と同じ形）。
+    pub fn default_outputs(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
         for t in &self.requested {
             out.extend(self.artifacts.get(t).cloned());
-            out.extend(self.derived.get(t).into_iter().flatten().cloned());
+        }
+        for derived in self.derived.values() {
+            out.extend(derived.iter().cloned());
         }
         out
     }
