@@ -70,6 +70,27 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("readelf", "readelf"),
 ];
 
+/// パスの1要素として安全な形にする。
+///
+/// 潰す先を `--` にするのは、単一の区切り文字にすると別々の名前が同じ形へ
+/// 落ちうるためである（`a/b` と `a-b` はどちらも `a-b` になる）。機能名と
+/// トリプルに使える文字は英数字と `_` `-` `.` `+` であり、この中に `--` は
+/// 現れない——`a-b` は `a-b` のまま、`a/b` は `a--b` になる。
+///
+/// 可逆である必要は無い。同じ構成が同じ識別子になり、違う構成が違う識別子に
+/// なることだけが要件である（issue #68）。
+pub fn path_safe(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+') {
+            out.push(c);
+        } else {
+            out.push_str("--");
+        }
+    }
+    out
+}
+
 /// 道具の既定のコマンド。
 pub fn default_tool(name: &str) -> &'static str {
     TOOLS.iter().find(|(n, _)| *n == name).map(|(_, d)| *d).unwrap_or("")
@@ -98,11 +119,17 @@ impl Config {
     }
 
     /// 構成を一意に表す短い識別子。ビルドディレクトリ名に使う。
+    ///
+    /// 1つの構成が1つのディレクトリになることを保つため、パスの区切りに
+    /// なりうる文字を潰す（[`path_safe`]）。依存先へ転送する機能名は
+    /// `dep/feature` の形を採るため、潰さないと `/` がそのまま区切りとして
+    /// 展開され、1構成が2階層に割れる（issue #68）。
     pub fn id(&self) -> String {
-        let mut s = format!("{}-{}", self.target, self.opt.name());
+        let mut s = format!("{}-{}", path_safe(&self.target), self.opt.name());
         if !self.features.is_empty() {
             s.push('-');
-            s.push_str(&self.features.iter().cloned().collect::<Vec<_>>().join("+"));
+            let names: Vec<String> = self.features.iter().map(|f| path_safe(f)).collect();
+            s.push_str(&names.join("+"));
         }
         s
     }
@@ -281,6 +308,24 @@ mod tests {
             c.lookup(&CfgKey { ns: Ns::Tc, name: "ar".into() }),
             Some(CfgValue::Str("llvm-ar".into()))
         );
+    }
+
+    #[test]
+    fn the_identifier_stays_one_path_component() {
+        // 転送する機能名は `dep/feature` の形を採る。`/` をそのまま識別子へ
+        // 入れると、1つの構成が2階層のディレクトリに割れる（issue #68）。
+        let mut c = Config::host_default();
+        c.target = "x86_64-unknown-linux-gnu".into();
+        c.features.insert("core/deep".into());
+        let id = c.id();
+        assert!(!id.contains('/'), "{id}");
+        assert!(id.contains("core--deep"), "{id}");
+
+        // 潰した結果が別の名前と衝突しない。
+        let mut other = Config::host_default();
+        other.target = "x86_64-unknown-linux-gnu".into();
+        other.features.insert("core-deep".into());
+        assert_ne!(c.id(), other.id());
     }
 
     #[test]

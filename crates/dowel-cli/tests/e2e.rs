@@ -2284,3 +2284,106 @@ fn a_project_without_inspections_says_so_instead_of_failing() {
     r.success();
     r.stderr_contains("no inspections");
 }
+
+/// `/` を含む機能名が、ビルドディレクトリを2階層に割らないこと（issue #68）。
+///
+/// この形は `dep/feature` を書いたときに現れる。**その名前が依存先の機能を
+/// 有効にするかどうかは、この検査の対象ではない**——機能の転送は実装されて
+/// おらず（`resolve_features` は根の `[features]` を閉包するだけで、名前を
+/// 依存先の名前空間へ翻訳しない）、docs も約束していない。ここで見るのは
+/// 「構成が1ディレクトリである」ことだけである。
+#[test]
+fn a_forwarded_feature_does_not_split_the_build_directory() {
+    let p = Project::new("forwarded-feature");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [features]\ndefault = []\nx = [\"lib/y\"]\n\n\
+         [[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n[bin.app.private]\ndeps = [dep(\"lib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\nint limit(void);\nint main(void) { printf(\"n=%d\\n\", limit()); return 0; }\n",
+    );
+    p.write(
+        "lib/dowel.toml",
+        "[package]\nname = \"lib\"\nversion = \"0\"\n\n[features]\ndefault = []\ny = []\n",
+    );
+    p.write(
+        "lib/dowel.build",
+        "[lib.lib]\nsources = [file(\"src/lib.c\")]\n\n\
+         [lib.lib.public]\ndefines = { LIMIT = 4096 } when feature.y\n",
+    );
+    p.write(
+        "lib/src/lib.c",
+        "#ifndef LIMIT\n#define LIMIT 256\n#endif\nint limit(void) { return LIMIT; }\n",
+    );
+
+    let r = p.run("app", &["build", "--features=x"]);
+    r.success();
+
+    // `.dowel/build` の直下に構成が1つだけ並ぶ。`/` が区切りとして
+    // 展開されていれば、名前が切れた親と、その下の階層に割れる。
+    let roots: Vec<String> = std::fs::read_dir(p.path("app/.dowel/build"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(roots.len(), 1, "the configuration is not one directory: {roots:?}");
+    let name = &roots[0];
+    assert!(!name.contains('/'), "{name}");
+    assert!(name.contains("lib--y"), "the forwarded name was not folded: {name}");
+
+    // 成果物はその1階層の下にある。
+    let dir = p.path("app/.dowel/build").join(name);
+    assert!(dir.join("bin/app").exists(), "the artifact is not under the configuration directory");
+    run_artifact(&dir.join("bin/app"));
+}
+
+/// 狭い呼び出しの後の広い呼び出しが、編集も無いのに組み直さないこと
+/// （issue #69）。記録は併合されなければならない。
+#[test]
+fn a_narrow_invocation_does_not_make_the_next_full_build_redo_work() {
+    let p = Project::new("record-merge");
+    p.write("dowel.toml", "[package]\nname = \"w\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.one]\nsources = [file(\"src/one.c\")]\n\n[bin.two]\nsources = [file(\"src/two.c\")]\n",
+    );
+    p.write("src/one.c", "int main(void) { return 0; }\n");
+    p.write("src/two.c", "int main(void) { return 0; }\n");
+
+    let ran = |r: &common::Run| -> usize {
+        // `ran N actions` を読む。debug 記録に出る。
+        r.stderr
+            .lines()
+            .find_map(|l| l.split("ran ").nth(1).and_then(|s| s.split(' ').next()))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no action count in the log\n{r}"))
+    };
+    let build = |args: &[&str]| {
+        let mut v = vec!["build", "--executor=direct", "--log-level=debug"];
+        v.extend_from_slice(args);
+        p.run(".", &v)
+    };
+
+    build(&[]).success();
+    let second = build(&[]);
+    second.success();
+    assert_eq!(ran(&second), 0, "a repeated build was not a no-op\n{second}");
+
+    // 片方だけを名指しする。記録から他方が落ちてはならない。
+    build(&["one"]).success();
+
+    let after = build(&[]);
+    after.success();
+    assert_eq!(
+        ran(&after),
+        0,
+        "the narrow invocation dropped records and the full build redid work\n{after}"
+    );
+}

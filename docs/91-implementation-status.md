@@ -251,14 +251,22 @@ changes, only the speed.
   appear, the archiver when an archive is produced)
 - ninja file generation and `compile_commands.json` (`arguments` array form)
 - Two executors: ninja (default) and direct (sequential, mtime-based
-  freshness reading depfiles). Header dependency records (`.d` files) stay
+  freshness reading depfiles). The direct executor's record of "which
+  command produced this output" is **merged** into the previous record
+  rather than replacing it: an output the current invocation did not plan is
+  still the product of the command last recorded for it, so a narrow call
+  (`dowel test`, `dowel build <name>`) does not make the next full build
+  redo untouched work (issue #69). Header dependency records (`.d` files) stay
   on disk and are shared between the executors — ninja is not allowed to
   fold them into `.ninja_deps` (`deps = gcc`), because a record private to
   one executor makes the other conclude "up to date" with no dependency
   information at all, silently keeping stale artifacts (issue #41). As a
   backstop, the direct executor treats an output whose declared depfile is
   missing as stale instead of fresh
-- Per-configuration build directories
+- Per-configuration build directories. The identifier is folded to one path
+  component (anything outside `[A-Za-z0-9_.+-]` becomes `--`), so a feature
+  name containing `/` cannot split a configuration across two levels
+  (issue #68)
 - `[toolchain.<triple>]` in `dowel.toml` — toolchain selection follows
   `--target`, the same shape as `[runner.<triple>]` (issue #42). A target
   triple with no declared toolchain is refused before building with
@@ -454,16 +462,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (429 tests):
+Current breakdown (432 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 269 |
+| `unit-*` | per-crate unit tests | 270 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 77 |
+| `e2e` | compile real C and C++, run it, check the output | 79 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (53 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
