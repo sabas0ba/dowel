@@ -120,7 +120,14 @@ pub fn run(plan: &Plan, executor: Executor, jobs: Option<usize>) -> Result<(), F
         // 「今ある成果物はどのコマンドで作られたか」が一貫する。
         // 途中で失敗した場合は書かない。再生成できたものまで最新扱いにすると、
         // 次の実行が古い成果物を残したまま成功する。
-        CommandLog::of(plan).save(&plan.build_dir);
+        //
+        // 前回の記録に**重ねて**書く。今回の計画に無かった成果物は、この
+        // 実行が触れていないだけで、依然として記録どおりのコマンドの産物で
+        // ある。落とすと、狭い呼び出し（`dowel test`、`dowel build <名前>`）
+        // の後の広い呼び出しが、編集も無いのに組み直す（issue #69）。
+        let mut log = CommandLog::load(&plan.build_dir);
+        log.absorb(&CommandLog::of(plan));
+        log.save(&plan.build_dir);
     }
     result
 }
@@ -175,6 +182,13 @@ impl CommandLog {
         }
         log_debug!("loaded {} recorded commands", log.by_output.len());
         log
+    }
+
+    /// 今回の記録を重ねる。同じ出力については今回が勝つ。
+    fn absorb(&mut self, current: &CommandLog) {
+        for (out, fp) in &current.by_output {
+            self.by_output.insert(out.clone(), *fp);
+        }
     }
 
     /// このアクションを前回と同じコマンドで作ったか。

@@ -166,8 +166,14 @@ Planning turns merged property maps into an action graph.
   cryptic exec failure later. The C++ toolchain is only probed when C++
   sources are actually present, so pure-C builds never require one
 - Everything lands in a per-configuration build directory
-  `.dowel/build/<triple>-<opt>/` (`obj/`, `lib/`, `bin/`), so switching
-  configurations never clobbers artifacts. `compile_commands.json` is
+  `.dowel/build/<triple>-<opt>[-<features>]/` (`obj/`, `lib/`, `bin/`), so
+  switching configurations never clobbers artifacts. The identifier is
+  folded to a single path component — any character that is not
+  `[A-Za-z0-9_.+-]` becomes `--`, so a feature name containing `/` cannot
+  split one configuration across two directory levels (issue #68). The
+  folding is not reversible and does not need to be; it only has to keep
+  distinct configurations distinct, which the two-character replacement
+  does (`a/b` and `a-b` do not collide). `compile_commands.json` is
   written on every build unless `--no-compdb`
 
 ## 6. Execution
