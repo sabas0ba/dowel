@@ -2165,3 +2165,122 @@ fn a_library_keeps_producing_its_derived_file_when_a_binary_depends_on_it() {
     p.run(".", &["build", "--executor=direct"]).success();
     assert!(derived.exists(), "the direct executor and ninja disagree about the derived file");
 }
+
+/// `[<kind>.<name>.inspect]` — 成果物について報告する検査（issue #60）。
+///
+/// 変換と違い出力を持たないため、`build` の既定には入らず `dowel inspect`
+/// が走らせる。宣言した道具の出力がそのまま届くこと、道具はトリプルごとに
+/// 選ばれること、失敗が失敗として返ることを見る。
+#[test]
+fn declared_inspections_run_and_report_through_dowel_inspect() {
+    if !program_exists("size") || !program_exists("nm") {
+        eprintln!("skipping: binutils are not on PATH");
+        return;
+    }
+    let p = Project::new("inspect");
+    p.write("dowel.toml", "[package]\nname = \"fw\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.firmware]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.firmware.inspect]\n\
+         sections = { tool = \"size\", args = [\"-A\"] }\n\
+         symbols  = { tool = \"nm\", args = [\"--size-sort\"] }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    // 検査は成果物を要する。`inspect` は先に組む。
+    let r = p.run(".", &["inspect"]);
+    r.success();
+    // 道具の出力はそのまま stdout へ通す。dowel は解釈しない。
+    r.stdout_contains(".text");
+    r.stdout_contains("main");
+    // どの検査の出力かは stderr の見出しで分かる。
+    r.stderr_contains("sections");
+    r.stderr_contains("symbols");
+
+    // 機械可読の形。1検査1行。
+    let j = p.run(".", &["inspect", "--message-format=json"]);
+    j.success();
+    j.stdout_contains("\"inspection\":\"sections\"");
+    j.stdout_contains("\"tool\":\"size\"");
+    j.stdout_contains("\"ok\":true");
+    assert_eq!(j.stdout.lines().count(), 2, "expected one line per inspection\n{j}");
+
+    // 検査は成果物を作らない。`build` の既定にも増分にも入らない。
+    let b = p.run(".", &["build"]);
+    b.success();
+    assert!(!b.stderr.contains("sections"), "an inspection ran during build\n{b}");
+}
+
+#[test]
+fn the_inspection_tool_is_selected_by_the_toolchain_declaration() {
+    let p = Project::new("inspect-tool-selection");
+    let wrapper = p.path("fake-size");
+    std::fs::write(&wrapper, "#!/bin/sh\necho \"flash budget: 1024\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"fw\"\nversion = \"0\"\n\n[toolchain]\nsize = \"{}\"\n",
+            wrapper.display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.firmware]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.firmware.inspect]\nbudget = { tool = \"size\" }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["inspect"]);
+    r.success();
+    r.stdout_contains("flash budget: 1024");
+}
+
+#[test]
+fn a_failing_inspection_fails_the_run() {
+    // 検査は報告であって、報告が失敗したら失敗である。`size` を判定に
+    // 使う形（予算）を将来足すときの土台でもある。
+    let p = Project::new("inspect-failure");
+    let wrapper = p.path("failing-size");
+    std::fs::write(&wrapper, "#!/bin/sh\necho 'over budget' >&2\nexit 3\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"fw\"\nversion = \"0\"\n\n[toolchain]\nsize = \"{}\"\n",
+            wrapper.display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.firmware]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.firmware.inspect]\nbudget = { tool = \"size\" }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["inspect"]);
+    r.failure();
+    r.stderr_contains("over budget");
+    r.stderr_contains("exit code 3");
+}
+
+#[test]
+fn a_project_without_inspections_says_so_instead_of_failing() {
+    let p = Project::new("inspect-none");
+    p.write("dowel.toml", "[package]\nname = \"n\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.n]\nsources = glob(\"src/*.c\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["inspect"]);
+    r.success();
+    r.stderr_contains("no inspections");
+}

@@ -194,6 +194,30 @@ tests is shown.
   the launch is refused with a diagnostic beforehand
 - `--message-format=json` emits one result per line on stdout
 
+## `dowel inspect`
+
+```
+dowel inspect [target...] [common options]
+```
+
+Builds, then runs the tools declared in `[<kind>.<name>.inspect]`
+([12-build-reference.md](12-build-reference.md)) and passes what they report
+through. With no target, inspects every target that declares an inspection;
+a named target with none simply reports nothing.
+
+An inspection produces no file, which is why it is a command rather than
+part of `build`: there is nothing to be up to date about, so running it on
+every build would be noise and running it never would make the declaration
+pointless. The tool's output is not parsed — `size`'s format differs between
+implementations, and reading it is the tool's job.
+
+- Tool output goes to **stdout**, the `== <target>: <name> (<tool>) ==`
+  headings to stderr, so `dowel inspect > sizes.txt` keeps just the reports
+- A tool exiting nonzero fails the run. A budget check is expressible today
+  as a wrapper script that exits nonzero when over
+- `--message-format=json` emits one object per inspection per line, carrying
+  the full command, the exit verdict, and the output
+
 ## `dowel why`
 
 ```

@@ -45,6 +45,7 @@ cxx = "aarch64-linux-gnu-g++"
 | `cxx` | string | the C++ compiler command, default `c++` for host builds. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
 | `ar` | string | the archiver command, default `ar`. Required — and probed — only when the build produces a static library. Cross builds should declare it alongside `c` / `cxx` so archives are not created by the host's tool. Missing from PATH: `missing-toolchain` |
 | `objcopy` | string | the object copier, default `objcopy`. Used by `[<kind>.<name>.artifacts]` to derive files from an artifact ([12-build-reference.md](12-build-reference.md)); probed only when such a declaration exists. Missing from PATH: `missing-toolchain` |
+| `size` `nm` `objdump` `readelf` | string | reporting tools, each defaulting to its own name. Used by `[<kind>.<name>.inspect]` ([12-build-reference.md](12-build-reference.md)). An inspection is not part of the build graph, so these are not probed at plan time; `dowel inspect` reports a tool it cannot start |
 
 Any other key is `unknown-property`, with a suggestion — a misspelled tool
 would otherwise silently fall back to its default, which for a cross
