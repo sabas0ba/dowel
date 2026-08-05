@@ -24,6 +24,11 @@ pub struct Package {
     pub features: BTreeMap<String, Vec<String>>,
     /// `[features]` の見出し。宣言されていない名前を指す診断が参照する
     pub features_site: Option<Site>,
+    /// `[package] targets`。この木が対象とするトリプル（issue #71）。
+    /// 空は「宣言なし」であり、どのトリプルでも組める
+    pub targets: Vec<String>,
+    /// `targets = [...]` が書かれた位置
+    pub targets_site: Option<Site>,
     /// 無印の `[toolchain]`。ホスト向けビルドに適用される
     pub toolchain: ToolchainDecl,
     /// `[toolchain.<triple>]`。ターゲットトリプルごとの宣言。
@@ -133,6 +138,8 @@ pub fn from_document(
         deps: Vec::new(),
         features: BTreeMap::new(),
         features_site: None,
+        targets: Vec::new(),
+        targets_site: None,
         toolchain: ToolchainDecl::default(),
         toolchains: BTreeMap::new(),
     };
@@ -155,6 +162,25 @@ pub fn from_document(
                 match e.value.as_str() {
                     Some(s) => pkg.version = s.to_string(),
                     None => type_err(diags, e.site, "package.version", "a string"),
+                }
+            }
+            // 対象とするトリプル。宣言は道具の宣言とは別の事柄である——
+            // ホスト向けにも組めるが、クロスのときだけ道具を替えたい木は
+            // `[toolchain.<triple>]` を持ちつつ対象を絞らない（issue #71）。
+            if let Some(e) = t.entry("targets") {
+                pkg.targets_site = Some(e.site);
+                match &e.value.data {
+                    dowel_eval::Data::List(items) => {
+                        for item in items {
+                            match item.as_str() {
+                                Some(s) => pkg.targets.push(s.to_string()),
+                                None => {
+                                    type_err(diags, e.site, "package.targets", "a list of strings")
+                                }
+                            }
+                        }
+                    }
+                    _ => type_err(diags, e.site, "package.targets", "a list of strings"),
                 }
             }
         }
@@ -441,6 +467,8 @@ mod tests {
             deps: Vec::new(),
             features: map,
             features_site: None,
+            targets: Vec::new(),
+            targets_site: None,
             toolchain: ToolchainDecl::default(),
             toolchains: BTreeMap::new(),
         }

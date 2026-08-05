@@ -207,7 +207,7 @@ pub fn plan(
         // `link_flags` だけは compile_env からではなく、リンク閉包から集める。
         // `private` はリンクの到達可能性を制御しない（issue #56、下の
         // `closure_link_flags`）。
-        let link_flags = closure_link_flags(sess, graph, cfg, tid);
+        let link_flags = closure_link_flags(sess, graph, cfg, tid, &build_dir, &mut diags);
 
         log_debug!(
             "{}: {} sources, {} includes, {} defines",
@@ -522,14 +522,30 @@ fn require_tool(
 /// 順序は依存元が先・依存が後（書庫と同じ、静的リンクの解決順の要請）。
 /// 重複は畳まない——`link_flags` の併合規則は `append`（順序保持）であり、
 /// 閉包の各ノードは一度しか現れないため、二重取りも起きない。
-fn closure_link_flags(sess: &Session, graph: &Graph, cfg: &Config, tid: TargetId) -> Vec<String> {
+fn closure_link_flags(
+    sess: &Session,
+    graph: &Graph,
+    cfg: &Config,
+    tid: TargetId,
+    build_dir: &Path,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<String> {
     let mut out = Vec::new();
     for t in graph.link_closure(tid) {
         let target = sess.target(t);
         for block in [&target.public, &target.private] {
             let Some(v) = block.get("link_flags") else { continue };
             let Some(v) = dowel_eval::specialize(v, cfg) else { continue };
-            out.extend(flatten(&v).iter().filter_map(|v| v.as_str().map(str::to_string)));
+            for item in flatten(&v) {
+                // 道は絶対パスへ展開する。リンクの作業ディレクトリは
+                // ビルドディレクトリであり、パッケージの中のリンカスクリプトを
+                // 相対で指しても届かない（issue #70）。
+                if let Some(abs) = absolute_path(sess, &item, build_dir, diags) {
+                    out.push(abs.display().to_string());
+                } else if let Some(s) = item.as_str() {
+                    out.push(s.to_string());
+                }
+            }
         }
     }
     out
@@ -628,43 +644,56 @@ fn collect_includes(
     let Some(value) = env.get("includes") else { return Vec::new() };
     let mut out = Vec::new();
     for item in flatten(value) {
-        let Data::Path(p) = &item.data else { continue };
-        let base = match p.base {
-            PathBase::Package => {
-                let pkg = item
-                    .prov
-                    .nearest_site()
-                    .and_then(|s| sess.package_of_file(s.file))
-                    .map(|id| sess.package(id).root.clone());
-                match pkg {
-                    Some(root) => root,
-                    None => {
-                        diags.push(Diagnostic::error(
-                            "unresolved-path",
-                            format!("cannot determine the base of `{}`", p.rel),
-                        ));
-                        continue;
-                    }
-                }
-            }
-            PathBase::BuildDir => build_dir.to_path_buf(),
-            PathBase::Sysroot => {
-                diags.push(
-                    Diagnostic::error(
-                        "unimplemented-path-base",
-                        "sysroot-relative paths are not implemented",
-                    )
-                    .note("toolchain descriptions are Phase 5 (docs/90-roadmap.md)"),
-                );
-                continue;
-            }
-        };
-        let abs = base.join(&p.rel);
+        let Some(abs) = absolute_path(sess, &item, build_dir, diags) else { continue };
         if !out.contains(&abs) {
             out.push(abs);
         }
     }
     out
+}
+
+/// `Path` の値を絶対パスにする。`Path` でなければ `None`。
+///
+/// 基準点は値ではなく宣言された位置が決める。`libfoo` の `dir("include")` は
+/// `libfoo` のルートから解決されなければならない。解決できない基準は診断する。
+fn absolute_path(
+    sess: &Session,
+    item: &Value,
+    build_dir: &Path,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<PathBuf> {
+    let Data::Path(p) = &item.data else { return None };
+    let base = match p.base {
+        PathBase::Package => {
+            let pkg = item
+                .prov
+                .nearest_site()
+                .and_then(|s| sess.package_of_file(s.file))
+                .map(|id| sess.package(id).root.clone());
+            match pkg {
+                Some(root) => root,
+                None => {
+                    diags.push(Diagnostic::error(
+                        "unresolved-path",
+                        format!("cannot determine the base of `{}`", p.rel),
+                    ));
+                    return None;
+                }
+            }
+        }
+        PathBase::BuildDir => build_dir.to_path_buf(),
+        PathBase::Sysroot => {
+            diags.push(
+                Diagnostic::error(
+                    "unimplemented-path-base",
+                    "sysroot-relative paths are not implemented",
+                )
+                .note("toolchain descriptions are Phase 5 (docs/90-roadmap.md)"),
+            );
+            return None;
+        }
+    };
+    Some(base.join(&p.rel))
 }
 
 fn collect_defines(env: &dowel_model::PropMap) -> Vec<(String, String)> {

@@ -442,6 +442,23 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
         cfg.target = t.clone();
     }
     if let Some(root) = sess.root_package() {
+        // 対象の宣言があれば、それ以外のトリプルを求められたときに拒む。
+        // ホストには既定の道具があるため、宣言の不在では拒めない——
+        // バレメタルの木が `--target` の付け忘れで x86-64 の「ファームウェア
+        // 像」として組み上がる（issue #71）。
+        if !root.targets.is_empty() && !root.targets.contains(&cfg.target) {
+            let mut d = Diagnostic::error(
+                "unsupported-target",
+                format!("`{}` is not built for `{}`", root.name, cfg.target),
+            );
+            if let Some(s) = root.targets_site {
+                d = d.at(s.file, s.span, "this package declares the targets it supports");
+            }
+            for t in &root.targets {
+                d = d.note(format!("pass --target={t}"));
+            }
+            diags.push(d);
+        }
         let declared: Vec<String> = root.features.keys().cloned().collect();
         for name in &opts.features {
             if !declared.contains(name) {

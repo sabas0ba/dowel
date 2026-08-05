@@ -32,7 +32,7 @@ use crate::value::{
 use dowel_support::{FileId, Span};
 
 /// 形式の版。形式を変えたらこれを上げる。読めない版は無いものとして扱う。
-const VERSION: u8 = 1;
+const VERSION: u8 = 2;
 
 pub fn encode_document(doc: &Document) -> Vec<u8> {
     let mut w = W(Vec::new());
@@ -183,6 +183,7 @@ impl W {
                 self.u8(12);
                 self.ty(e);
             }
+            Type::Word => self.u8(13),
         }
     }
 
@@ -415,6 +416,7 @@ impl R<'_> {
             10 => Type::Set(Box::new(self.ty()?)),
             11 => Type::Map(Box::new(self.ty()?)),
             12 => Type::Cfg(Box::new(self.ty()?)),
+            13 => Type::Word,
             _ => return None,
         })
     }

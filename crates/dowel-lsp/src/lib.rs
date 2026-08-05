@@ -39,6 +39,11 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
     ("unreadable-build", "the buffer overlay cannot reproduce an unreadable file on disk"),
     ("missing-runner", "triggered by `--target`, which is not part of any manifest"),
     (
+        "unsupported-target",
+        "triggered by the requested triple; the editor has no `--target` and would show a \
+         permanent error the reader cannot clear",
+    ),
+    (
         "unfetchable-dependency",
         "the server never touches the network; fetching and its diagnostic belong to the CLI",
     ),

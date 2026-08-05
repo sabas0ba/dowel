@@ -329,9 +329,9 @@ pub fn block_props() -> Vec<PropDef> {
         },
         PropDef {
             name: "link_flags",
-            ty: list(Type::Str),
+            ty: list(Type::Word),
             merge: Merge::Append,
-            doc: "link flags. order preserving",
+            doc: "link flags, order preserving. a `Path` element expands to its absolute path",
             domain: None,
         },
         PropDef {

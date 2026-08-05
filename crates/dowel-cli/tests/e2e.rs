@@ -2387,3 +2387,100 @@ fn a_narrow_invocation_does_not_make_the_next_full_build_redo_work() {
         "the narrow invocation dropped records and the full build redid work\n{after}"
     );
 }
+
+/// `link_flags` の `Path` 要素が絶対パスへ展開されること（issue #70）。
+///
+/// ベアメタルではリンカスクリプトを省略できず、それはパッケージの中に置く。
+/// リンクの作業ディレクトリはビルドディレクトリなので、相対の文字列では届かない。
+#[test]
+fn a_path_in_link_flags_expands_to_its_absolute_path() {
+    let p = Project::new("link-script");
+    p.write("dowel.toml", "[package]\nname = \"fw\"\nversion = \"0\"\n");
+    // 報告と同じ形。freestanding なので、スクリプトが配置を全て決める。
+    p.write(
+        "dowel.build",
+        "[bin.fw]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.fw.private]\nlink_flags = [\"-nostdlib\", \"-T\", file(\"ld/app.ld\")]\n",
+    );
+    p.write("src/main.c", "void _reset(void) { for (;;) {} }\n");
+    p.write(
+        "ld/app.ld",
+        "ENTRY(_reset)\nSECTIONS {\n  . = 0x8000000;\n  .text : { *(.text*) }\n\
+         .data : { *(.data*) }\n  .bss : { *(.bss*) }\n}\n",
+    );
+
+    // 道が届かなければ `cannot open linker script file` で落ちる。
+    let r = p.run(".", &["build"]);
+    r.success();
+
+    // 渡った引数が絶対パスであること。
+    let g = p.run(".", &["graph", "--kind=action", "--format=json"]);
+    g.success();
+    // 生成パスは `../..` を含むため、模型側の正規化に合わせて比べる。
+    let script = std::fs::canonicalize(p.path("ld/app.ld")).unwrap().display().to_string();
+    assert!(g.stdout.contains(&script), "the script was not passed as an absolute path\n{g}");
+
+    // スクリプトが実際に効いていること。配置は既定ではなく宣言どおりになる。
+    if program_exists("readelf") {
+        let bin = build_dir(&p.path("."), "debug").join("bin/fw");
+        let out = std::process::Command::new("readelf").args(["-l"]).arg(&bin).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("0x0000000008000000"), "the script did not place the image:\n{text}");
+    }
+}
+
+#[test]
+fn a_string_in_link_flags_is_still_passed_through() {
+    // 道を受けるようにしても、道を含まないフラグはこれまでどおり書ける。
+    let p = Project::new("link-flags-str");
+    p.write("dowel.toml", "[package]\nname = \"m\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.m]\nsources = [file(\"src/main.c\")]\n\n[bin.m.private]\nlink_flags = [\"-lm\"]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <math.h>\n#include <stdio.h>\n\
+         int main(void) { printf(\"v=%d\\n\", (int) sqrt(1764.0)); return 0; }\n",
+    );
+    p.run(".", &["build"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/m")), "v=42\n");
+}
+
+/// パッケージが対象とするトリプルを宣言できること（issue #71）。
+#[test]
+fn a_package_can_say_which_targets_it_is_for() {
+    let p = Project::new("package-targets");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"blink\"\nversion = \"0.1.0\"\ntargets = [\"aarch64-unknown-linux-gnu\"]\n\n\
+         [toolchain.aarch64-unknown-linux-gnu]\nc = \"aarch64-linux-gnu-gcc\"\n",
+    );
+    p.write("dowel.build", "[bin.firmware]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    // `--target` の付け忘れが、ホスト向けの成功として返ってはならない。
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unsupported-target");
+    r.stderr_contains("is not built for");
+    r.stderr_contains("pass --target=aarch64-unknown-linux-gnu");
+    // 何も組まれていない。
+    assert!(!p.path(".dowel/build").exists(), "artifacts were produced for a refused target");
+}
+
+#[test]
+fn a_package_without_a_target_declaration_still_builds_anywhere() {
+    // 宣言が無ければ従来どおり。クロスのときだけ道具を替えたい木は、
+    // `[toolchain.<triple>]` を持ちつつ対象を絞らない（issue #71）。
+    let p = Project::new("package-targets-absent");
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"httpd\"\nversion = \"0\"\n\n\
+         [toolchain.aarch64-unknown-linux-gnu]\nc = \"aarch64-linux-gnu-gcc\"\n",
+    );
+    p.write("dowel.build", "[bin.httpd]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    p.run(".", &["build"]).success();
+}

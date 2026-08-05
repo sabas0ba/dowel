@@ -205,6 +205,18 @@ changes, only the speed.
   precedes `c_flags` / `cxx_flags`, so an explicit flag still overrides it —
   the escape hatch for GNU dialects, which are deliberately not in the
   vocabulary
+- `link_flags` accept `Path` elements, which expand to absolute paths. That
+  is how a linker script inside the package is named
+  (`["-T", file("ld/app.ld")]`): the link runs in the build directory, so a
+  relative string never reaches it, and the language has no string
+  concatenation with which to build an absolute one (issue #70)
+- `[package] targets` declares the triples a package is for. Any other
+  triple — the host included — is refused with `unsupported-target` before
+  building, so a bare-metal tree does not quietly produce an x86-64
+  "firmware" image when `--target` is forgotten. Undeclared means any triple,
+  which keeps a package that builds for the host while swapping tools when
+  cross-compiling expressible; the declaration is deliberately separate from
+  `[toolchain.<triple>]` (issue #71)
 - `link_flags` ride the link closure, `private` included: a static archive
   cannot carry its own link requirements, so the flags a library declares —
   and the `--libs` of a `version` dependency it keeps private — reach the
@@ -462,7 +474,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (432 tests):
+Current breakdown (436 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -471,10 +483,10 @@ Current breakdown (432 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 79 |
+| `e2e` | compile real C and C++, run it, check the output | 83 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (53 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (54 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |
