@@ -150,6 +150,13 @@ changes, only the speed.
   time would mix in the current file system — an unrecorded input
 - Merge rules belong to types: `union` / `append` / `error_on_conflict` /
   `must_equal` / `replace` / `max`
+- An `abi` label may name a boundary instead of a language: `c` matches every
+  label and never replaces one ([ADR-0019](adr/0019-c-abi-label.md)). Without
+  it, a C library and a C++ consumer each stating its own language honestly
+  produce different labels and the build is refused, and the way out is for
+  the consumer to copy the library's label — at which point the label stops
+  describing an ABI (issue #78). The exemption belongs to the ABI label
+  vocabulary, not to `must_equal`, which still means equality everywhere else
 - Exhaustiveness checking of `match`: closed-domain `cfg` keys require full
   enumeration, and open-domain `cfg.target` requires `_`
 - The strictness of `dowel.toml` is imposed by validation, not by a separate
@@ -507,16 +514,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (471 tests):
+Current breakdown (477 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 287 |
+| `unit-*` | per-crate unit tests | 290 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 101 |
+| `e2e` | compile real C and C++, run it, check the output | 104 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (55 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -593,7 +600,7 @@ cannot be measured with the current fixtures; the scale fixture
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry / tarball dependency source | Phase 5; `version` deps delegate to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and `dowel.lock` records their resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
-| automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi` |
+| automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi`. Nothing verifies that a surface declaring `abi = "c"` really is `extern "C"` — the claim is narrower and more checkable than a language label, and is what an IDL or a header scan would confirm ([ADR-0019](adr/0019-c-abi-label.md)) |
 | automatic composition of the ABI label from its components | Q2; `c_std` / `cxx_std` are now typed values the label can read ([ADR-0016](adr/0016-language-standard-property.md)), but which components make up the label, and at what granularity, is still open |
 
 ## Divergences from the design documents

@@ -116,13 +116,41 @@ order applies.
 | `union` | duplicates dropped, arrival order kept. Two equal-looking paths from *different packages* are **not** duplicates — a path's base point is the package that declared it, so `dir("include")` in two packages names two directories |
 | `append` | concatenation, duplicates kept |
 | `error_on_conflict` | per map key: the same value may arrive many times, but two different values for one key fail (`merge-conflict`) with both provenance chains in the diagnostic |
-| `must_equal` | all arriving values must be identical or the build fails (`abi-mismatch`). This is the whole ABI check today: `abi` labels are compared before linking, turning a would-be runtime ODR breakage into a build failure |
+| `must_equal` | all arriving values must be identical or the build fails (`abi-mismatch`). This is the whole ABI check today: `abi` labels are compared before linking, turning a would-be runtime ODR breakage into a build failure. The label `c` is exempt — see below |
 | `replace` | last arrival wins (used by runner properties, which do not propagate) |
 | `max` | the highest value in the vocabulary's order wins. Used by `c_std` / `cxx_std`: a library requiring C++17 consumed by a C++20 binary is correct, and a library requiring C++20 raises a consumer that asked for less ([ADR-0016](adr/0016-language-standard-property.md)) |
 
 Nested lists are flattened completely during merging — a `match` written as
 a list element produces a list-in-a-list when specialized, and one level of
 flattening would silently drop it downstream.
+
+### The `c` ABI label
+
+An `abi` label may name a **boundary** instead of a language
+([ADR-0019](adr/0019-c-abi-label.md)). One such label exists:
+
+```toml
+[lib.hashx.public]
+abi = "c"          # this surface is the C ABI
+```
+
+A `c` label matches every label. It does not participate in the `must_equal`
+comparison, the merged value is the first label that is not `c`, and only
+when every label is `c` is the result `c`.
+
+The reason is that the check is about ODR, and ODR violations do not arise
+across an `extern "C"` boundary: a C function has no overloading, no
+templates, no inline instantiation, and no name mangling. Without this, a C
+library and a C++ consumer — each stating its own language honestly —
+produce different labels and the build is refused, and the only way out is
+for the consumer to copy the library's label. That makes the label name "the
+set of things that use this library" rather than an ABI. A library is also
+written without knowing its consumers, so one language label there forces
+that language on all of them.
+
+`c` never weakens a check it was not asked to weaken. It declines to add a
+constraint; it does not remove one. A `gnu11` arriving through a `c` surface
+from further down is still compared, because that constraint is real.
 
 Every merged value keeps the full provenance chain, which is what
 `dowel why <target> <property>` prints:
