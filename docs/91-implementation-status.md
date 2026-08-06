@@ -161,7 +161,12 @@ changes, only the speed.
 ### Model (`dowel-model`)
 
 - Loading multiple packages by following `path`, `git`, and `version`
-  dependencies
+  dependencies. An entry names **exactly one** source: none is
+  `incomplete-dependency`, two or more is `conflicting-dependency-source`.
+  The second half is what the rule was missing — one of the declarations
+  would never be read, and nothing said which one won, so a `path` left
+  behind while switching to `git` kept building for whoever still had the
+  tree (issue #79)
 - git dependencies are pinned to a full 40-digit commit sha (anything else
   is `unpinned-dependency`) and fetched once into
   `.dowel/deps/<name>-<rev12>/` by delegating to the `git` command; the
@@ -502,7 +507,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (468 tests):
+Current breakdown (471 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -511,10 +516,10 @@ Current breakdown (468 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 98 |
+| `e2e` | compile real C and C++, run it, check the output | 101 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (54 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (55 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

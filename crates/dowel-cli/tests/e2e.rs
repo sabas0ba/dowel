@@ -2786,3 +2786,58 @@ fn a_reserved_table_in_dowel_toml_is_still_accepted() {
 
     p.run(".", &["check"]).success();
 }
+
+/// 依存が名乗る出所は1つ（issue #79）。
+///
+/// 0個は `incomplete-dependency` で拒んでいた。2個は黙って受け、しかも
+/// `path` が勝っていた。切り替えの途中で消し忘れると、その木を持たない
+/// 誰かが組むまで気づかない。
+fn two_source_project(name: &str, extra: &str) -> Project {
+    let p = Project::new(name);
+    p.write("libfoo/dowel.toml", "[package]\nname    = \"libfoo\"\nversion = \"0.1.0\"\n");
+    p.write("libfoo/dowel.build", "[lib.foo]\nsources = glob(\"src/*.c\")\n");
+    p.write("libfoo/src/foo.c", "int foo(void) { return 1; }\n");
+    p.write(
+        "app/dowel.toml",
+        &format!(
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n\
+             [[dependencies]]\nname = \"libfoo\"\npath = \"../libfoo\"\n{extra}"
+        ),
+    );
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn a_dependency_that_names_two_sources_is_refused() {
+    // 取りに行けない git を書いても、以前は `path` が勝って黙って通っていた。
+    let p = two_source_project(
+        "dep-two-sources",
+        "git  = \"https://example.invalid/libfoo\"\n\
+         rev  = \"0123456789012345678901234567890123456789\"\n",
+    );
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("conflicting-dependency-source");
+    // 両方の宣言が見えること。どちらを消すのかは利用者が決める。
+    r.stderr_contains("a local path");
+    r.stderr_contains("and a git repository");
+    r.stderr_contains("exactly one source");
+}
+
+#[test]
+fn the_same_holds_when_the_two_sources_are_a_path_and_a_version() {
+    let p = two_source_project("dep-path-and-version", "version = \"9.0\"\n");
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("conflicting-dependency-source");
+    r.stderr_contains("a system package");
+}
+
+#[test]
+fn one_source_is_still_accepted() {
+    // 規則は「ちょうど1つ」であって「path を疑う」ではない。
+    let p = two_source_project("dep-one-source", "");
+    p.run("app", &["check"]).success();
+}

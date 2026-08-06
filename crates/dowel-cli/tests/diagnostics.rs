@@ -314,6 +314,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "conflicting-dependency-source",
+        why: "the dependency names both a path and a git repository",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"libfoo\"\npath = \"../libfoo\"\ngit  = \"https://example.invalid/libfoo\"\nrev  = \"0123456789012345678901234567890123456789\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unsatisfied-dependency",
         why: "pkg-config does not know the module the `version` dependency names",
         files: &[(
