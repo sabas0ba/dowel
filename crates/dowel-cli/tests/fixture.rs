@@ -110,7 +110,8 @@ fn layered_builds_runs_and_tests() {
 /// 構成を指定してビルドし、`app` を実行した1行を返す。
 ///
 /// ビルドディレクトリ名は構成識別子そのものである（`<トリプル>-<opt>[-<機能>]`）。
-/// 機能の並びは辞書順で、`Config::id` が決める。
+/// 機能は `<パッケージ>--<機能>` の形で並ぶ（ADR-0017、`/` は畳まれる）。
+/// 並びは辞書順で、`Config::id` が決める。
 fn built_config(p: &Project, args: &[&str], id_suffix: &str) -> String {
     p.run("app", &[&["build"], args].concat()).success();
     let bin = build_dir(&p.path("app"), id_suffix).join("bin/app");
@@ -125,10 +126,13 @@ fn configured_reflects_every_configuration() {
     check_build_and_test(&p);
 
     // 既定。`default = ["fast"]` で、`fast` が `simd` を連鎖して有効にする。
-    assert_eq!(built_config(&p, &[], "debug-fast+simd"), "opt=0 fast=1 simd=1 trace=0 json=0");
+    assert_eq!(
+        built_config(&p, &[], "debug-app--fast+app--simd"),
+        "opt=0 fast=1 simd=1 trace=0 json=0"
+    );
     // `match cfg.opt` の別のアーム。
     assert_eq!(
-        built_config(&p, &["--config=release"], "release-fast+simd"),
+        built_config(&p, &["--config=release"], "release-app--fast+app--simd"),
         "opt=1 fast=1 simd=1 trace=0 json=0"
     );
     // 既定を切ると連鎖ごと消える。
@@ -138,12 +142,12 @@ fn configured_reflects_every_configuration() {
     );
     // 明示した機能は既定に加わる。
     assert_eq!(
-        built_config(&p, &["--features=trace"], "debug-fast+simd+trace"),
+        built_config(&p, &["--features=trace"], "debug-app--fast+app--simd+app--trace"),
         "opt=0 fast=1 simd=1 trace=1 json=0"
     );
     // 任意の依存を有効にすると、その公開定義が依存元へ届く。
     assert_eq!(
-        built_config(&p, &["--features=json"], "debug-fast+json+simd"),
+        built_config(&p, &["--features=json"], "debug-app--fast+app--json+app--simd"),
         "opt=0 fast=1 simd=1 trace=0 json=1"
     );
 }

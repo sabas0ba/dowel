@@ -177,7 +177,15 @@ changes, only the speed.
   (with suggestions)
 - The `interface(T)` / `compile_env(T)` split: `private` dependencies affect
   one's own compilation but do not propagate to dependents
-- Feature flags make dependency-graph edges appear and disappear
+- Feature flags make dependency-graph edges appear and disappear. Features
+  are per package ([ADR-0017](adr/0017-feature-forwarding.md)): the active
+  set is carried as `<package>/<feature>`, `feature.<name>` is answered
+  qualified by the package whose manifest declared the value, and a
+  `[features]` value spelled `dep/feat` forwards into that dependency. A
+  forward to an undeclared dependency is `undeclared-dependency`; one naming
+  a feature the dependency does not declare is `unknown-feature`. Loading
+  and resolution iterate to a fixpoint because a forwarded feature can
+  activate an optional dependency
 - Optional dependencies (`optional = true`) that are not enabled are not
   loaded — not just the edge but the node is absent. Feature selection is
   fixed before `Session` loads
@@ -474,16 +482,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (436 tests):
+Current breakdown (441 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 270 |
+| `unit-*` | per-crate unit tests | 271 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 83 |
+| `e2e` | compile real C and C++, run it, check the output | 87 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (54 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

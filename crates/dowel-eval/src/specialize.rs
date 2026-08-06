@@ -132,7 +132,8 @@ mod tests {
         let off = specialize(&list, &cfg).unwrap();
         assert_eq!(off.as_list().unwrap().len(), 1);
 
-        cfg.features.insert("zlib".into());
+        cfg.features.insert("p/zlib".into());
+        let cfg = cfg.for_package("p");
         let on = specialize(&list, &cfg).unwrap();
         assert_eq!(on.as_list().unwrap().len(), 2);
         assert_eq!(on.as_list().unwrap()[1].as_str(), Some("-lz"));

@@ -425,19 +425,53 @@ pub fn resolve_features(
     requested: &[String],
     use_default: bool,
 ) -> std::collections::BTreeSet<String> {
-    let mut out = std::collections::BTreeSet::new();
+    resolve(pkg, requested, use_default).own
+}
+
+/// 1つのパッケージの機能解決の結果。
+///
+/// 機能名は2種類ある。素の名前はこのパッケージ自身の機能であり、
+/// `dep/feat` は依存 `dep` の機能 `feat` を有効にする転送である
+/// （[ADR-0017]）。転送は自分の集合には入らない——`feature.<名前>` は
+/// 常に「このパッケージで有効か」を問うものであり、その値域は同じ
+/// パッケージの `[features]` が決める。
+///
+/// [ADR-0017]: ../../../docs/adr/0017-feature-forwarding.md
+#[derive(Default)]
+pub struct Features {
+    /// このパッケージで有効な機能
+    pub own: std::collections::BTreeSet<String>,
+    /// 依存の名前 → その依存で有効にする機能。宣言された位置つき
+    pub forwarded: BTreeMap<String, Vec<(String, Site)>>,
+}
+
+/// 機能を解決し、自分の集合と依存への転送に分ける。
+pub fn resolve(pkg: &Package, requested: &[String], use_default: bool) -> Features {
+    let mut out = Features::default();
     let mut stack: Vec<String> = requested.to_vec();
     if use_default {
         if let Some(defaults) = pkg.features.get("default") {
             stack.extend(defaults.iter().cloned());
         }
     }
+    let mut seen = std::collections::BTreeSet::new();
     while let Some(f) = stack.pop() {
-        if f == "default" || !out.insert(f.clone()) {
+        if f == "default" || !seen.insert(f.clone()) {
             continue;
         }
-        if let Some(enables) = pkg.features.get(&f) {
-            stack.extend(enables.iter().cloned());
+        match f.split_once('/') {
+            Some((dep, feat)) => {
+                let site = pkg
+                    .features_site
+                    .unwrap_or(Site::new(pkg.manifest_file, dowel_support::Span::EMPTY));
+                out.forwarded.entry(dep.to_string()).or_default().push((feat.to_string(), site));
+            }
+            None => {
+                out.own.insert(f.clone());
+                if let Some(enables) = pkg.features.get(&f) {
+                    stack.extend(enables.iter().cloned());
+                }
+            }
         }
     }
     out

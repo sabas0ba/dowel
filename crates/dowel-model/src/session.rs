@@ -23,6 +23,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// 機能の転送が固定点に達するまでの走査の上限。
+///
+/// 集合は増える一方なので、実際にはパッケージ数を超えて回らない。
+/// 上限を置くのは、想定外の形でも停止することを型の外で保証するため。
+const MAX_FEATURE_ROUNDS: usize = 32;
+
 pub const MANIFEST_NAME: &str = "dowel.toml";
 pub const BUILD_NAME: &str = "dowel.build";
 
@@ -73,8 +79,17 @@ pub struct Session {
     cache: Rc<Cache>,
     /// 任意の依存を読むかどうかの判定に使う選択
     features: Features,
-    /// 根の `[features]` から解決した集合。根を読むまでは空
-    active: std::collections::BTreeSet<String>,
+    /// パッケージごとの有効な機能。`feature.<名前>` はここを引く（ADR-0017）
+    active: BTreeMap<PackageId, std::collections::BTreeSet<String>>,
+    /// パッケージのルート → そのパッケージに要求されている機能。
+    /// 根には `--features`、依存には転送された名前が入る
+    requested_features: BTreeMap<PathBuf, std::collections::BTreeSet<String>>,
+    /// 外部への解決を済ませた (パッケージ, 依存名)。走査を繰り返しても
+    /// 取得と pkg-config は1度しか行わない
+    resolved_deps: std::collections::BTreeSet<(PackageId, String)>,
+    /// 転送の記録。(転送先のルート, 機能名, 書かれた位置)。
+    /// 全パッケージを読んでから、転送先がその機能を宣言しているか確かめる
+    forwards: Vec<(PathBuf, String, Site)>,
     /// 値の入れ子の上限（`--max-nesting`）。既定は `dowel_syntax::MAX_NESTING`
     max_nesting: usize,
     /// エディタの緩衝。ここに在るパスはディスクより優先して読む。
@@ -122,7 +137,10 @@ impl Session {
             previous: crate::persist::read_inputs(&canonical(root)),
             cache: Rc::new(Cache::open(&canonical(root))),
             features,
-            active: std::collections::BTreeSet::new(),
+            active: BTreeMap::new(),
+            requested_features: BTreeMap::new(),
+            resolved_deps: std::collections::BTreeSet::new(),
+            forwards: Vec::new(),
             max_nesting,
             overlay: BTreeMap::new(),
             fetch: true,
@@ -153,7 +171,10 @@ impl Session {
             previous: Inputs::new(),
             cache: Rc::new(Cache::disabled()),
             features: Features::default(),
-            active: std::collections::BTreeSet::new(),
+            active: BTreeMap::new(),
+            requested_features: BTreeMap::new(),
+            resolved_deps: std::collections::BTreeSet::new(),
+            forwards: Vec::new(),
             max_nesting: dowel_syntax::MAX_NESTING,
             overlay,
             fetch: false,
@@ -234,9 +255,21 @@ impl Session {
         log_debug!("external dependency `{name}` {} via pkg-config", r.version);
     }
 
-    /// 有効な機能フラグ。根の `[features]` から解決したもの。
-    pub fn active_features(&self) -> &std::collections::BTreeSet<String> {
-        &self.active
+    /// 全パッケージの有効な機能を、`<パッケージ>/<機能>` の形で1つの集合に
+    /// する。構成（`Config`）が持つ形であり、`feature.<名前>` の判定は
+    /// 宣言されたパッケージで修飾して引く（ADR-0017）。
+    pub fn active_features(&self) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        for (pid, names) in &self.active {
+            let pkg = &self.packages[pid.0].name;
+            out.extend(names.iter().map(|f| format!("{pkg}/{f}")));
+        }
+        out
+    }
+
+    /// 1つのパッケージで有効な機能。
+    pub fn active_features_of(&self, id: PackageId) -> Option<&std::collections::BTreeSet<String>> {
+        self.active.get(&id)
     }
 
     /// ディスクを読み直してモデルを組み直す。
@@ -251,6 +284,9 @@ impl Session {
         self.runners.clear();
         self.by_root.clear();
         self.active.clear();
+        self.requested_features.clear();
+        self.resolved_deps.clear();
+        self.forwards.clear();
         self.externals.clear();
         self.db.reset_stats();
         self.walk();
@@ -306,36 +342,94 @@ impl Session {
         out
     }
 
+    /// パッケージを読み、依存を辿る。
+    ///
+    /// 機能はパッケージごとに解決する（ADR-0017）。依存元は `dep/feat` の形で
+    /// 依存の機能を有効にできるため、あるパッケージに要求される機能は
+    /// 「そのパッケージを使う全ての依存元」が決まるまで確定しない。しかも
+    /// 転送された機能は依存の側の任意の依存を有効にしうるため、読み込みと
+    /// 解決は互いに依存する。集合は増える一方なので、増えなくなるまで
+    /// 走査を繰り返せば固定点に達する。
+    ///
+    /// 2周目以降に外部への副作用は無い。読み込みは `by_root`、git の取得と
+    /// pkg-config の解決は `resolved_deps` が memo する。
     fn walk(&mut self) {
+        self.requested_features
+            .insert(self.root.clone(), self.features.requested.iter().cloned().collect());
+        for _ in 0..MAX_FEATURE_ROUNDS {
+            let before = self.requested_features.clone();
+            self.walk_once();
+            if self.requested_features == before {
+                break;
+            }
+        }
+        self.check_forwarded_features();
+    }
+
+    /// 転送先がその機能を宣言しているか確かめる。
+    ///
+    /// 宣言されていない名前は依存の側で偽と評価されるだけで、何も起きない。
+    /// 転送を書いた人から見れば「有効にしたつもりのものが効かない」——
+    /// 綴りを誤った転送と、意図して無効にした機能の区別が付かない
+    /// （`check_feature_refs` と同じ理由、ADR-0017）。
+    fn check_forwarded_features(&mut self) {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut diags = Vec::new();
+        for (dir, feat, site) in &self.forwards {
+            let Some(&id) = self.by_root.get(dir) else { continue };
+            if !seen.insert((id, feat.clone())) {
+                continue;
+            }
+            let pkg = &self.packages[id.0];
+            if pkg.features.contains_key(feat) {
+                continue;
+            }
+            let declared: Vec<String> = pkg.features.keys().cloned().collect();
+            diags.push(
+                unknown_feature(feat, &declared, Some(*site), "this feature is forwarded here")
+                    .note(format!("`{}` does not declare it in `[features]`", pkg.name)),
+            );
+        }
+        self.diagnostics.append(&mut diags);
+    }
+
+    fn walk_once(&mut self) {
         let _phase = log::Phase::start("load");
         // 2つ目の要素は、その位置を読ませた宣言の位置。根には無い。
         // 読めなかった場合の診断がこれを指す。
         let mut queue: Vec<(PathBuf, Option<Site>)> = vec![(self.root.clone(), None)];
-        let mut root_seen = false;
+        let mut visited: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
         while let Some((dir, from)) = queue.pop() {
-            if self.by_root.contains_key(&dir) {
+            if !visited.insert(dir.clone()) {
                 continue;
             }
-            let Some(id) = self.load_package(&dir, from) else { continue };
-            // 機能集合は根の `[features]` が決める。根を読んだ時点で確定する。
-            if !root_seen {
-                root_seen = true;
-                self.active = package::resolve_features(
-                    &self.packages[id.0],
-                    &self.features.requested,
-                    self.features.default,
-                );
-                log_debug!(
-                    "active features: {}",
-                    if self.active.is_empty() {
-                        "(none)".to_string()
-                    } else {
-                        self.active.iter().cloned().collect::<Vec<_>>().join(", ")
-                    }
-                );
-            }
+            let id = match self.by_root.get(&dir) {
+                Some(id) => *id,
+                None => match self.load_package(&dir, from) {
+                    Some(id) => id,
+                    None => continue,
+                },
+            };
+            // このパッケージの機能を解決し、依存への転送を控える。
+            let requested: Vec<String> =
+                self.requested_features.get(&dir).into_iter().flatten().cloned().collect();
+            let resolved =
+                package::resolve(&self.packages[id.0], &requested, self.features.default);
+            log_debug!(
+                "active features of `{}`: {}",
+                self.packages[id.0].name,
+                if resolved.own.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    resolved.own.iter().cloned().collect::<Vec<_>>().join(", ")
+                }
+            );
+            let own = resolved.own.clone();
+            self.active.insert(id, resolved.own);
+            self.forward_features(id, &dir, &resolved.forwarded);
+
             for dep in self.packages[id.0].deps.clone() {
-                if !package::is_active(&dep, &self.active) {
+                if !package::is_active(&dep, &own) {
                     log_debug!(
                         "not reading optional dependency `{}`; its feature is off",
                         dep.name
@@ -349,7 +443,9 @@ impl Session {
                     // 取得はここで行う。rev が固定されているため、2回目以降は
                     // ネットワークに触れない（crate::fetch のモジュール説明）。
                     DepKind::Git { url, rev } => {
-                        if self.fetch {
+                        // 取得と診断は1度だけ。走査は固定点まで繰り返される。
+                        let first = self.resolved_deps.insert((id, dep.name.clone()));
+                        if self.fetch && first {
                             match crate::fetch::ensure(
                                 &self.root,
                                 &dep.name,
@@ -370,7 +466,9 @@ impl Session {
                     // 解決結果は合成パッケージとして繋ぎ、dowel.lock と突き合わせる。
                     // エディタからは外部プロセスを起動しない（git と同じ扱い）。
                     DepKind::PkgConfig { min_version } => {
-                        if self.fetch {
+                        // pkg-config も1度だけ。外部プロセスを繰り返さない。
+                        let first = self.resolved_deps.insert((id, dep.name.clone()));
+                        if self.fetch && first {
                             match crate::pkgconfig::resolve(&dep.name, min_version, dep.source_site)
                             {
                                 Ok(r) => {
@@ -408,6 +506,51 @@ impl Session {
             s.verified,
             s.skipped
         );
+    }
+
+    /// 転送された機能を、依存のパッケージの要求へ足す。
+    ///
+    /// 転送先は宣言された依存でなければならない。`dep("...")` が未宣言の
+    /// パッケージを指すのと同じ誤りであり、同じコードで述べる。
+    /// 転送先が `path` 以外（git / pkg-config）の場合、ここでは要求を
+    /// 記録できるディレクトリが決まっていないことがある——その場合は
+    /// 次の走査で解決済みのディレクトリに対して記録される。
+    fn forward_features(
+        &mut self,
+        id: PackageId,
+        dir: &Path,
+        forwarded: &BTreeMap<String, Vec<(String, Site)>>,
+    ) {
+        for (dep_name, feats) in forwarded {
+            let Some(dep) = self.packages[id.0].deps.iter().find(|d| &d.name == dep_name).cloned()
+            else {
+                // 1周目に限って述べる。繰り返しで重複させない。
+                if self.resolved_deps.insert((id, format!("features/{dep_name}"))) {
+                    let site = feats[0].1;
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "undeclared-dependency",
+                            format!("`{dep_name}` is not a declared dependency"),
+                        )
+                        .at(site.file, site.span, "a feature forwards to this package")
+                        .note(format!(
+                            "`<dep>/<feature>` enables a feature of `<dep>`; declare `{dep_name}` in `[[dependencies]]`"
+                        )),
+                    );
+                }
+                continue;
+            };
+            let DepKind::Path(rel) = &dep.kind else {
+                // 取得する依存は機能を持たない（合成ノードか、まだ手元に
+                // 無い）。転送先が無いことは誤りとして述べない。
+                continue;
+            };
+            let dep_dir = canonical(&dir.join(rel));
+            for (feat, site) in feats {
+                self.requested_features.entry(dep_dir.clone()).or_default().insert(feat.clone());
+                self.forwards.push((dep_dir.clone(), feat.clone(), *site));
+            }
+        }
     }
 
     fn load_package(&mut self, dir: &Path, from: Option<Site>) -> Option<PackageId> {

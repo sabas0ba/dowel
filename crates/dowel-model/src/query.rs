@@ -229,6 +229,11 @@ pub fn set_deps(db: &Db<Key>, label: &str, deps: Vec<(String, Block)>) {
     db.set_input(Key::Deps(label.to_string()), deps, fp, Durability::Low);
 }
 
+/// ラベル `<パッケージ>:<ターゲット>` のパッケージ名。
+fn package_of(label: &str) -> &str {
+    label.split_once(':').map(|(p, _)| p).unwrap_or("")
+}
+
 /// 依存側へ供給するプロパティ。
 ///
 /// `interface(T)` = T の `public` ＋ T の `public.deps` の `interface`
@@ -237,7 +242,9 @@ pub fn interface(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> {
     let owned = label.to_string();
     db.query(Key::Interface(owned.clone()), move |db| {
         let declared = expect_declared(db, &owned)?;
-        let cfg = expect_config(db)?;
+        // 具体化はそのターゲットのパッケージで行う。`feature.<名前>` は
+        // 宣言したパッケージで有効かを問うものである（ADR-0017）。
+        let cfg = expect_config(db)?.for_package(package_of(&owned));
         let deps = expect_deps(db, &owned)?;
         let mut diagnostics = Vec::new();
         let mut props = PropMap::new();
@@ -282,7 +289,9 @@ pub fn compile_env(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> 
     let owned = label.to_string();
     db.query(Key::CompileEnv(owned.clone()), move |db| {
         let declared = expect_declared(db, &owned)?;
-        let cfg = expect_config(db)?;
+        // 具体化はそのターゲットのパッケージで行う。`feature.<名前>` は
+        // 宣言したパッケージで有効かを問うものである（ADR-0017）。
+        let cfg = expect_config(db)?.for_package(package_of(&owned));
         let deps = expect_deps(db, &owned)?;
         let mut diagnostics = Vec::new();
         let mut props = PropMap::new();

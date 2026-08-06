@@ -2484,3 +2484,144 @@ fn a_package_without_a_target_declaration_still_builds_anywhere() {
 
     p.run(".", &["build"]).success();
 }
+
+/// 機能はそれを宣言したパッケージのものであり、`dep/feat` は依存の機能を
+/// 有効にする（ADR-0017）。
+#[test]
+fn a_feature_forwarded_to_a_dependency_reaches_it() {
+    let p = Project::new("feature-forward");
+    // 親の機能名 `x` と、依存の機能名 `y` をわざと違えてある。名前が同じだと
+    // 平坦な集合でも「効いて見える」ため、転送そのものを見られない。
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [features]\ndefault = []\nx = [\"lib/y\"]\n\n\
+         [[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n[bin.app.private]\ndeps = [dep(\"lib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\nint limit(void);\nint main(void) { printf(\"n=%d\\n\", limit()); return 0; }\n",
+    );
+    p.write(
+        "lib/dowel.toml",
+        "[package]\nname = \"lib\"\nversion = \"0\"\n\n[features]\ndefault = []\ny = []\n",
+    );
+    p.write(
+        "lib/dowel.build",
+        "[lib.lib]\nsources = [file(\"src/lib.c\")]\n\n\
+         [lib.lib.public]\ndefines = { LIMIT = 4096 } when feature.y\n",
+    );
+    p.write(
+        "lib/src/lib.c",
+        "#ifndef LIMIT\n#define LIMIT 256\n#endif\nint limit(void) { return LIMIT; }\n",
+    );
+
+    // 転送しなければ依存の既定のまま。
+    p.run("app", &["build"]).success();
+    let plain = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&plain), "n=256\n");
+
+    // 転送すれば依存に届く。
+    let r = p.run("app", &["build", "--features=x"]);
+    r.success();
+    let dir = std::fs::read_dir(p.path("app/.dowel/build"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|d| d.file_name().unwrap().to_string_lossy().contains("lib--y"))
+        .expect("the forwarded feature is part of the configuration identifier");
+    assert_eq!(run_artifact(&dir.join("bin/app")), "n=4096\n");
+}
+
+#[test]
+fn a_feature_of_one_package_does_not_answer_for_another() {
+    // 同じ名前の機能を両方が宣言する。親で有効にしても、依存の同名の機能は
+    // 有効にならない——機能は宣言したパッケージのものである（ADR-0017）。
+    let p = Project::new("feature-scope");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [features]\ndefault = []\nfast = []\n\n\
+         [[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n[bin.app.private]\ndeps = [dep(\"lib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\nint limit(void);\nint main(void) { printf(\"n=%d\\n\", limit()); return 0; }\n",
+    );
+    p.write(
+        "lib/dowel.toml",
+        "[package]\nname = \"lib\"\nversion = \"0\"\n\n[features]\ndefault = []\nfast = []\n",
+    );
+    p.write(
+        "lib/dowel.build",
+        "[lib.lib]\nsources = [file(\"src/lib.c\")]\n\n\
+         [lib.lib.public]\ndefines = { LIMIT = 4096 } when feature.fast\n",
+    );
+    p.write(
+        "lib/src/lib.c",
+        "#ifndef LIMIT\n#define LIMIT 256\n#endif\nint limit(void) { return LIMIT; }\n",
+    );
+
+    p.run("app", &["build", "--features=fast"]).success();
+    let dir = std::fs::read_dir(p.path("app/.dowel/build"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|d| d.file_name().unwrap().to_string_lossy().contains("app--fast"))
+        .expect("the feature is qualified by its package");
+    assert_eq!(
+        run_artifact(&dir.join("bin/app")),
+        "n=256\n",
+        "the root's `fast` leaked into the dependency's identically named feature"
+    );
+}
+
+#[test]
+fn a_forward_to_an_undeclared_dependency_is_refused() {
+    let p = Project::new("feature-forward-unknown-dep");
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"a\"\nversion = \"0\"\n\n[features]\ndefault = []\nx = [\"ghost/y\"]\n",
+    );
+    p.write("dowel.build", "[bin.a]\nsources = glob(\"src/*.c\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check", "--features=x"]);
+    r.failure();
+    r.stderr_contains("undeclared-dependency");
+    r.stderr_contains("ghost");
+}
+
+#[test]
+fn a_forward_naming_a_feature_the_dependency_does_not_declare_is_refused() {
+    // 宣言されていない名前は依存の側で偽と評価されるだけで何も起きない。
+    // 綴りを誤った転送と、意図して無効にした機能の区別が付かなくなる。
+    let p = Project::new("feature-forward-typo");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [features]\ndefault = []\nx = [\"lib/yy\"]\n\n\
+         [[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    p.write(
+        "lib/dowel.toml",
+        "[package]\nname = \"lib\"\nversion = \"0\"\n\n[features]\ndefault = []\ny = []\n",
+    );
+    p.write("lib/dowel.build", "[lib.lib]\nsources = glob(\"src/*.c\")\n");
+    p.write("lib/src/lib.c", "int f(void) { return 0; }\n");
+
+    let r = p.run("app", &["check", "--features=x"]);
+    r.failure();
+    r.stderr_contains("unknown-feature");
+    r.stderr_contains("did you mean `y`?");
+}
