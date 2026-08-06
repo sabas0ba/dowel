@@ -186,10 +186,17 @@ Planning turns merged property maps into an action graph.
 
 ## 6. Execution
 
-- The default executor generates `build.ninja` and runs ninja;
-  `--executor=direct` runs actions sequentially in-process, judging
-  freshness by mtime, depfiles, and the command line itself (a flag change
-  reruns the action even though no input file changed)
+- Planning ends at a build graph; who runs it is a backend
+  ([ADR-0018](adr/0018-backend-layer.md)). The default generates
+  `build.ninja` and runs ninja. `--backend=direct` runs the steps
+  sequentially in-process, judging freshness by mtime, depfiles, and the
+  command line itself (a flag change reruns the step even though no input
+  file changed). `--backend=make` generates a `Makefile`, and
+  `--backend=graph` writes the graph itself
+  ([14-build-graph.md](14-build-graph.md)) without building
+- Every backend receives the same graph and nothing else, so which one runs
+  is not a semantic choice. The record of which command produced each output
+  is kept outside the backends and therefore survives switching between them
 - `dowel test` runs each test binary with the package root as working
   directory and judges by exit status; verdicts persist in the build
   directory to serve `--failed`

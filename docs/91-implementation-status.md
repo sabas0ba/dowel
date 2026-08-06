@@ -37,7 +37,7 @@ afterward. The insertion point is confined to
 | `dowel-store` | the on-disk store: append-only value log, fixed-length index, single writer |
 | `dowel-eval` | typed values with provenance, expression evaluation, schema and merge semantics, configuration specialization, value serialization |
 | `dowel-model` | package loading, targets, the dependency graph, interface merging, `why` |
-| `dowel-build` | glob expansion, the action graph, ninja generation, `compile_commands.json`, execution |
+| `dowel-build` | glob expansion, the action graph, the backend layer (ninja / direct / make / graph), `compile_commands.json`, execution |
 | `dowel-lsp` | the language server: JSON-RPC framing, diagnostics publishing, hover |
 | `dowel-cli` | the `dowel` binary |
 | `dowel-up` | the `dowelup` binary: acquiring, pinning, and switching dowel itself |
@@ -246,7 +246,7 @@ changes, only the speed.
   A derived file appears whenever its target's artifact does — a library
   reached only as a dependency keeps producing it (issue #64); nothing
   consumes a derived file, so it has to be named as a default explicitly or
-  ninja and the direct executor would produce different trees
+  the backends would produce different trees
 - `[<kind>.<name>.inspect]` declares reporting tools (`size` / `nm` /
   `objdump` / `readelf`) run by `dowel inspect`. An inspection produces no
   file, so it is deliberately outside the build graph: nothing about it can
@@ -272,20 +272,37 @@ changes, only the speed.
   plan-stage site that uses it — only *when* a tool is required stays a
   per-use-site judgment (the C compiler always, C++ when C++ sources
   appear, the archiver when an archive is produced)
-- ninja file generation and `compile_commands.json` (`arguments` array form)
-- Two executors: ninja (default) and direct (sequential, mtime-based
-  freshness reading depfiles). The direct executor's record of "which
-  command produced this output" is **merged** into the previous record
-  rather than replacing it: an output the current invocation did not plan is
-  still the product of the command last recorded for it, so a narrow call
-  (`dowel test`, `dowel build <name>`) does not make the next full build
-  redo untouched work (issue #69). Header dependency records (`.d` files) stay
-  on disk and are shared between the executors — ninja is not allowed to
-  fold them into `.ninja_deps` (`deps = gcc`), because a record private to
-  one executor makes the other conclude "up to date" with no dependency
-  information at all, silently keeping stale artifacts (issue #41). As a
-  backstop, the direct executor treats an output whose declared depfile is
-  missing as stale instead of fresh
+- `compile_commands.json` (`arguments` array form)
+- The output stage is a backend layer over one neutral build graph
+  ([ADR-0018](adr/0018-backend-layer.md)). Four backends: `ninja` (default),
+  `direct` (in-process, sequential, mtime-based freshness reading depfiles),
+  `make` (generates a `Makefile`), and `graph` (writes `build-graph.json`
+  and builds nothing). Each receives a `BuildGraph` and nothing else — the
+  same value the document serializes — so a fact missing from the format is
+  a broken build rather than a documentation defect. Adding a backend is one
+  row in `NAMES` and one trait implementation
+- `build-graph.json` ([14-build-graph.md](14-build-graph.md)) is the
+  interchange format for a backend outside this repository: versioned,
+  parseable back into an equal graph, and the same document
+  `dowel graph --kind=action --format=json` prints. There is one JSON
+  description of an action graph, not two
+- The record of "which command produced this output" belongs to the layer,
+  not to a backend, so it stays consistent across switching between them. It
+  is **merged** into the previous record rather than replacing it: an output
+  the current invocation did not plan is still the product of the command
+  last recorded for it, so a narrow call (`dowel test`,
+  `dowel build <name>`) does not make the next full build redo untouched
+  work (issue #69). Header dependency records (`.d` files) stay on disk and
+  are shared between the backends — ninja is not allowed to fold them into
+  `.ninja_deps` (`deps = gcc`), because a record private to one backend
+  makes the next conclude "up to date" with no dependency information at
+  all, silently keeping stale artifacts (issue #41). As a backstop, the
+  direct backend treats an output whose declared depfile is missing as stale
+  instead of fresh
+- `make` has limits ninja does not: it cannot name a path containing
+  whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, or `]`. The
+  backend refuses such a build, naming the path, instead of writing a
+  makefile that quietly builds something else
 - Per-configuration build directories. The identifier is folded to one path
   component (anything outside `[A-Za-z0-9_.+-]` becomes `--`), so a feature
   name containing `/` cannot split a configuration across two levels
@@ -485,16 +502,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (444 tests):
+Current breakdown (468 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 271 |
+| `unit-*` | per-crate unit tests | 287 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 90 |
+| `e2e` | compile real C and C++, run it, check the output | 98 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (54 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -510,7 +527,7 @@ the pre-existing layers:
 | Defect | Why the existing layers could not catch it |
 |---|---|
 | merging deduplicated by relative path only, dropping another package's `include/` once dependencies exceeded two levels | the synthetic project has only one dependency level |
-| the direct executor omitted the command line from freshness, missing flag changes | a single run never sees the second execution |
+| the direct backend omitted the command line from freshness, missing flag changes | a single run never sees the second execution |
 | a directory in `sources` surfaced as the linker's `input file unused` | `invalid-source` had never been reached |
 | a nonexistent source surfaced as ninja's `no known rule` | `unresolved-path` had never been reached |
 

@@ -65,8 +65,8 @@ add options:
         --name <name>        Dependency name (default: the last path or URL component)
 
 build options:
-        --executor <name>    ninja | direct (default: ninja when available)
-    -j, --jobs <n>           Parallelism, passed to ninja
+        --backend <name>     ninja | direct | make | graph (default: ninja when available)
+    -j, --jobs <n>           Parallelism, passed to the backend
         --no-compdb          Do not write compile_commands.json
 
 test options:
@@ -177,7 +177,7 @@ pub struct Options {
     pub log_level: Option<Level>,
     pub log_format: Format,
     pub color: bool,
-    pub executor: Option<String>,
+    pub backend: Option<String>,
     pub jobs: Option<usize>,
     pub compdb: bool,
     pub no_run: bool,
@@ -207,7 +207,7 @@ impl Default for Options {
             log_level: None,
             log_format: Format::Text,
             color: false,
-            executor: None,
+            backend: None,
             jobs: None,
             compdb: true,
             no_run: false,
@@ -329,7 +329,11 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                 }
             }
             "--color" => color_mode = take("--color")?,
-            "--executor" => opts.executor = Some(take("--executor")?),
+            "--backend" => opts.backend = Some(take("--backend")?),
+            // 取る値の集合が変わったため、黙って受けずに新しい綴りを述べる。
+            "--executor" => {
+                return Err("`--executor` is now `--backend`. It also takes make and graph".into())
+            }
             "-j" | "--jobs" => {
                 let v = take("--jobs")?;
                 opts.jobs =
@@ -381,7 +385,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--log-level",
                     "--log-format",
                     "--color",
-                    "--executor",
+                    "--backend",
                     "--jobs",
                     "--no-compdb",
                     "--no-run",

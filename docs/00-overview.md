@@ -104,4 +104,4 @@ What can differentiate:
 | Conan `package_id` | making the ABI space explicit, compatibility rules |
 | Zig | bundled toolchain, the pragmatism of `build.zig.zon` |
 | podman | daemonless architecture, unprivileged execution |
-| ninja | used as-is for the execution layer |
+| ninja | used as-is for the default backend of the execution layer |

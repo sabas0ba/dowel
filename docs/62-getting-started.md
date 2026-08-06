@@ -14,7 +14,7 @@ There are no binary releases yet; build from source. You need:
 | A Rust toolchain (`cargo`) | building `dowel` itself |
 | A C compiler | compiling your project; the default is `cc` on PATH |
 | A C++ compiler | only for projects with C++ sources; the default is `c++` on PATH |
-| `ninja` | the default executor; without it, the sequential executor (`--executor=direct`) works |
+| `ninja` | the default backend; without it, the sequential backend (`--backend=direct`) works |
 
 ```sh
 git clone https://github.com/sabas0ba/dowel
@@ -36,7 +36,7 @@ library (`libgreet`) and an executable that uses it (`app`).
 ```sh
 cd examples/hello/app
 dowel check                      # report diagnostics only; does not build
-dowel build                      # generate ninja files and run them
+dowel build                      # plan and build (ninja by default)
 ./.dowel/build/*/bin/app
 
 cd ../libgreet

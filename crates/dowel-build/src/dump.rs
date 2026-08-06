@@ -3,11 +3,15 @@
 //! 依存グラフ（`dowel_model::dump`）が「何に依存しているか」を示すのに対し、
 //! こちらは「実際に何を起動するか」を示す。ビルドが期待と違う挙動をしたとき、
 //! 最初に見る場所になる。
+//!
+//! JSON はここで別に組み立てない。バックエンドが受け取るのと同じ文書
+//! （`backend::graph`）を出す。アクショングラフの JSON 表現が2つあると、
+//! 読む側と走る側が黙ってずれる（ADR-0018）。
 
 use crate::action::ActionKind;
+use crate::backend::BuildGraph;
 use crate::plan::Plan;
 use dowel_model::Session;
-use dowel_support::json::JsonWriter;
 use std::path::Path;
 
 pub fn text(sess: &Session, plan: &Plan) -> String {
@@ -55,34 +59,7 @@ pub fn dot(sess: &Session, plan: &Plan) -> String {
 }
 
 pub fn json(sess: &Session, plan: &Plan) -> String {
-    let mut w = JsonWriter::pretty();
-    w.begin_object();
-    w.field_str("build_dir", &plan.build_dir.display().to_string());
-    w.key("actions").begin_array();
-    for a in &plan.actions {
-        w.begin_object();
-        w.field_u64("id", a.id.0 as u64);
-        w.field_str("kind", a.kind.name());
-        w.field_str("target", &sess.label(a.target));
-        w.field_str("description", &a.description);
-        w.field_strs("command", a.command().iter().map(|s| s.as_str()));
-        w.field_strs("inputs", a.inputs.iter().map(|p| p.to_str().unwrap_or("")));
-        w.field_strs("outputs", a.outputs.iter().map(|p| p.to_str().unwrap_or("")));
-        w.key("deps").begin_array();
-        for d in &a.deps {
-            w.u64(d.0 as u64);
-        }
-        w.end_array();
-        w.end_object();
-    }
-    w.end_array();
-    w.key("artifacts").begin_object();
-    for (t, p) in &plan.artifacts {
-        w.field_str(&sess.label(*t), &p.display().to_string());
-    }
-    w.end_object();
-    w.end_object();
-    w.finish()
+    crate::backend::graph::render(&BuildGraph::of(sess, plan))
 }
 
 fn rel(base: &Path, p: &Path) -> String {

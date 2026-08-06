@@ -48,8 +48,8 @@ apply TOML mode; completion, highlighting, and diagnostics come from
    per property under a declared merge rule (`union`, `append`,
    `error_on_conflict`, `must_equal`, `replace`)
 5. The **plan** stage expands `glob(...)`, resolves paths, and builds the
-   action graph (compile / archive / link), which ninja (or the sequential
-   executor) runs
+   action graph (compile / archive / link), which a backend — ninja by
+   default — runs
 
 Because step 2 is separate from steps 3–5, switching `--config` or
 `--target` does not re-evaluate manifests, and every value can answer

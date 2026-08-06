@@ -147,14 +147,28 @@ to run on every save.
 dowel build [target...] [common options] [build options]
 ```
 
-Generates ninja files and runs them. With no targets named, builds every
-`bin` and `test`. Naming accepts `<target>` or `<package>:<target>`.
+Plans the build and hands it to a backend. With no targets named, builds
+every `bin` and `test`. Naming accepts `<target>` or `<package>:<target>`.
 
 | Option | Values | Default | Meaning |
 |---|---|---|---|
-| `--executor <name>` | `ninja` / `direct` | `ninja` when available | executor; `direct` runs sequentially (mtime-based freshness reading depfiles) |
-| `-j, --jobs <n>` | number | ninja's default | parallelism, passed to ninja |
+| `--backend <name>` | `ninja` / `direct` / `make` / `graph` | `ninja` when available | who runs the build (below) |
+| `-j, --jobs <n>` | number | the backend's default | parallelism, passed to the backend |
 | `--no-compdb` | — | — | do not write `compile_commands.json` |
+
+The backend is the output stage ([ADR-0018](adr/0018-backend-layer.md)). All
+of them receive the same build graph, so which one runs is not supposed to
+change what gets built.
+
+| Backend | What it does |
+|---|---|
+| `ninja` | writes `build.ninja` into the build directory and runs ninja. The default where ninja is on PATH |
+| `direct` | runs the steps in process, one at a time, judging freshness by mtime, depfiles, and the command line itself. Needs no external generator. The fallback when ninja is absent |
+| `make` | writes `Makefile` and runs `make`. Refuses a build whose paths make cannot name (whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, `]`) rather than writing a makefile that builds something else |
+| `graph` | writes `build-graph.json` — the backend-neutral description ([14-build-graph.md](14-build-graph.md)) — and stops. Nothing is compiled; the document is for a tool of your own. `dowel test` and `dowel inspect` refuse it |
+
+`--executor`, the previous spelling, is refused with a message naming
+`--backend`: the set of values it takes has changed.
 
 - Build directories are separated per configuration, under `.dowel/`.
   Executables land in its `bin/` (`./.dowel/build/*/bin/<name>`)
@@ -170,7 +184,7 @@ Generates ninja files and runs them. With no targets named, builds every
 ## `dowel test`
 
 ```
-dowel test [target...] [common options] [test options]
+dowel test [target...] [common options] [build options] [test options]
 ```
 
 Builds the `test` targets, runs them, and judges pass/fail by exit status
@@ -197,7 +211,7 @@ tests is shown.
 ## `dowel inspect`
 
 ```
-dowel inspect [target...] [common options]
+dowel inspect [target...] [common options] [build options]
 ```
 
 Builds, then runs the tools declared in `[<kind>.<name>.inspect]`
@@ -251,6 +265,11 @@ Dumps a graph to stdout.
 |---|---|---|---|
 | `--kind <kind>` | `target` / `action` | `target` | target dependency graph / action graph |
 | `--format <fmt>` | `text` / `dot` / `json` | `text` | output format; `dot` can be fed straight to Graphviz |
+
+`--kind=action --format=json` prints the build graph document — byte for byte
+what `dowel build --backend=graph` writes to a file
+([14-build-graph.md](14-build-graph.md)). There is one JSON description of an
+action graph, and it is the one the backends run on.
 
 ## `dowel migrate verify`
 

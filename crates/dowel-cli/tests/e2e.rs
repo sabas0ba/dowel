@@ -84,9 +84,9 @@ fn builds_and_runs_two_packages() {
 }
 
 #[test]
-fn the_direct_executor_produces_the_same_artifact() {
+fn the_direct_backend_produces_the_same_artifact() {
     let p = two_package_project("direct");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
 }
@@ -110,7 +110,7 @@ fn private_includes_do_not_leak_to_dependents() {
     let p = two_package_project("private-include");
     // app から libfoo の非公開ヘッダを読もうとすると、コンパイルが失敗するはず。
     p.write("app/src/main.c", "#include \"internal.h\"\nint main(void) { return bias(); }\n");
-    let r = p.run("app", &["build", "--executor=direct"]);
+    let r = p.run("app", &["build", "--backend=direct"]);
     r.failure();
     assert!(r.stderr.contains("internal.h"), "the compiler diagnostic is not visible\n{r}");
 }
@@ -121,7 +121,7 @@ fn a_compile_failure_exits_nonzero_and_shows_the_cause() {
     // 未宣言の識別子を値として使う。関数呼び出しだと暗黙宣言が効いて
     // リンク時まで落ちないため、コンパイル時に確実に失敗する形にする。
     p.write("app/src/main.c", "int main(void) { return undefined_symbol_xyz; }\n");
-    let r = p.run("app", &["build", "--executor=direct"]);
+    let r = p.run("app", &["build", "--backend=direct"]);
     r.failure();
     r.stderr_contains("undefined_symbol_xyz");
     // どのアクションが失敗したかが分かること。
@@ -131,9 +131,9 @@ fn a_compile_failure_exits_nonzero_and_shows_the_cause() {
 #[test]
 fn a_rebuild_runs_nothing() {
     let p = two_package_project("incremental");
-    p.run("app", &["build", "--executor=direct"]).success();
-    let second = p.run("app", &["build", "--executor=direct", "--log-level=trace"]);
-    second.success().stderr_contains("ran 0 actions");
+    p.run("app", &["build", "--backend=direct"]).success();
+    let second = p.run("app", &["build", "--backend=direct", "--log-level=trace"]);
+    second.success().stderr_contains("ran 0 steps");
     // 何が最新と判定されたかが個別に見える。
     second.stderr_contains("up to date: CC ");
 }
@@ -141,7 +141,7 @@ fn a_rebuild_runs_nothing() {
 #[test]
 fn touching_a_header_triggers_recompilation() {
     let p = two_package_project("depfile");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
 
@@ -150,9 +150,9 @@ fn touching_a_header_triggers_recompilation() {
         "libfoo/src/internal.h",
         "#pragma once\n#define FOO_BIAS 100\nstatic inline int bias(void) { return FOO_BIAS; }\n",
     );
-    let r = p.run("app", &["build", "--executor=direct", "--log-level=trace"]);
+    let r = p.run("app", &["build", "--backend=direct", "--log-level=trace"]);
     r.success();
-    assert!(!r.stderr.contains("ran 0 actions"), "the header change did not propagate\n{r}");
+    assert!(!r.stderr.contains("ran 0 steps"), "the header change did not propagate\n{r}");
     // 再実行の理由が出ること。depfile 経由で拾ったヘッダが名指しされる。
     r.stderr_contains("stale: ");
     r.stderr_contains("internal.h");
@@ -160,11 +160,11 @@ fn touching_a_header_triggers_recompilation() {
 }
 
 #[test]
-fn a_header_change_is_seen_after_building_with_the_other_executor() {
+fn a_header_change_is_seen_after_building_with_the_other_backend() {
     // issue #41: ninja で組んだツリーを direct で組み直す。依存の記録が
     // 実行器の実装詳細に畳まれていると、ヘッダの変更が黙って見落とされ、
     // 古い成果物が残る。
-    let p = two_package_project("cross-executor-header");
+    let p = two_package_project("cross-backend-header");
     p.run("app", &["build"]).success(); // 既定の ninja
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
@@ -173,21 +173,128 @@ fn a_header_change_is_seen_after_building_with_the_other_executor() {
         "libfoo/src/internal.h",
         "#pragma once\n#define FOO_BIAS 100\nstatic inline int bias(void) { return FOO_BIAS; }\n",
     );
-    let r = p.run("app", &["build", "--executor=direct", "--log-level=trace"]);
+    let r = p.run("app", &["build", "--backend=direct", "--log-level=trace"]);
     r.success();
-    assert!(!r.stderr.contains("ran 0 actions"), "the header change did not propagate\n{r}");
+    assert!(!r.stderr.contains("ran 0 steps"), "the header change did not propagate\n{r}");
     assert_eq!(run_artifact(&bin), "sum=105 opt=0 api=1\n");
 }
 
 #[test]
-fn the_artifact_is_up_to_date_after_crossing_executors() {
+fn the_artifact_is_up_to_date_after_crossing_backends() {
     // issue #41 の裏面。何も変えずに実行器を替えただけなら、全てを
     // 作り直すのではなく最新と判定される。依存の記録（depfile）が
     // 実行器を跨いで残っていることの検査である。
-    let p = two_package_project("cross-executor-clean");
+    let p = two_package_project("cross-backend-clean");
     p.run("app", &["build"]).success(); // 既定の ninja
-    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
-    r.success().stderr_contains("ran 0 actions");
+    let r = p.run("app", &["build", "--backend=direct", "--log-level=debug"]);
+    r.success().stderr_contains("ran 0 steps");
+}
+
+#[test]
+fn the_make_backend_produces_the_same_artifact() {
+    // ADR-0018: 出力段が ninja に固有の形をしていないことの検査。
+    // 同じビルドグラフから別の生成器が同じ実行ファイルを作る。
+    if !program_exists("make") {
+        return;
+    }
+    let p = two_package_project("make-backend");
+    p.run("app", &["build", "--backend=make"]).success();
+    assert!(build_dir(&p.path("app"), "debug").join("Makefile").exists());
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
+}
+
+#[test]
+fn a_rebuild_with_make_leaves_the_artifact_alone() {
+    // 生成した Makefile が依存を持てていること。持てていなければ毎回
+    // 全てを組み直し、増分ビルドという前提が崩れる。
+    if !program_exists("make") {
+        return;
+    }
+    let p = two_package_project("make-incremental");
+    p.run("app", &["build", "--backend=make"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    let first = std::fs::metadata(&bin).unwrap().modified().unwrap();
+    p.run("app", &["build", "--backend=make"]).success();
+    let second = std::fs::metadata(&bin).unwrap().modified().unwrap();
+    assert_eq!(first, second, "make relinked an artifact that was already up to date");
+}
+
+#[test]
+fn a_header_change_is_seen_by_make() {
+    // ヘッダ依存は depfile 経由。make には `-include` で読ませている。
+    if !program_exists("make") {
+        return;
+    }
+    let p = two_package_project("make-depfile");
+    p.run("app", &["build", "--backend=make"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
+    p.write(
+        "libfoo/src/internal.h",
+        "#pragma once\n#define FOO_BIAS 100\nstatic inline int bias(void) { return FOO_BIAS; }\n",
+    );
+    p.run("app", &["build", "--backend=make"]).success();
+    assert_eq!(run_artifact(&bin), "sum=105 opt=0 api=1\n");
+}
+
+#[test]
+fn the_graph_backend_writes_a_document_and_builds_nothing() {
+    let p = two_package_project("graph-backend");
+    let r = p.run("app", &["build", "--backend=graph"]);
+    r.success();
+    let doc = build_dir(&p.path("app"), "debug").join("build-graph.json");
+    r.stderr_contains("wrote:");
+    assert!(doc.exists(), "the document is missing: {}", doc.display());
+    // 成果物が出来ていないのに「built:」と述べていないこと。
+    assert!(!r.stderr.contains("built:"), "the graph backend claimed a build\n{r}");
+    assert!(!build_dir(&p.path("app"), "debug").join("bin/app").exists());
+
+    // 外の道具が読める形であること。名前と版が入っていて、読み直せる。
+    let text = std::fs::read_to_string(&doc).unwrap();
+    let g = dowel_build::backend::graph::parse(&text).expect("the document does not read back");
+    assert!(g.steps.iter().any(|s| s.kind == dowel_build::ActionKind::Link));
+    assert!(g.steps.iter().all(|s| s.outputs.iter().all(|o| o.is_absolute())));
+    assert!(!g.default_outputs.is_empty());
+}
+
+#[test]
+fn the_action_graph_and_the_emitted_document_are_the_same_thing() {
+    // アクショングラフの JSON 表現が2つあると、読む側と走る側が黙ってずれる。
+    let p = two_package_project("graph-one-shape");
+    p.run("app", &["build", "--backend=graph"]).success();
+    let written =
+        std::fs::read_to_string(build_dir(&p.path("app"), "debug").join("build-graph.json"))
+            .unwrap();
+    let printed = p.run("app", &["graph", "--kind=action", "--format=json"]);
+    printed.success();
+    assert_eq!(printed.stdout, written);
+}
+
+#[test]
+fn a_backend_that_does_not_build_is_refused_where_a_build_is_needed() {
+    let p = two_package_project("graph-refused");
+    let r = p.run("app", &["test", "--backend=graph"]);
+    r.failure();
+    r.stderr_contains("does not build");
+}
+
+#[test]
+fn an_unknown_backend_names_the_ones_that_exist() {
+    let p = two_package_project("backend-unknown");
+    let r = p.run("app", &["build", "--backend=bazel"]);
+    r.failure();
+    r.stderr_contains("bazel");
+    r.stderr_contains("ninja, direct, make, graph");
+}
+
+#[test]
+fn the_old_executor_flag_names_its_replacement() {
+    // 取る値の集合が変わったため、黙って受けない。
+    let p = two_package_project("backend-renamed");
+    let r = p.run("app", &["build", "--executor=direct"]);
+    r.failure();
+    r.stderr_contains("`--backend`");
 }
 
 #[test]
@@ -1235,7 +1342,7 @@ extern "C" int len_of(const char *s) {
     );
 
     // 双方の実行器で同じ結果になる。
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "n=4\n");
 
@@ -2162,8 +2269,8 @@ fn a_library_keeps_producing_its_derived_file_when_a_binary_depends_on_it() {
     // 実行器を跨いで同じものが出来ること。派生は誰の入力にもならないため、
     // ninja の `default` から漏れると direct とだけ食い違う（issue #41 と同じ形）。
     std::fs::remove_file(&derived).unwrap();
-    p.run(".", &["build", "--executor=direct"]).success();
-    assert!(derived.exists(), "the direct executor and ninja disagree about the derived file");
+    p.run(".", &["build", "--backend=direct"]).success();
+    assert!(derived.exists(), "the direct backend and ninja disagree about the derived file");
 }
 
 /// `[<kind>.<name>.inspect]` — 成果物について報告する検査（issue #60）。
@@ -2366,7 +2473,7 @@ fn a_narrow_invocation_does_not_make_the_next_full_build_redo_work() {
             .unwrap_or_else(|| panic!("no action count in the log\n{r}"))
     };
     let build = |args: &[&str]| {
-        let mut v = vec!["build", "--executor=direct", "--log-level=debug"];
+        let mut v = vec!["build", "--backend=direct", "--log-level=debug"];
         v.extend_from_slice(args);
         p.run(".", &v)
     };
