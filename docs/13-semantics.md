@@ -52,9 +52,17 @@ its targets.
   used. Editor sessions skip this: the language server starts no external
   processes
 
-- Feature flags are resolved first (requested `--features`, plus `default`
-  unless `--no-default-features`, transitively closed). An inactive
-  `optional` dependency is not loaded at all — no node, no edge
+- Feature flags are resolved **per package**
+  ([ADR-0017](adr/0017-feature-forwarding.md)). The root starts from
+  `--features` plus its `default` (unless `--no-default-features`) and
+  closes over its own `[features]`; a value spelled `dep/feat` enables
+  `feat` in that dependency instead. `feature.<name>` inside a package's
+  `dowel.build` asks whether that name is active **in that package**, so two
+  packages may use one name for unrelated things. An inactive `optional`
+  dependency is not loaded at all — no node, no edge. Because a forwarded
+  feature can activate an optional dependency, and that changes what gets
+  loaded, loading and feature resolution repeat until the requested sets
+  stop growing
 - Edges come from `deps` properties: `dep("name")` points at a package
   dependency's library target, `target("name")` at a sibling target.
   Referencing a package not declared in `dowel.toml` is

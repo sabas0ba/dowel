@@ -64,7 +64,9 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
         log_trace!("resolving deps of {}", sess.label(target.id));
         for block in [Block::Public, Block::Private] {
             let Some(value) = target.props(block).get("deps") else { continue };
-            let Some(value) = dowel_eval::specialize(value, cfg) else { continue };
+            // 具体化は宣言したパッケージで行う（ADR-0017）。
+            let cfg = cfg.for_package(&sess.package(target.package).name);
+            let Some(value) = dowel_eval::specialize(value, &cfg) else { continue };
             for item in items_of(&value) {
                 match &item.data {
                     Data::Target(name) => match resolve_target(sess, target.package, name) {
@@ -200,7 +202,10 @@ fn resolve_package_targets(
     };
     // 有効でない任意の依存は読み込んでいない。解決できないのは
     // 供給形態が未実装だからではないため、区別して報告する。
-    if !crate::package::is_active(dep, sess.active_features()) {
+    // 判定は宣言した側のパッケージの機能で行う（ADR-0017）。
+    let empty = std::collections::BTreeSet::new();
+    let active = sess.active_features_of(from).unwrap_or(&empty);
+    if !crate::package::is_active(dep, active) {
         return Err(Unresolved::Inactive);
     }
     let Some(pid) = sess.dep_package(from, dep_name) else {

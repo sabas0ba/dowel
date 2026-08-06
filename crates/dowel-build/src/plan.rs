@@ -411,7 +411,7 @@ pub fn plan(
             let mut args: Vec<String> = decl
                 .args
                 .as_ref()
-                .and_then(|v| dowel_eval::specialize(v, cfg))
+                .and_then(|v| dowel_eval::specialize(v, &cfg.for_package(&pkg.name)))
                 .map(|v| {
                     flatten(&v).iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
                 })
@@ -535,7 +535,8 @@ fn closure_link_flags(
         let target = sess.target(t);
         for block in [&target.public, &target.private] {
             let Some(v) = block.get("link_flags") else { continue };
-            let Some(v) = dowel_eval::specialize(v, cfg) else { continue };
+            let cfg = cfg.for_package(&sess.package(target.package).name);
+            let Some(v) = dowel_eval::specialize(v, &cfg) else { continue };
             for item in flatten(&v) {
                 // 道は絶対パスへ展開する。リンクの作業ディレクトリは
                 // ビルドディレクトリであり、パッケージの中のリンカスクリプトを
@@ -560,7 +561,9 @@ fn collect_sources(
     let target = sess.target(tid);
     let pkg_root = sess.package(target.package).root.clone();
     let Some(value) = target.root.get("sources") else { return Vec::new() };
-    let Some(value) = dowel_eval::specialize(value, cfg) else { return Vec::new() };
+    // 具体化は宣言したパッケージで行う（ADR-0017）。
+    let cfg = cfg.for_package(&sess.package(target.package).name);
+    let Some(value) = dowel_eval::specialize(value, &cfg) else { return Vec::new() };
 
     let mut out = Vec::new();
     for item in flatten(&value) {

@@ -108,12 +108,23 @@ An entry with none of `path` / `git` / `version` is `incomplete-dependency`.
 [features]
 default = ["zlib"]
 zlib    = []
-png     = ["zlib"]
+png     = ["zlib", "libpng/simd"]     # also enables `simd` in the dependency
 ```
 
 Each key declares a feature flag; its value is the list of other features it
 enables (transitively closed, cycle-safe). Values must be arrays of strings
 (`type-mismatch` otherwise).
+
+A feature **belongs to the package that declares it**
+([ADR-0017](adr/0017-feature-forwarding.md)). Two packages may use the same
+feature name for unrelated things, and enabling one never enables the other.
+A value of the form `dep/feat` **forwards**: it enables `feat` in the
+dependency `dep` rather than becoming a feature of this package.
+`dep` must be declared in `[[dependencies]]` (`undeclared-dependency`
+otherwise) and `feat` must be declared in that dependency's `[features]`
+(`unknown-feature`, reported at the forwarding site — an unforwarded typo
+would just evaluate to false in the dependency, indistinguishable from a
+feature deliberately left off).
 
 - `default` is special: it is included unless `--no-default-features` is
   passed. `default` itself is never a feature name

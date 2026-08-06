@@ -63,16 +63,18 @@ pub fn compile_env_fresh(
     diags: &mut Vec<Diagnostic>,
 ) -> PropMap {
     // 依存が先に並んでいるため、1回の走査でインタフェースが揃う。
+    // 具体化はそのターゲットのパッケージで行う（ADR-0017）。
+    let for_target = |t: TargetId| cfg.for_package(&sess.package(sess.target(t).package).name);
     let mut ifaces: BTreeMap<TargetId, PropMap> = BTreeMap::new();
     for &dep in &graph.order {
         let own = [sess.target(dep).public.clone()];
         let deps: Vec<TargetId> = graph.public_deps_of(dep).map(|e| e.to).collect();
-        ifaces.insert(dep, merge_block(sess, cfg, &own, &deps, &ifaces, diags));
+        ifaces.insert(dep, merge_block(sess, &for_target(dep), &own, &deps, &ifaces, diags));
     }
     let t = sess.target(tid);
     let own = [t.public.clone(), t.private.clone()];
     let deps: Vec<TargetId> = graph.deps_of(tid).iter().map(|e| e.to).collect();
-    merge_block(sess, cfg, &own, &deps, &ifaces, diags)
+    merge_block(sess, &for_target(tid), &own, &deps, &ifaces, diags)
 }
 
 /// 宣言された値と依存のインタフェースを、プロパティごとに併合する。

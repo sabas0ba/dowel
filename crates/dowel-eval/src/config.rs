@@ -45,7 +45,12 @@ pub struct Config {
     pub target: String,
     pub host_os: String,
     pub host_arch: String,
+    /// 有効な機能。`<パッケージ>/<機能>` の形で持つ（ADR-0017）。
+    /// 同じ名前の機能でも、宣言したパッケージが違えば別の機能である
     pub features: BTreeSet<String>,
+    /// いま具体化しているパッケージ。`feature.<名前>` はこれで修飾して引く。
+    /// 空はどのパッケージにも属さない位置（構成そのもの）を表す
+    package: String,
     /// 選択された道具。道具名（[`TOOLS`]）→ コマンド。
     /// 既定は [`TOOLS`] が与え、`[toolchain]` の宣言が上書きする
     tools: BTreeMap<String, String>,
@@ -104,6 +109,7 @@ impl Config {
             host_os: host_os().to_string(),
             host_arch: host_arch().to_string(),
             features: BTreeSet::new(),
+            package: String::new(),
             tools: TOOLS.iter().map(|(n, d)| (n.to_string(), d.to_string())).collect(),
         }
     }
@@ -111,6 +117,19 @@ impl Config {
     /// 道具のコマンド。[`TOOLS`] に無い名前は空文字列（呼び手の誤り）。
     pub fn tool(&self, name: &str) -> &str {
         self.tools.get(name).map(String::as_str).unwrap_or("")
+    }
+
+    /// このパッケージの値を具体化するための写し。
+    ///
+    /// `feature.<名前>` の判定だけが変わる。構成そのもの（最適化・トリプル・
+    /// 道具）は1回のビルドで1つであり、パッケージごとに変わらない。
+    pub fn for_package(&self, name: &str) -> Config {
+        Config { package: name.to_string(), ..self.clone() }
+    }
+
+    /// いま具体化しているパッケージ。
+    pub fn package(&self) -> &str {
+        &self.package
     }
 
     /// 道具のコマンドを差し替える。`[toolchain]` の宣言の写しに使う。
@@ -141,7 +160,11 @@ impl Config {
             (Ns::Host, "os") => Some(CfgValue::Str(self.host_os.clone())),
             (Ns::Host, "arch") => Some(CfgValue::Str(self.host_arch.clone())),
             (Ns::Tc, name) => self.tools.get(name).map(|t| CfgValue::Str(t.clone())),
-            (Ns::Feature, name) => Some(CfgValue::Bool(self.features.contains(name))),
+            // 機能はパッケージに属する。`feature.x` は「このパッケージで
+            // x が有効か」であり、他のパッケージの `x` では真にならない。
+            (Ns::Feature, name) => {
+                Some(CfgValue::Bool(self.features.contains(&format!("{}/{name}", self.package))))
+            }
             _ => None,
         }
     }
@@ -271,7 +294,8 @@ mod tests {
     #[test]
     fn looks_up_values_from_the_configuration() {
         let mut c = Config::host_default();
-        c.features.insert("zlib".into());
+        c.features.insert("p/zlib".into());
+        let c = c.for_package("p");
         assert_eq!(
             c.lookup(&CfgKey { ns: Ns::Cfg, name: "opt".into() }),
             Some(CfgValue::Str("debug".into()))
@@ -308,6 +332,23 @@ mod tests {
             c.lookup(&CfgKey { ns: Ns::Tc, name: "ar".into() }),
             Some(CfgValue::Str("llvm-ar".into()))
         );
+    }
+
+    #[test]
+    fn features_belong_to_the_package_that_declared_them() {
+        // 同じ名前でも、宣言したパッケージが違えば別の機能である（ADR-0017）。
+        let mut c = Config::host_default();
+        c.features.insert("app/x".into());
+        c.features.insert("lib/y".into());
+        let feat = |c: &Config, n: &str| c.lookup(&CfgKey { ns: Ns::Feature, name: n.into() });
+
+        let app = c.for_package("app");
+        assert_eq!(feat(&app, "x"), Some(CfgValue::Bool(true)));
+        assert_eq!(feat(&app, "y"), Some(CfgValue::Bool(false)));
+
+        let lib = c.for_package("lib");
+        assert_eq!(feat(&lib, "y"), Some(CfgValue::Bool(true)));
+        assert_eq!(feat(&lib, "x"), Some(CfgValue::Bool(false)));
     }
 
     #[test]
