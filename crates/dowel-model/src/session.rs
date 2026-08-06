@@ -193,6 +193,8 @@ impl Session {
             deps: Vec::new(),
             features: BTreeMap::new(),
             features_site: None,
+            targets: Vec::new(),
+            targets_site: None,
             toolchain: crate::package::ToolchainDecl::default(),
             toolchains: BTreeMap::new(),
         });

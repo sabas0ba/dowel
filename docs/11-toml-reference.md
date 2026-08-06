@@ -22,6 +22,7 @@ version = "0.3.1"
 |---|---|---|---|
 | `name` | string | yes | the package name, used in target references (`<package>:<target>`) and diagnostics. Missing: `missing-field`. Default while erroring: the directory name |
 | `version` | string | no | recorded; not yet used for resolution. Default `0.0.0` |
+| `targets` | list of strings | no | the target triples this package is for. When declared, any other triple — the host included — is refused with `unsupported-target` before building. Undeclared (the default) means the package builds for any triple. This is deliberately separate from `[toolchain.<triple>]`: a package that builds for the host but swaps tools when cross-compiling declares toolchains without narrowing its targets |
 
 A missing `[package]` table is `missing-table`. A `dowel.toml` whose
 directory has no `dowel.build` defines no targets but can still be depended

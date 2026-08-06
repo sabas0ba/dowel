@@ -29,6 +29,10 @@ pub enum Type {
     /// スカラ値（`Str` / `Int` / `Bool` のいずれか）。
     /// `defines` のように「値の種類を問わない」プロパティのための型
     Val,
+    /// コマンドラインの1語。`Str` そのもの、または `Path`（絶対パスへ
+    /// 展開される）。道を要するフラグを、文字列連結なしに書くための型
+    /// （issue #70）
+    Word,
     List(Box<Type>),
     Set(Box<Type>),
     Map(Box<Type>),
@@ -51,6 +55,7 @@ impl Type {
             Type::TargetRef => "TargetRef".into(),
             Type::AbiLabel => "AbiLabel".into(),
             Type::Val => "Val".into(),
+            Type::Word => "Str | Path".into(),
             Type::List(t) => format!("List<{}>", t.display()),
             Type::Set(t) => format!("Set<{}>", t.display()),
             Type::Map(t) => format!("Map<Ident, {}>", t.display()),
@@ -86,6 +91,8 @@ impl Type {
             (Type::AbiLabel, Type::Str) => true,
             // Val はスカラを受ける。
             (Type::Val, Type::Str | Type::Int | Type::Bool | Type::Val) => true,
+            // 語は文字列と道の双方を受ける。道は絶対パスへ展開される。
+            (Type::Word, Type::Str | Type::Path | Type::Word) => true,
             (a, Type::Cfg(b)) => a.accepts(b),
             (Type::List(a), Type::List(b)) | (Type::Set(a), Type::Set(b)) => a.accepts(b),
             (Type::Set(a), Type::List(b)) | (Type::List(a), Type::Set(b)) => a.accepts(b),

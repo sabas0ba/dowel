@@ -507,6 +507,15 @@ const CASES: &[Case] = &[
         )],
         args: CHECK,
     },
+    Case {
+        code: "unsupported-target",
+        why: "the package declares the targets it is for, and the host is not among them",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\ntargets = [\"riscv64gc-unknown-linux-gnu\"]\n",
+        )],
+        args: CHECK,
+    },
     // --- 成果物の派生 -----------------------------------------------------
     Case {
         code: "unknown-tool",
