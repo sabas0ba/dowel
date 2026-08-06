@@ -109,7 +109,13 @@ it with `dep("name")` in `dowel.build` ([12-build-reference.md](12-build-referen
 | `optional` | bool | default `false`. An optional dependency participates only when a feature flag with the same name is enabled. When inactive, neither the edge nor the node exists — the package is not even loaded |
 | `when` | inline table | reserved for conditional dependencies (`when = { os = "windows" }`). Parsed, but **not yet honored** — the dependency is treated as unconditional |
 
-An entry with none of `path` / `git` / `version` is `incomplete-dependency`.
+A dependency has **exactly one** source. An entry with none of `path` /
+`git` / `version` is `incomplete-dependency`; an entry with two or more is
+`conflicting-dependency-source`, naming each one (issue #79). Accepting two
+would mean one of the declarations is never read, and the manifest would not
+say which — the source of a library is switched during development (`path`
+while it is being edited, `git` or `version` once it is published), and
+leaving the old key behind still builds for whoever has the tree.
 
 ## `[features]`
 

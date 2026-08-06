@@ -354,11 +354,23 @@ pub fn from_document(
         };
         let optional = t.entry("optional").and_then(|e| e.value.as_bool()).unwrap_or(false);
 
-        let source_site = ["path", "git", "version"]
-            .iter()
-            .find_map(|k| t.entry(k))
-            .map(|e| e.site)
-            .unwrap_or(t.site);
+        let source_site =
+            SOURCE_KEYS.iter().find_map(|(k, _)| t.entry(k)).map(|e| e.site).unwrap_or(t.site);
+
+        // 出所を2つ以上名乗る項目は、片方が読まれない。読まれない宣言を
+        // 黙って受けると、どちらが使われたのかがマニフェストから読めない
+        // （issue #79）。
+        if let Some(d) = conflicting_sources(t, manifest_file, &name) {
+            diags.push(d);
+            pkg.deps.push(Dependency {
+                name,
+                kind: DepKind::Unsupported("conflict"),
+                optional,
+                site: t.site,
+                source_site,
+            });
+            continue;
+        }
 
         let kind = if let Some(e) = t.entry("path") {
             match e.value.as_str() {
@@ -425,6 +437,46 @@ fn pinned_rev(t: &dowel_eval::Table) -> Result<String, Option<String>> {
     } else {
         Err(Some(s.to_string()))
     }
+}
+
+/// 依存の出所を名乗るキーと、その言い表し方。
+///
+/// 「1つだけ」という規則をこの表が持つ。出所を足すときはここに1行足す。
+const SOURCE_KEYS: &[(&str, &str)] =
+    &[("path", "a local path"), ("git", "a git repository"), ("version", "a system package")];
+
+/// 出所を2つ以上名乗っていないか。
+///
+/// 0個は `incomplete-dependency` で拒んでいる。2個を黙って受けるのは規則として
+/// 片側しか無く、しかも黙って一方が勝つ。切り替えの途中——手元の `path` から
+/// `git` へ移す、あるいは一時的に `path` へ差し替える——で消し忘れると、
+/// その木を持たない誰かが組むまで気づかない（issue #79）。
+fn conflicting_sources(t: &dowel_eval::Table, file: FileId, name: &str) -> Option<Diagnostic> {
+    let present: Vec<_> = SOURCE_KEYS
+        .iter()
+        .filter_map(|(k, what)| t.entry(k).map(|e| (*k, *what, e.site)))
+        .collect();
+    if present.len() < 2 {
+        return None;
+    }
+    let mut d = Diagnostic::error(
+        "conflicting-dependency-source",
+        format!("dependency `{name}` names more than one source"),
+    );
+    for (i, (_, what, site)) in present.iter().enumerate() {
+        d = d.with_label(if i == 0 {
+            Label::primary(file, site.span, *what)
+        } else {
+            Label::secondary(file, site.span, format!("and {what}"))
+        });
+    }
+    Some(
+        d.note(format!(
+            "a dependency has exactly one source: {}",
+            SOURCE_KEYS.iter().map(|(k, _)| format!("`{k}`")).collect::<Vec<_>>().join(", ")
+        ))
+        .note("only the first would be read; the others would never be fetched or resolved"),
+    )
 }
 
 fn unpinned(
