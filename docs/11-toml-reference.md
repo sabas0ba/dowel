@@ -1,9 +1,18 @@
 # `dowel.toml` reference
 
 Every table and key the implementation reads, and what happens when it is
-missing or wrong. Keys not listed here are currently ignored without a
-diagnostic (this includes `edition`, `[policy]`, and `[toolchain] sysroot`
-from the design examples — reserved, but not yet acted on).
+missing or wrong.
+
+A top-level table that `dowel.toml` does not read is `unknown-table`. When
+its name belongs to `dowel.build`'s vocabulary the diagnostic says so —
+`[runner.<triple>]` sits one table away from `[toolchain.<triple>]` and is
+easy to write into the wrong file, and the resulting `missing-runner` would
+otherwise insist a declaration is absent while the reader is looking at it
+(issue #74). `[policy]` stays accepted: it is reserved and documented as not
+yet acted on. Unknown **keys** inside `[package]` are still ignored (`edition`
+and `[toolchain] sysroot` from the design examples are reserved the same
+way); `[toolchain]` is the exception, where a misspelled key would silently
+fall back to a default.
 
 `dowel.toml` must stay strict TOML: function calls, `match`, postfix `when`,
 and configuration references are rejected in value position with

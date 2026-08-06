@@ -117,6 +117,48 @@ pub enum DepKind {
     Unsupported(&'static str),
 }
 
+/// `dowel.toml` が読む最上位のテーブル。
+const KNOWN_TABLES: &[&str] = &["package", "toolchain", "dependencies", "features"];
+
+/// 予約済みで、まだ読まないテーブル（docs/11-toml-reference.md）。
+/// 拒まないのは、書いてあっても無視すると**文書で述べてある**ためである。
+const RESERVED_TABLES: &[&str] = &["policy"];
+
+/// `dowel.build` の側の語彙。置き場所を間違えたときに、どこへ書くかを述べる。
+const BUILD_TABLES: &[&str] = &["runner", "lib", "bin", "test", "bench", "template"];
+
+/// 最上位のテーブル名を検査する。
+///
+/// 読まないテーブルを黙って読み飛ばすと、書いたはずの宣言が記録の外に落ちる。
+/// `[runner.<triple>]` を `dowel.toml` に書く形が典型で、`[toolchain.<triple>]`
+/// のすぐ隣に書きたくなるうえ、`missing-runner` が「宣言が無い」と言うため、
+/// 利用者は書いてあるものを見ながら途方に暮れる（issue #74）。
+fn check_tables(doc: &Document, manifest_file: FileId, diags: &mut Vec<Diagnostic>) {
+    for t in &doc.tables {
+        let Some(head) = t.path.first() else { continue };
+        if KNOWN_TABLES.contains(&head.as_str()) || RESERVED_TABLES.contains(&head.as_str()) {
+            continue;
+        }
+        let mut d = Diagnostic::error(
+            "unknown-table",
+            format!("`[{}]` is not read from `dowel.toml`", t.path.join(".")),
+        )
+        .at(manifest_file, t.site.span, "this table has no meaning here");
+        if BUILD_TABLES.contains(&head.as_str()) {
+            d = d.note(format!("`{head}` tables are declared in `dowel.build`"));
+        } else {
+            d = d.note(format!("`dowel.toml` reads: {}", KNOWN_TABLES.join(", ")));
+            if let (Some(c), Some(&span)) = (
+                dowel_support::diag::closest(head, KNOWN_TABLES.iter().copied()),
+                t.path_spans.first(),
+            ) {
+                d = d.suggest(manifest_file, span, c, format!("did you mean `{c}`?"));
+            }
+        }
+        diags.push(d);
+    }
+}
+
 /// `dowel.toml` の評価済み文書からパッケージ情報を取り出す。
 pub fn from_document(
     id: PackageId,
@@ -190,6 +232,8 @@ pub fn from_document(
             "`dowel.toml` requires a `[package]` table",
         )),
     }
+
+    check_tables(doc, manifest_file, diags);
 
     for t in doc.tables_under(&["toolchain"]) {
         // `[toolchain]` はホスト向け、`[toolchain.<triple>]` はそのトリプル向け。

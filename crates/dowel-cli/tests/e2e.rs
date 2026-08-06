@@ -2625,3 +2625,57 @@ fn a_forward_naming_a_feature_the_dependency_does_not_declare_is_refused() {
     r.stderr_contains("unknown-feature");
     r.stderr_contains("did you mean `y`?");
 }
+
+/// `dowel.toml` に書いた `[runner.<triple>]` が黙って無視されないこと
+/// （issue #74）。診断が「宣言が無い」と言う一方で宣言は書かれている、
+/// という食い違いを断つ。
+#[test]
+fn a_runner_written_into_dowel_toml_is_not_silently_ignored() {
+    let p = Project::new("runner-misplaced");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"r\"\nversion = \"0.0.0\"\n\n\
+         [runner.thumbv7em-none-eabihf]\ncommand = \"qemu-system-arm\"\n",
+    );
+    p.write("dowel.build", "[bin.r]\nsources = glob(\"src/*.c\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-table");
+    r.stderr_contains("runner");
+    // どこへ書くかを述べる。述べなければ、利用者は書いたものを見ながら
+    // 何が悪いのか分からない。
+    r.stderr_contains("declared in `dowel.build`");
+}
+
+#[test]
+fn an_unknown_table_in_dowel_toml_gets_a_suggestion() {
+    let p = Project::new("manifest-typo");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"m\"\nversion = \"0\"\n\n[feature]\ndefault = []\n",
+    );
+    p.write("dowel.build", "[bin.m]\nsources = glob(\"src/*.c\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-table");
+    r.stderr_contains("did you mean `features`?");
+}
+
+#[test]
+fn a_reserved_table_in_dowel_toml_is_still_accepted() {
+    // `[policy]` は「予約済みで、まだ読まない」と文書に書いてある。
+    // 書いてあるものを拒むと、文書と実装が食い違う。
+    let p = Project::new("manifest-reserved");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"m\"\nversion = \"0\"\n\n[policy]\naudit = true\n",
+    );
+    p.write("dowel.build", "[bin.m]\nsources = glob(\"src/*.c\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    p.run(".", &["check"]).success();
+}
