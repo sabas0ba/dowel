@@ -12,7 +12,7 @@ mod import;
 mod scaffold;
 
 use args::{Command, GraphKind, MessageFormat, Options, OutFormat, Parsed};
-use dowel_build::{compdb, exec, plan as build_plan, testing};
+use dowel_build::{backend, compdb, plan as build_plan, testing, BuildGraph};
 use dowel_eval::schema::{self, Block};
 use dowel_eval::{Config, Opt};
 use dowel_model::{graph, interface, Session};
@@ -234,7 +234,11 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
         Command::Build { targets } => {
             let requested = default_targets(&sess, targets)?;
-            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
+            let backend = backend::select(opts.backend.as_deref())?;
+            if !backend.builds() {
+                return emit_only(&mut sess, &g, &cfg, opts, &requested, &*backend);
+            }
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
             };
             // 派生した成果物（`artifacts` ブロック）も作ったものとして述べる。
@@ -259,13 +263,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 );
                 return Ok(ExitCode::SUCCESS);
             }
-            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
+            let backend = building_backend(opts, "dowel inspect")?;
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
             };
             Ok(exit_code(inspect(&sess, &cfg, &p, &requested, opts)))
         }
 
         Command::Test { targets } => {
+            let backend = building_backend(opts, "dowel test")?;
             let mut requested = test_targets(&sess, targets)?;
             let build_dir = build_plan::build_dir(
                 &sess.root_package().map(|p| p.root.clone()).unwrap_or_default(),
@@ -297,7 +303,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 eprintln!("no test targets. declare one with `[test.<name>]` in dowel.build");
                 return Ok(ExitCode::SUCCESS);
             }
-            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested)? else {
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
             };
             if opts.no_run {
@@ -340,6 +346,7 @@ fn build(
     cfg: &Config,
     opts: &Options,
     requested: &[dowel_model::TargetId],
+    backend: &dyn backend::Backend,
 ) -> Result<Option<build_plan::Plan>, String> {
     let (p, pdiags) = build_plan::plan(sess, g, cfg, requested);
     sess.diagnostics.extend(pdiags);
@@ -347,25 +354,35 @@ fn build(
         return Ok(None);
     }
 
-    if opts.compdb {
-        let root = sess.root_package().map(|p| p.root.clone()).unwrap_or_default();
-        match compdb::write(&p, &root) {
-            Ok(paths) => {
-                for path in paths {
-                    log_info!("wrote {}", path.display());
-                }
-            }
-            Err(e) => eprintln!("warning: cannot write compile_commands.json: {e}"),
-        }
-    }
+    write_compdb(sess, &p, opts);
 
-    let executor = choose_executor(opts)?;
-    log_debug!("executor {executor:?}");
-    if let Err(f) = exec::run(&p, executor, opts.jobs) {
+    log_debug!("backend {}", backend.name());
+    // ここから先はバックエンドの領分であり、渡すのはビルドグラフだけである
+    // （ADR-0018）。
+    if let Err(f) = backend::run(backend, &BuildGraph::of(sess, &p), opts.jobs) {
         eprint!("error: {f}");
         return Ok(None);
     }
     Ok(Some(p))
+}
+
+/// 編集機向けの `compile_commands.json`。
+///
+/// どのバックエンドで組むかとは関わりが無い。書き出すだけの `graph` でも書く——
+/// 編集機の設定が、選んだバックエンドによって効いたり効かなかったりしてはならない。
+fn write_compdb(sess: &Session, p: &build_plan::Plan, opts: &Options) {
+    if !opts.compdb {
+        return;
+    }
+    let root = sess.root_package().map(|p| p.root.clone()).unwrap_or_default();
+    match compdb::write(p, &root) {
+        Ok(paths) => {
+            for path in paths {
+                log_info!("wrote {}", path.display());
+            }
+        }
+        Err(e) => eprintln!("warning: cannot write compile_commands.json: {e}"),
+    }
 }
 
 /// 実行のしかたを組み立てる。
@@ -664,16 +681,51 @@ fn test_targets(
     Ok(sess.targets.iter().filter(|t| t.kind == TableKind::Test).map(|t| t.id).collect())
 }
 
-fn choose_executor(opts: &Options) -> Result<exec::Executor, String> {
-    match &opts.executor {
-        Some(s) => exec::Executor::parse(s)
-            .ok_or_else(|| format!("`--executor` must be ninja or direct (got `{s}`)")),
-        None => Ok(if exec::ninja_available() {
-            exec::Executor::Ninja
-        } else {
-            log_debug!("ninja not found; falling back to the direct executor");
-            exec::Executor::Direct
-        }),
+/// 成果物を要求するコマンドのためのバックエンド。
+///
+/// 書き出すだけのバックエンド（`graph`）では走らせるものが無い。
+/// 黙って何もしないより断る（ADR-0018）。
+fn building_backend(opts: &Options, command: &str) -> Result<Box<dyn backend::Backend>, String> {
+    let backend = backend::select(opts.backend.as_deref())?;
+    if !backend.builds() {
+        return Err(format!(
+            "`{}` writes the build description but does not build. \
+             `{command}` needs a backend that does",
+            backend.name()
+        ));
+    }
+    Ok(backend)
+}
+
+/// ビルドを行わないバックエンド（`graph`）で組み立てだけを行う。
+///
+/// 成果物が出来ていないのに「built:」と述べると、そこに無いものを指すことに
+/// なる。書き出したファイルを述べる。
+fn emit_only(
+    sess: &mut Session,
+    g: &dowel_model::Graph,
+    cfg: &Config,
+    opts: &Options,
+    requested: &[dowel_model::TargetId],
+    backend: &dyn backend::Backend,
+) -> Result<ExitCode, String> {
+    let (p, pdiags) = build_plan::plan(sess, g, cfg, requested);
+    sess.diagnostics.extend(pdiags);
+    if report(sess, opts) {
+        return Ok(ExitCode::FAILURE);
+    }
+    write_compdb(sess, &p, opts);
+    match backend.emit(&BuildGraph::of(sess, &p)) {
+        Ok(paths) => {
+            for path in paths {
+                eprintln!("wrote: {}", path.display());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(f) => {
+            eprint!("error: {f}");
+            Ok(ExitCode::FAILURE)
+        }
     }
 }
 

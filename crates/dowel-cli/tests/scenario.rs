@@ -5,7 +5,7 @@
 //! ビルドシステムの価値の大半は2回目以降の実行にあり、そこは
 //! 単発の実行をいくら並べても検査できない。
 //!
-//! 観測は `--executor=direct --log-level=debug` の判定理由による。
+//! 観測は `--backend=direct --log-level=debug` の判定理由による。
 //! 成果物の更新時刻を見る方法もあるが、時刻の分解能に依存し、
 //! 「なぜ再実行したか」が残らない。
 //!
@@ -68,7 +68,7 @@ deps = [target("foo")]
 
 /// ビルドして、走ったコンパイル動作の記述を集める。
 fn rebuild(p: &Project) -> Vec<String> {
-    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
+    let r = p.run("app", &["build", "--backend=direct", "--log-level=debug"]);
     r.success();
     r.stderr
         .lines()
@@ -79,14 +79,14 @@ fn rebuild(p: &Project) -> Vec<String> {
 }
 
 fn ran_nothing(p: &Project) {
-    let r = p.run("app", &["build", "--executor=direct", "--log-level=debug"]);
-    r.success().stderr_contains("ran 0 actions");
+    let r = p.run("app", &["build", "--backend=direct", "--log-level=debug"]);
+    r.success().stderr_contains("ran 0 steps");
 }
 
 #[test]
 fn editing_one_source_recompiles_only_that_object() {
     let p = project("scenario-edit-one");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     ran_nothing(&p);
 
     p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return 10; }\n");
@@ -106,7 +106,7 @@ fn editing_one_source_recompiles_only_that_object() {
 #[test]
 fn touching_a_public_header_recompiles_everything_that_includes_it() {
     let p = project("scenario-header");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
 
     // 中身を変える。depfile を読めていなければ何も起きない。
     p.write(
@@ -129,7 +129,7 @@ fn adding_a_source_file_is_picked_up_without_touching_the_manifest() {
     // `glob` の展開は評価時ではなく plan 時に行う。逆にすると、
     // ファイルを追加してもマニフェストを変更するまでビルド対象に入らない。
     let p = project("scenario-add-source");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
 
     p.write(
         "libfoo/include/foo.h",
@@ -152,7 +152,7 @@ fn adding_a_source_file_is_picked_up_without_touching_the_manifest() {
 #[test]
 fn removing_a_source_file_drops_it_from_the_build() {
     let p = project("scenario-remove-source");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
 
     std::fs::remove_file(p.path("libfoo/src/two.c")).expect("cannot remove the source");
     p.write("libfoo/include/foo.h", "#pragma once\nint foo_one(void);\n");
@@ -162,7 +162,7 @@ fn removing_a_source_file_drops_it_from_the_build() {
          int main(void) { printf(\"%d\\n\", foo_one()); return 0; }\n",
     );
 
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "1\n");
 
@@ -175,7 +175,7 @@ fn removing_a_source_file_drops_it_from_the_build() {
 #[test]
 fn changing_a_flag_in_the_manifest_recompiles_the_target() {
     let p = project("scenario-flag");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
 
     p.write(
         "app/dowel.build",
@@ -189,17 +189,17 @@ fn changing_a_flag_in_the_manifest_recompiles_the_target() {
 #[test]
 fn switching_configuration_leaves_the_other_one_intact() {
     let p = project("scenario-config");
-    p.run("app", &["build", "--executor=direct"]).success();
-    p.run("app", &["build", "--executor=direct", "--config=release"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
+    p.run("app", &["build", "--backend=direct", "--config=release"]).success();
 
     // 構成ごとにビルドディレクトリが分かれているため、
     // 往復しても互いを作り直さない。
-    p.run("app", &["build", "--executor=direct", "--log-level=debug"])
+    p.run("app", &["build", "--backend=direct", "--log-level=debug"])
         .success()
-        .stderr_contains("ran 0 actions");
-    p.run("app", &["build", "--executor=direct", "--config=release", "--log-level=debug"])
+        .stderr_contains("ran 0 steps");
+    p.run("app", &["build", "--backend=direct", "--config=release", "--log-level=debug"])
         .success()
-        .stderr_contains("ran 0 actions");
+        .stderr_contains("ran 0 steps");
 
     for opt in ["debug", "release"] {
         let bin = build_dir(&p.path("app"), opt).join("bin/app");
@@ -211,13 +211,13 @@ fn switching_configuration_leaves_the_other_one_intact() {
 fn a_broken_edit_fails_and_the_fix_restores_the_build() {
     // 直したあとに「前回の失敗が残っていて通らない」という状態にならないこと。
     let p = project("scenario-break-and-fix");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
 
     p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return nope; }\n");
-    p.run("app", &["build", "--executor=direct"]).failure().stderr_contains("nope");
+    p.run("app", &["build", "--backend=direct"]).failure().stderr_contains("nope");
 
     p.write("libfoo/src/one.c", "#include \"foo.h\"\nint foo_one(void) { return 1; }\n");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "3\n");
 }
@@ -225,7 +225,7 @@ fn a_broken_edit_fails_and_the_fix_restores_the_build() {
 #[test]
 fn a_syntax_error_in_the_manifest_does_not_destroy_the_previous_build() {
     let p = project("scenario-broken-manifest");
-    p.run("app", &["build", "--executor=direct"]).success();
+    p.run("app", &["build", "--backend=direct"]).success();
     let bin = build_dir(&p.path("app"), "debug").join("bin/app");
     assert_eq!(run_artifact(&bin), "3\n");
 

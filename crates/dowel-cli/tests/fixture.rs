@@ -48,8 +48,8 @@ fn check_build_and_test(p: &Project) {
         p.run(&pkg, &["check"]).success();
         p.run(&pkg, &["build"]).success();
 
-        let again = p.run(&pkg, &["build", "--executor=direct", "--log-level=debug"]);
-        again.success().stderr_contains("ran 0 actions");
+        let again = p.run(&pkg, &["build", "--backend=direct", "--log-level=debug"]);
+        again.success().stderr_contains("ran 0 steps");
 
         p.run(&pkg, &["test"]).success().stderr_contains("0 failed");
     }

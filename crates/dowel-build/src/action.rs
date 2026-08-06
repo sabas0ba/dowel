@@ -19,6 +19,10 @@ pub enum ActionKind {
     Transform,
 }
 
+/// 種別の全て。`name` と `parse` が食い違わないことをこの表で確かめる。
+pub const ALL_KINDS: &[ActionKind] =
+    &[ActionKind::Compile, ActionKind::Archive, ActionKind::Link, ActionKind::Transform];
+
 impl ActionKind {
     pub fn name(self) -> &'static str {
         match self {
@@ -27,6 +31,11 @@ impl ActionKind {
             ActionKind::Link => "link",
             ActionKind::Transform => "transform",
         }
+    }
+
+    /// 書き出した名前から戻す。独自形式（`build-graph.json`）を読み直すために要る。
+    pub fn parse(s: &str) -> Option<ActionKind> {
+        ALL_KINDS.iter().copied().find(|k| k.name() == s)
     }
 }
 
@@ -78,6 +87,14 @@ pub fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_kind_survives_a_round_trip_through_its_name() {
+        for k in ALL_KINDS {
+            assert_eq!(ActionKind::parse(k.name()), Some(*k));
+        }
+        assert_eq!(ActionKind::parse("nope"), None);
+    }
 
     #[test]
     fn safe_strings_are_left_unquoted() {

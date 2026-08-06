@@ -16,9 +16,11 @@ dowel build --config=release
 - Switch configurations with `--config` (`debug` / `release`; default
   `debug`). Build directories are separated per configuration, so switching
   never clobbers the other's outputs
-- The default executor is ninja. Where ninja is unavailable,
-  `--executor=direct` runs actions sequentially
-- `-j/--jobs` is the parallelism passed to ninja
+- The default backend is ninja. Where ninja is unavailable,
+  `--backend=direct` runs the steps sequentially with no external generator.
+  `--backend=make` generates a `Makefile`, and `--backend=graph` writes the
+  build description for a tool of your own ([14-build-graph.md](14-build-graph.md))
+- `-j/--jobs` is the parallelism passed to the backend
 - `compile_commands.json` is written on every build; suppress with
   `--no-compdb`
 

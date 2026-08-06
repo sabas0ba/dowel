@@ -24,3 +24,4 @@ was originally written in.
 | [0015](0015-version-deps-pkgconfig.md) | Resolve `version` dependencies through pkg-config, record them in `dowel.lock` | Accepted |
 | [0016](0016-language-standard-property.md) | The language standard is a typed property merged by maximum | Accepted |
 | [0017](0017-feature-forwarding.md) | Features belong to the package that declares them; `dep/feature` forwards | Accepted |
+| [0018](0018-backend-layer.md) | The output stage is a backend layer over one neutral build graph | Accepted |

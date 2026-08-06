@@ -21,6 +21,7 @@ A working example lives at [`examples/hello`](../examples/hello).
 | [11-toml-reference.md](11-toml-reference.md) | `dowel.toml`: every table and key that is read, and how it is validated |
 | [12-build-reference.md](12-build-reference.md) | `dowel.build`: the complete syntax, every target/runner property, the configuration vocabulary |
 | [13-semantics.md](13-semantics.md) | How declared values behave: specialization, propagation and merging, planning, execution |
+| [14-build-graph.md](14-build-graph.md) | `build-graph.json`: the backend-neutral build description, for running a dowel build with a tool of your own |
 | [60-cli.md](60-cli.md) | The command reference: every option, output contract, exit status, machine-readable diagnostics |
 | [91-implementation-status.md](91-implementation-status.md) | What works today: the not-yet-implemented list, measurements, divergences from the design documents |
 

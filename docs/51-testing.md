@@ -63,13 +63,13 @@ Conventions are in [`tests/projects/README.md`](../tests/projects/README.md).
 A build system's main feature is the second run onward. e2e checks a single
 run, and lining up single runs cannot exercise the edit-and-rerun path.
 
-This layer's first run caught the direct executor omitting the command line
+This layer's first run caught the direct backend omitting the command line
 from its freshness check: after a flag change, the rebuild did not run,
 because neither the inputs nor their mtimes had changed. Artifacts produced
 under the old flags were being reported as success.
 
 Observation is via the verdict reasons of
-`--executor=direct --log-level=debug`. Watching artifact mtimes would also
+`--backend=direct --log-level=debug`. Watching artifact mtimes would also
 work, but it depends on clock resolution and leaves no record of *why* a
 re-run happened.
 
