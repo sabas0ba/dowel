@@ -139,6 +139,10 @@ pub enum Ns {
     Host,
     Feature,
     Tc,
+    /// パッケージの定数（[ADR-0020](../../../docs/adr/0020-package-constants.md)）。
+    /// 構成の軸ではない——`match` の被検査対象にも `when` の述語にもならず、
+    /// 代わりに値の位置に書ける
+    Pkg,
 }
 
 impl Ns {
@@ -148,6 +152,7 @@ impl Ns {
             "host" => Some(Ns::Host),
             "feature" => Some(Ns::Feature),
             "tc" => Some(Ns::Tc),
+            "pkg" => Some(Ns::Pkg),
             _ => None,
         }
     }
@@ -158,6 +163,7 @@ impl Ns {
             Ns::Host => "host",
             Ns::Feature => "feature",
             Ns::Tc => "tc",
+            Ns::Pkg => "pkg",
         }
     }
 }
@@ -245,6 +251,12 @@ pub enum Data {
         pred: Pred,
         inner: Box<Value>,
     },
+    /// パッケージの定数への参照（ADR-0020）。具体化まで保持する。
+    ///
+    /// 評価時に埋めない。評価の結果はファイルの内容で鍵付けして保存されるが、
+    /// `dowel.toml` の版が動いても `dowel.build` の内容は変わらない。
+    /// 評価時に埋めると、古い版が保存され、issue #80 が裏側から戻ってくる
+    PkgRef(String),
     /// 誤りの位置。診断は既に出ている。
     Error,
 }
@@ -463,6 +475,7 @@ impl Value {
                 format!("match {} {{ {} }}", scrutinee.display(), inner.join(", "))
             }
             Data::When { pred, inner } => format!("{} when {}", inner.display(), pred.display()),
+            Data::PkgRef(name) => format!("pkg.{name}"),
             Data::Error => "<error>".into(),
         }
     }

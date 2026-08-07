@@ -51,6 +51,10 @@ pub struct Config {
     /// いま具体化しているパッケージ。`feature.<名前>` はこれで修飾して引く。
     /// 空はどのパッケージにも属さない位置（構成そのもの）を表す
     package: String,
+    /// パッケージ名 → 版。`pkg.version` が、いま具体化しているパッケージの分を
+    /// 引く（ADR-0020）。機能（`features`）と同じく、読み込みが済んでから
+    /// 構成へ載せる
+    pub versions: BTreeMap<String, String>,
     /// 選択された道具。道具名（[`TOOLS`]）→ コマンド。
     /// 既定は [`TOOLS`] が与え、`[toolchain]` の宣言が上書きする
     tools: BTreeMap<String, String>,
@@ -110,6 +114,7 @@ impl Config {
             host_arch: host_arch().to_string(),
             features: BTreeSet::new(),
             package: String::new(),
+            versions: BTreeMap::new(),
             tools: TOOLS.iter().map(|(n, d)| (n.to_string(), d.to_string())).collect(),
         }
     }
@@ -121,8 +126,9 @@ impl Config {
 
     /// このパッケージの値を具体化するための写し。
     ///
-    /// `feature.<名前>` の判定だけが変わる。構成そのもの（最適化・トリプル・
-    /// 道具）は1回のビルドで1つであり、パッケージごとに変わらない。
+    /// 変わるのは `feature.<名前>` の判定と `pkg.*` の値だけである。構成そのもの
+    /// （最適化・トリプル・道具）は1回のビルドで1つであり、パッケージごとに
+    /// 変わらない。
     pub fn for_package(&self, name: &str) -> Config {
         Config { package: name.to_string(), ..self.clone() }
     }
@@ -130,6 +136,15 @@ impl Config {
     /// いま具体化しているパッケージ。
     pub fn package(&self) -> &str {
         &self.package
+    }
+
+    /// パッケージの定数（ADR-0020）。`PKG_CONSTANTS` に無い名前は `None`。
+    pub fn pkg_constant(&self, name: &str) -> Option<&str> {
+        match name {
+            "name" => Some(&self.package),
+            "version" => self.versions.get(&self.package).map(String::as_str),
+            _ => None,
+        }
     }
 
     /// 道具のコマンドを差し替える。`[toolchain]` の宣言の写しに使う。
@@ -165,6 +180,7 @@ impl Config {
             (Ns::Feature, name) => {
                 Some(CfgValue::Bool(self.features.contains(&format!("{}/{name}", self.package))))
             }
+            (Ns::Pkg, name) => self.pkg_constant(name).map(|s| CfgValue::Str(s.to_string())),
             _ => None,
         }
     }
@@ -221,6 +237,23 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
     ("tc", "objdump", Domain::Open, "identifier of the selected object dumper"),
     ("tc", "readelf", Domain::Open, "identifier of the selected ELF reader"),
 ];
+
+/// パッケージの定数（[ADR-0020](../../../docs/adr/0020-package-constants.md)）。
+/// （名前, 説明）。
+///
+/// `cfg` の語彙（[`VOCABULARY`]）とは別の表である。あちらはビルドが走る構成を
+/// 述べるもので、値域と網羅性の規則を持ち、構成の同一性にも関わる。パッケージの
+/// 定数はそのどれでもない。同じ表に混ぜると、`match pkg.version` が「版で
+/// ビルドを分岐できる」と述べることになる。
+pub const PKG_CONSTANTS: &[(&str, &str)] = &[
+    ("name", "the package name from [package] of dowel.toml"),
+    ("version", "the package version"),
+];
+
+/// パッケージの定数の名前か。
+pub fn is_pkg_constant(name: &str) -> bool {
+    PKG_CONSTANTS.iter().any(|(n, _)| *n == name)
+}
 
 /// キーが語彙に存在するか。存在しなければ型検査で落とす。
 pub fn domain_of(key: &CfgKey) -> Option<&'static Domain> {
@@ -308,6 +341,29 @@ mod tests {
             c.lookup(&CfgKey { ns: Ns::Feature, name: "png".into() }),
             Some(CfgValue::Bool(false))
         );
+    }
+
+    #[test]
+    fn package_constants_come_from_the_package_being_specialized() {
+        // ADR-0020。同じ構成でも、パッケージが変われば `pkg.*` は変わる。
+        let mut c = Config::host_default();
+        c.versions.insert("app".into(), "1.2.3".into());
+        c.versions.insert("lib".into(), "0.4.0".into());
+
+        let app = c.for_package("app");
+        assert_eq!(app.pkg_constant("name"), Some("app"));
+        assert_eq!(app.pkg_constant("version"), Some("1.2.3"));
+        assert_eq!(c.for_package("lib").pkg_constant("version"), Some("0.4.0"));
+        assert_eq!(app.pkg_constant("author"), None);
+    }
+
+    #[test]
+    fn package_constants_are_not_configuration_keys() {
+        // 構成の語彙とは別の表である。混ぜると `match pkg.version` が
+        // 「版でビルドを分岐できる」と述べることになる。
+        assert!(domain_of(&CfgKey { ns: Ns::Pkg, name: "version".into() }).is_none());
+        assert!(is_pkg_constant("version"));
+        assert!(!is_pkg_constant("opt"));
     }
 
     #[test]

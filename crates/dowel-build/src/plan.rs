@@ -699,13 +699,19 @@ fn absolute_path(
     Some(base.join(&p.rel))
 }
 
+/// `-D` の値。型が形を決める。
+///
+/// `Str` は C の文字列リテラルとして書く。`Int` と `Bool` は裸のトークンで
+/// ある。型付きの値を持つ体系で、`Str` を裸で渡すと `0.4.0` のような版が
+/// `%s` に渡せない形で届く——`pkg.version`（ADR-0020）を書く意味が無くなる。
+/// 裸のトークンが要る場合は数値か真偽値で書く。
 fn collect_defines(env: &dowel_model::PropMap) -> Vec<(String, String)> {
     let Some(value) = env.get("defines") else { return Vec::new() };
     let Some(map) = value.as_map() else { return Vec::new() };
     map.iter()
         .map(|(k, v)| {
             let rendered = match &v.data {
-                Data::Str(s) => s.clone(),
+                Data::Str(s) => c_string_literal(s),
                 Data::Int(i) => i.to_string(),
                 Data::Bool(b) => if *b { "1" } else { "0" }.to_string(),
                 _ => String::new(),
@@ -713,6 +719,20 @@ fn collect_defines(env: &dowel_model::PropMap) -> Vec<(String, String)> {
             (k.clone(), rendered)
         })
         .collect()
+}
+
+/// C の文字列リテラル。引用符と逆斜線だけを逃がす。
+fn c_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        if c == '"' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('"');
+    out
 }
 
 /// `c_std` / `cxx_std` から `-std=...` を1つ組み立てる。

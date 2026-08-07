@@ -273,7 +273,7 @@ fn package_root(path: &std::path::Path, docs: &Documents) -> Option<std::path::P
 fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
     let mut cfg = dowel_eval::Config::host_default();
     if let Some(root) = sess.root_package() {
-        cfg.features = sess.active_features().clone();
+        sess.configure(&mut cfg);
         let host = dowel_eval::config::default_triple();
         if let Some(decl) = root.toolchain_for(&cfg.target, &host) {
             for (name, _) in dowel_eval::config::TOOLS {

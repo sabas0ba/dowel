@@ -193,6 +193,7 @@ impl W {
             Ns::Host => 1,
             Ns::Feature => 2,
             Ns::Tc => 3,
+            Ns::Pkg => 4,
         });
         self.str(&k.name);
     }
@@ -277,6 +278,10 @@ impl W {
                     }
                 }
                 self.value(inner);
+            }
+            Data::PkgRef(name) => {
+                self.u8(12);
+                self.str(name);
             }
             Data::Error => self.u8(11),
         }
@@ -427,6 +432,7 @@ impl R<'_> {
             1 => Ns::Host,
             2 => Ns::Feature,
             3 => Ns::Tc,
+            4 => Ns::Pkg,
             _ => return None,
         };
         Some(CfgKey { ns, name: self.str()? })
@@ -490,6 +496,7 @@ impl R<'_> {
                 Data::When { pred, inner: Box::new(self.value()?) }
             }
             11 => Data::Error,
+            12 => Data::PkgRef(self.str()?),
             _ => return None,
         })
     }

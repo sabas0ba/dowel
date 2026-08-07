@@ -150,6 +150,18 @@ changes, only the speed.
   time would mix in the current file system — an unrecorded input
 - Merge rules belong to types: `union` / `append` / `error_on_conflict` /
   `must_equal` / `replace` / `max`
+- `pkg.name` / `pkg.version` are package constants readable in value position
+  ([ADR-0020](adr/0020-package-constants.md)). They are the only namespace
+  that can appear as a value, and the only one refused as a `match`
+  scrutinee — a package's own version is not an axis a build varies along.
+  They resolve at specialization, not at evaluation: evaluation results are
+  stored keyed by file content, and a `dowel.build` does not change when its
+  `dowel.toml`'s version does, so substituting earlier would keep a stale
+  version in the store (issue #80)
+- A `defines` value's type decides its `-D` form: a `Str` becomes a C string
+  literal, an `Int` or `Bool` a bare token. A version arriving as a bare
+  `0.4.0` could not be passed to `%s`, which would leave `pkg.version`
+  unusable for the case it exists for
 - An `abi` label may name a boundary instead of a language: `c` matches every
   label and never replaces one ([ADR-0019](adr/0019-c-abi-label.md)). Without
   it, a C library and a C++ consumer each stating its own language honestly
@@ -514,19 +526,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (477 tests):
+Current breakdown (486 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 290 |
+| `unit-*` | per-crate unit tests | 293 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 104 |
+| `e2e` | compile real C and C++, run it, check the output | 110 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (55 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (57 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

@@ -6,7 +6,7 @@
 //!
 //! [ADR-0004]: ../../../docs/adr/0004-syntax.md
 
-use crate::config::{domain_of, known_keys, Domain};
+use crate::config::{domain_of, is_pkg_constant, known_keys, Domain, PKG_CONSTANTS};
 use crate::value::{
     CfgKey, Data, MatchArm, Ns, Origin, PathBase, PathValue, Pattern, Pred, Prov, Site, Type, Value,
 };
@@ -213,16 +213,10 @@ impl<'a> Evaluator<'a> {
             NodeKind::Call => self.call(node),
             NodeKind::Match => self.match_expr(node),
             NodeKind::WhenExpr => self.when_expr(node),
-            NodeKind::NsRef => {
-                let name = self.ns_text(node);
-                self.err(
-                    node.span,
-                    "unexpected-reference",
-                    format!("`{name}` cannot appear in a value position"),
-                    "configuration references belong in a `match` scrutinee or a `when` predicate",
-                );
-                Value::error(Prov::at(Origin::Literal, self.site(node.span)))
-            }
+            // 値の位置に書けるのは `pkg.*` だけである（ADR-0020）。構成の参照は
+            // 具体化まで遅らせる理由があり（`--config` の切り替えでマニフェストを
+            // 読み直さない）、`match` と `when` に属する。
+            NodeKind::NsRef => self.pkg_ref(node),
             NodeKind::Error => Value::error(Prov::at(Origin::Literal, self.site(node.span))),
             _ => Value::error(Prov::at(Origin::Literal, self.site(node.span))),
         }
@@ -416,6 +410,55 @@ impl<'a> Evaluator<'a> {
         parts.join(".")
     }
 
+    /// 値の位置に現れた名前空間参照。
+    ///
+    /// `pkg.*` だけが書ける（ADR-0020）。パッケージの定数は構成の軸ではなく、
+    /// 値そのものである。実際の値を埋めるのは具体化——ここで埋めると、
+    /// ファイルの内容で鍵付けした保存に古い版が残る（issue #80）。
+    fn pkg_ref(&mut self, node: &Node) -> Value {
+        let prov = Prov::at(Origin::Literal, self.site(node.span));
+        let text = self.ns_text(node);
+        let parts: Vec<&str> = text.split('.').collect();
+        if parts.first() != Some(&"pkg") {
+            self.err(
+                node.span,
+                "unexpected-reference",
+                format!("`{text}` cannot appear in a value position"),
+                "configuration references belong in a `match` scrutinee or a `when` predicate",
+            );
+            return Value::error(prov);
+        }
+        let Some(name) = parts.get(1).filter(|_| parts.len() == 2) else {
+            self.err(
+                node.span,
+                "invalid-reference",
+                format!("`{text}` is not a valid package constant"),
+                "write a namespace and a name, as in `pkg.version`",
+            );
+            return Value::error(prov);
+        };
+        if !is_pkg_constant(name) {
+            let known: Vec<&str> = PKG_CONSTANTS.iter().map(|(n, _)| *n).collect();
+            let mut d = Diagnostic::error(
+                "unknown-pkg-constant",
+                format!("unknown package constant `pkg.{name}`"),
+            )
+            .at(self.file, node.span, "this name is not a package constant")
+            .note(format!("`pkg` holds: {}", known.join(", ")));
+            if let Some(c) = closest(name, known.iter().copied()) {
+                d = d.suggest(
+                    self.file,
+                    node.span,
+                    format!("pkg.{c}"),
+                    format!("did you mean `{c}`?"),
+                );
+            }
+            self.diags.push(d);
+            return Value::error(prov);
+        }
+        Value { ty: Type::Str, data: Data::PkgRef((*name).to_string()), prov }
+    }
+
     /// 名前空間参照を検証してキーにする。
     fn cfg_key(&mut self, node: &Node) -> Option<CfgKey> {
         let parts: Vec<&str> = node
@@ -433,7 +476,7 @@ impl<'a> Evaluator<'a> {
             return None;
         }
         let Some(ns) = Ns::parse(parts[0]) else {
-            let known = ["cfg", "host", "feature", "tc"];
+            let known = ["cfg", "host", "feature", "tc", "pkg"];
             let mut d =
                 Diagnostic::error("unknown-namespace", format!("unknown namespace `{}`", parts[0]))
                     .at(self.file, node.span, "no such namespace")
@@ -449,6 +492,19 @@ impl<'a> Evaluator<'a> {
             self.diags.push(d);
             return None;
         };
+        // パッケージの定数は構成の軸ではない。`match pkg.version` を受けると、
+        // 「版でビルドを分岐できる」と述べることになる（ADR-0020）。
+        if ns == Ns::Pkg {
+            self.diags.push(
+                Diagnostic::error(
+                    "not-a-configuration-key",
+                    format!("`pkg.{}` is a package constant, not a configuration key", parts[1]),
+                )
+                .at(self.file, node.span, "a build does not vary along this")
+                .note("write it in a value position, as in `defines = { V = pkg.version }`"),
+            );
+            return None;
+        }
         let key = CfgKey { ns, name: parts[1].to_string() };
         if domain_of(&key).is_none() {
             let known = known_keys(ns);

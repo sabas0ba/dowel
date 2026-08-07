@@ -267,6 +267,18 @@ impl Session {
         out
     }
 
+    /// 読み込みの結果を構成へ載せる。
+    ///
+    /// 機能と版を1つの入口で載せる。別々にすると、片方だけを載せた構成が
+    /// 作れてしまう——`pkg.version` が引けない構成では、`defines` に書いた
+    /// 版が黙って消える（ADR-0020）。
+    pub fn configure(&self, cfg: &mut dowel_eval::Config) {
+        // 読み込みの段で解決した集合をそのまま使う。二重に求めると、
+        // 「読み込んだ依存」と「有効な機能」が食い違いうる。
+        cfg.features = self.active_features().clone();
+        cfg.versions = self.packages.iter().map(|p| (p.name.clone(), p.version.clone())).collect();
+    }
+
     /// 1つのパッケージで有効な機能。
     pub fn active_features_of(&self, id: PackageId) -> Option<&std::collections::BTreeSet<String>> {
         self.active.get(&id)

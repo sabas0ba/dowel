@@ -261,6 +261,24 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unknown-pkg-constant",
+        why: "`pkg.versoin` is not a package constant",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndefines = { V = pkg.versoin }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "not-a-configuration-key",
+        why: "a package's own version is not an axis a build varies along",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\nflags = match pkg.version { _ => [] }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unknown-pattern",
         why: "`fast` is not a value of `cfg.opt`",
         files: &[(

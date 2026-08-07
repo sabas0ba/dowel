@@ -79,7 +79,7 @@ affects this target only. (The precise formulas are in
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
 | `includes` | `Set<Path>` | `union` | include search paths (`-I`). Ordered along the dependency graph: your own first, dependencies after |
-| `defines` | `Map<Ident, Val>` | `error_on_conflict` | preprocessor definitions (`-D`). Two different values arriving for the same name fail, with both provenances shown |
+| `defines` | `Map<Ident, Val>` | `error_on_conflict` | preprocessor definitions (`-D`). The value's **type decides its form**: a `Str` becomes a C string literal (`-DNAME="hashx"`), an `Int` or `Bool` a bare token (`-DLIMIT=64`, `-DDEBUG=1`). Two different values arriving for the same name fail, with both provenances shown |
 | `flags` | `List<Str>` | `append` | compile flags for every language, order-preserving |
 | `c_flags` | `List<Str>` | `append` | compile flags for C sources only, placed after `flags` |
 | `cxx_flags` | `List<Str>` | `append` | compile flags for C++ sources only, placed after `flags` |
@@ -242,6 +242,39 @@ implemented; `dowel schema dump` prints the live version.)
 | `tc.c` | open | identifier of the selected C toolchain |
 | `tc.cxx` | open | identifier of the selected C++ toolchain |
 | `tc.ar` | open | identifier of the selected archiver |
+
+### Package constants
+
+`pkg` is not part of that vocabulary. It holds constants of the package
+whose manifest declares them, and it is read **in a value position** — the
+only namespace that can be ([ADR-0020](adr/0020-package-constants.md)).
+
+| Reference | Type | Value |
+|---|---|---|
+| `pkg.name` | `Str` | `[package] name` of the declaring package |
+| `pkg.version` | `Str` | `[package] version` of the declaring package |
+
+```toml
+[lib.hashx.private]
+defines = { HASHX_VERSION = pkg.version, HASHX_NAME = pkg.name }
+```
+
+This is how a library's version reaches the code that reports it, instead of
+being written a second time in a header where nothing compares the two
+(issue #80). Because `defines` renders a `Str` as a C string literal, the
+above produces `-DHASHX_VERSION="0.4.0"`.
+
+A package constant belongs to the package that declares it, the same way a
+feature does ([ADR-0017](adr/0017-feature-forwarding.md)): a dependency's
+`pkg.version` is the dependency's own version, not the root's.
+
+It is **not** usable as a `match` scrutinee or in a `when` predicate
+(`not-a-configuration-key`). A package's own version is not an axis a build
+varies along. Conversely a configuration reference is still refused in a
+value position (`unexpected-reference`).
+
+There is still no string concatenation ([ADR-0004](adr/0004-syntax.md)), so
+a composite like `"hashx/0.4.0"` is not expressible.
 
 ### `match`
 
