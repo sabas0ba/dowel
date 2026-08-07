@@ -34,7 +34,21 @@ dowel test --failed              # rerun only what failed last time
 dowel test --fail-fast           # stop at the first failure
 dowel test --test-jobs=4         # run 4 at a time (default is sequential)
 dowel test --no-run              # build only; do not run
+dowel test --label=fast          # only cases tagged `fast`
 ```
+
+One binary can register several tests, each with its own arguments, timeout,
+expected verdict, and labels:
+
+```toml
+[test.suite.cases]
+parse   = { args = ["parse"], timeout = 10 }
+rejects = { args = ["bad"], should_fail = true }
+heavy   = { args = ["heavy"], labels = ["slow"] }
+```
+
+Results, `--failed`, and `--label` then work per case
+([12-build-reference.md](12-build-reference.md)).
 
 - Pass/fail is the exit status (0 = success). The working directory is the
   package root

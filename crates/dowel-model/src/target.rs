@@ -35,6 +35,23 @@ pub struct Target {
     pub artifacts: Vec<ArtifactDecl>,
     /// `[<kind>.<name>.inspect]`。成果物について報告する検査。宣言順
     pub inspections: Vec<ArtifactDecl>,
+    /// `[test.<name>.cases]`。1本の実行ファイルから登録するテスト。宣言順。
+    /// 空なら、そのターゲット自身が1件のテストである（従来の形）
+    pub cases: Vec<CaseDecl>,
+}
+
+/// `[test.<name>.cases]` の1項目。
+///
+/// 事例は**同じ実行ファイルの別の起動**である。翻訳の単位は増えない。
+/// 値は具体化前であり、`when` / `match` を含みうる——引数や時間切れを
+/// 構成で変えられる。
+#[derive(Clone, Debug)]
+pub struct CaseDecl {
+    /// 事例の名前。ラベルは `<パッケージ>:<ターゲット>/<名前>` になる
+    pub name: String,
+    /// `dowel_eval::schema::case_props` の名前 → 値
+    pub fields: std::collections::BTreeMap<String, Value>,
+    pub site: Site,
 }
 
 /// 成果物に対して道具を1つ走らせる宣言（issue #60）。

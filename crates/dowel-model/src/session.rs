@@ -10,7 +10,7 @@ use crate::package::{self, DepKind, Package};
 use crate::persist::Cache;
 use crate::query::{self, Key};
 use crate::runner::Runner;
-use crate::target::{label, ArtifactDecl, PackageId, PropMap, Target, TargetId};
+use crate::target::{label, ArtifactDecl, CaseDecl, PackageId, PropMap, Target, TargetId};
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Data, Document, Ns, Site, Value};
 use dowel_query::{Db, Stats};
@@ -39,6 +39,10 @@ const ARTIFACTS_BLOCK: &str = "artifacts";
 /// `[<kind>.<name>.inspect]` の見出し。同じく、プロパティのブロックではない。
 /// 変換との違いは出力を持たないことだけである（issue #60）。
 const INSPECT_BLOCK: &str = "inspect";
+
+/// `[test.<name>.cases]` の見出し。1本の実行ファイルから複数のテストを
+/// 登録する。`test` 種別にのみ意味を持つ
+const CASES_BLOCK: &str = "cases";
 
 /// 読み込みの時点で分かっている機能フラグの選択。
 ///
@@ -251,6 +255,7 @@ impl Session {
             private: PropMap::new(),
             artifacts: Vec::new(),
             inspections: Vec::new(),
+            cases: Vec::new(),
         });
         self.externals.insert(name.to_string(), pid);
         log_debug!("external dependency `{name}` {} via pkg-config", r.version);
@@ -851,10 +856,11 @@ impl TargetSink<'_> {
             // （issue #60）。ターゲットは先に作っておく必要がある。
             let is_artifacts = table.path.len() == 3 && table.path[2] == ARTIFACTS_BLOCK;
             let is_inspect = table.path.len() == 3 && table.path[2] == INSPECT_BLOCK;
+            let is_cases = table.path.len() == 3 && table.path[2] == CASES_BLOCK;
 
             let block = match table.path.len() {
                 2 => Block::Root,
-                3 if is_artifacts || is_inspect => Block::Root,
+                3 if is_artifacts || is_inspect || is_cases => Block::Root,
                 3 => match Block::parse(&table.path[2]) {
                     Some(b) => b,
                     None => {
@@ -865,13 +871,13 @@ impl TargetSink<'_> {
                         .at(
                             doc.file,
                             table.site.span,
-                            "only `public`, `private`, `artifacts`, or `inspect`",
+                            "only `public`, `private`, `artifacts`, `inspect`, or `cases`",
                         )
                         .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
                         if let (Some(c), Some(&span)) = (
                             closest(
                                 &table.path[2],
-                                ["public", "private", ARTIFACTS_BLOCK, INSPECT_BLOCK],
+                                ["public", "private", ARTIFACTS_BLOCK, INSPECT_BLOCK, CASES_BLOCK],
                             ),
                             table.path_spans.get(2),
                         ) {
@@ -910,10 +916,15 @@ impl TargetSink<'_> {
                     private: PropMap::new(),
                     artifacts: Vec::new(),
                     inspections: Vec::new(),
+                    cases: Vec::new(),
                 });
                 tid
             });
 
+            if is_cases {
+                self.declare_cases(tid, table);
+                continue;
+            }
             if is_artifacts || is_inspect {
                 self.declare_tool_runs(tid, table, is_artifacts);
                 continue;
@@ -935,6 +946,83 @@ impl TargetSink<'_> {
             if t.package == pkg {
                 log_trace!("declared target {}.{}", t.kind.name(), t.name);
             }
+        }
+    }
+
+    /// `[test.<name>.cases]` を取り込む。
+    ///
+    /// 1本の実行ファイルから複数のテストを登録する。事例を分けるのは引数で
+    /// あり、翻訳の単位は増えない。`test` 以外の種別には意味が無い——
+    /// 走らせるものが `dowel test` にしか無いためで、黙って読み飛ばすと
+    /// 書いた宣言が記録の外に落ちる。
+    fn declare_cases(&mut self, tid: TargetId, table: &dowel_eval::Table) {
+        if self.targets[tid.0].kind != schema::TableKind::Test {
+            let kind = self.targets[tid.0].kind.name();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "unknown-block",
+                    format!("`cases` has no meaning on a `{kind}` target"),
+                )
+                .at(table.site.file, table.site.span, "only `test` targets register cases")
+                .note("a case is another invocation of the same test binary; `dowel test` is what runs them"),
+            );
+            return;
+        }
+        let known = schema::case_props();
+        let names: Vec<&str> = known.iter().map(|p| p.name).collect();
+        for entry in &table.entries {
+            let name = entry.key.join(".");
+            let Data::Map(fields) = &entry.value.data else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "type-mismatch",
+                        format!(
+                            "`{name}` is an inline table but {} was given",
+                            entry.value.ty.display()
+                        ),
+                    )
+                    .at(entry.site.file, entry.site.span, "expected `{ args = [...], ... }`")
+                    .note("write for example `parse = { args = [\"parse\"], timeout = 10 }`"),
+                );
+                continue;
+            };
+            for (prop, value) in fields {
+                match known.iter().find(|p| p.name == prop) {
+                    Some(def) if !def.ty.accepts(&value.ty) => self.diagnostics.push(
+                        Diagnostic::error(
+                            "type-mismatch",
+                            format!(
+                                "`{prop}` is {} but {} was given",
+                                def.ty.display(),
+                                value.ty.display()
+                            ),
+                        )
+                        .at(
+                            entry.site.file,
+                            entry.site.span,
+                            format!("this value has type {}", value.ty.display()),
+                        ),
+                    ),
+                    Some(_) => {}
+                    None => {
+                        let mut d = Diagnostic::error(
+                            "unknown-property",
+                            format!("unknown property `{prop}`"),
+                        )
+                        .at(entry.site.file, entry.site.span, "a case has no such property")
+                        .note(format!("a case accepts: {}", names.join(", ")));
+                        if let Some(c) = closest(prop, names.iter().copied()) {
+                            d = d.note(format!("did you mean `{c}`?"));
+                        }
+                        self.diagnostics.push(d);
+                    }
+                }
+            }
+            self.targets[tid.0].cases.push(CaseDecl {
+                name,
+                fields: fields.clone(),
+                site: entry.site,
+            });
         }
     }
 
