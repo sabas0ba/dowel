@@ -121,14 +121,16 @@ leaving the old key behind still builds for whoever has the tree.
 
 ```toml
 [features]
-default = ["zlib"]
-zlib    = []
-png     = ["zlib", "libpng/simd"]     # also enables `simd` in the dependency
+default   = ["zlib"]
+zlib      = []
+png       = ["zlib", "libpng/simd"]     # also enables `simd` in the dependency
+exclusive = [["headless", "x11"]]       # these two are never on together
 ```
 
 Each key declares a feature flag; its value is the list of other features it
 enables (transitively closed, cycle-safe). Values must be arrays of strings
-(`type-mismatch` otherwise).
+(`type-mismatch` otherwise). `default` and `exclusive` are reserved and are
+not feature names.
 
 A feature **belongs to the package that declares it**
 ([ADR-0017](adr/0017-feature-forwarding.md)). Two packages may use the same
@@ -143,6 +145,22 @@ feature deliberately left off).
 
 - `default` is special: it is included unless `--no-default-features` is
   passed. `default` itself is never a feature name
+- `exclusive` declares sets of features that must **not** be active
+  together, as an array of arrays ([ADR-0021](adr/0021-exclusive-features.md)).
+  Two or more of a group active for this package is
+  `conflicting-features`, naming them and where each came from — most often
+  `default`, which `--no-default-features` drops. Names in a group must be
+  declared in this table (`unknown-feature`); a group of fewer than two
+  names forbids nothing and warns (`empty-exclusive-group`).
+
+  Features stay additive: `--features=x11` never turns `headless` off.
+  Exclusivity is a **declared constraint**, never inferred — dowel cannot
+  see that two source files define the same symbol. It is what makes the
+  `lib` case fail at all: two implementations in one archive otherwise build
+  green and the linker keeps whichever member it reached first (issue #82).
+  For choosing between two implementations, `match feature.<name>` is the
+  spelling that always selects one
+  ([12-build-reference.md](12-build-reference.md))
 - The set of valid feature names is exactly the keys of this table. An
   unknown name fails with a diagnostic and a suggestion, whether it comes
   from `--features` on the command line or from a `feature.<name>` reference

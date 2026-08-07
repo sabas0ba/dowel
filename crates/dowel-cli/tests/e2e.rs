@@ -3096,3 +3096,145 @@ fn a_configuration_reference_still_cannot_appear_in_a_value_position() {
     r.failure();
     r.stderr_contains("unexpected-reference");
 }
+
+/// 排他な機能（issue #82、ADR-0021）。
+///
+/// 機能は加算である。`--features=x11` は `default` を落とさない。実装の択一を
+/// 条件付きの `sources` で書くとこれと真正面からぶつかり、`bin` ならリンカの
+/// `multiple definition`、`lib` なら**組み上がって片方が黙って勝つ**。
+fn two_backend_project(name: &str, kind: &str, exclusive: &str) -> Project {
+    let p = Project::new(name);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"shell\"\nversion = \"0.1.0\"\n\n\
+             [features]\ndefault  = [\"headless\"]\nheadless = []\nx11      = []\n{exclusive}"
+        ),
+    );
+    p.write(
+        "dowel.build",
+        &format!(
+            r#"
+[{kind}.shell]
+sources = [
+    file("src/main.c"),
+    file("src/shell_x11.c")      when feature.x11,
+    file("src/shell_headless.c") when feature.headless,
+]
+"#
+        ),
+    );
+    p.write("src/main.c", "const char *shell_name(void);\nint main(void) { return 0; }\n");
+    p.write("src/shell_x11.c", "const char *shell_name(void) { return \"x11\"; }\n");
+    p.write("src/shell_headless.c", "const char *shell_name(void) { return \"headless\"; }\n");
+    p
+}
+
+#[test]
+fn two_exclusive_features_enabled_at_once_are_refused() {
+    // `--features=x11` は `default = ["headless"]` を落とさない。宣言してあれば
+    // リンカに渡す前に断る。
+    let p =
+        two_backend_project("features-exclusive", "bin", "exclusive = [[\"headless\", \"x11\"]]\n");
+    let r = p.run(".", &["check", "--features=x11"]);
+    r.failure();
+    r.stderr_contains("conflicting-features");
+    r.stderr_contains("headless");
+    r.stderr_contains("x11");
+    // 忘れやすいのは `default` の側である。名指しで述べる。
+    r.stderr_contains("comes from `default`");
+    r.stderr_contains("--no-default-features");
+}
+
+#[test]
+fn dropping_the_defaults_makes_the_same_manifest_build() {
+    // 断るのは組み合わせであって、機能そのものではない。
+    let p = two_backend_project(
+        "features-exclusive-ok",
+        "bin",
+        "exclusive = [[\"headless\", \"x11\"]]\n",
+    );
+    p.run(".", &["build", "--no-default-features", "--features=x11"]).success();
+    p.run(".", &["build"]).success();
+}
+
+#[test]
+fn a_library_with_two_implementations_says_so_instead_of_keeping_one() {
+    // ここが危ない側である。宣言が無ければ組み上がり、書庫はリンカが最初に
+    // 到達した部材だけを残す。どちらが入ったかはマニフェストから読めない。
+    let p = two_backend_project(
+        "features-exclusive-lib",
+        "lib",
+        "exclusive = [[\"headless\", \"x11\"]]\n",
+    );
+    let r = p.run(".", &["build", "--features=x11"]);
+    r.failure();
+    r.stderr_contains("conflicting-features");
+}
+
+#[test]
+fn without_the_declaration_nothing_changes() {
+    // 宣言は任意である。書かない木は今までどおりに振る舞う——`lib` は
+    // 黙って組み上がる。これが宣言を要する理由でもある。
+    let p = two_backend_project("features-exclusive-absent", "lib", "");
+    p.run(".", &["build", "--features=x11"]).success();
+}
+
+#[test]
+fn an_exclusive_group_naming_an_undeclared_feature_is_refused() {
+    let p = two_backend_project(
+        "features-exclusive-typo",
+        "bin",
+        "exclusive = [[\"headless\", \"x11l\"]]\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-feature");
+    r.stderr_contains("did you mean `x11`?");
+}
+
+#[test]
+fn an_exclusive_group_of_one_forbids_nothing_and_says_so() {
+    let p = two_backend_project("features-exclusive-single", "bin", "exclusive = [[\"x11\"]]\n");
+    let r = p.run(".", &["check"]);
+    r.success();
+    r.stderr_contains("empty-exclusive-group");
+}
+
+#[test]
+fn a_match_selects_exactly_one_implementation() {
+    // 正しい書き方。排他の宣言が無くても1つしか選ばれない。
+    let p = Project::new("features-match");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"shell\"\nversion = \"0.1.0\"\n\n\
+         [features]\ndefault = []\nx11     = []\n",
+    );
+    p.write(
+        "dowel.build",
+        r#"
+[bin.shell]
+sources = [
+    file("src/main.c"),
+    match feature.x11 {
+        true  => file("src/shell_x11.c"),
+        false => file("src/shell_headless.c"),
+    },
+]
+"#,
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nconst char *shell_name(void);\nint main(void) { printf(\"%s\\n\", shell_name()); return 0; }\n",
+    );
+    p.write("src/shell_x11.c", "const char *shell_name(void) { return \"x11\"; }\n");
+    p.write("src/shell_headless.c", "const char *shell_name(void) { return \"headless\"; }\n");
+
+    p.run(".", &["build"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/shell");
+    assert_eq!(run_artifact(&bin), "headless\n");
+
+    p.run(".", &["build", "--features=x11"]).success();
+    let bin = build_dir(&p.path("."), "debug-shell--x11").join("bin/shell");
+    assert_eq!(run_artifact(&bin), "x11\n");
+}

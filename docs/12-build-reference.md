@@ -313,6 +313,35 @@ Composition is implicit AND only (chain `when` inside `match` arms for
 anything more complex). A `when` binds to the expression before it on the
 same line — it does not reach across a newline.
 
+**Use `match`, not stacked `when`s, to choose between implementations.**
+Feature flags are additive — `--features=x11` does not switch `headless`
+off — so two `when`s are not a choice:
+
+```toml
+# wrong: --features=x11 compiles both
+sources = [
+    file("src/shell_x11.c")      when feature.x11,
+    file("src/shell_headless.c") when feature.headless,
+]
+
+# right: exactly one, always
+sources = [
+    match feature.x11 {
+        true  => file("src/shell_x11.c"),
+        false => file("src/shell_headless.c"),
+    },
+]
+```
+
+Compiling both is not always an error you will see. In a `bin` the linker
+reports `multiple definition`; in a `lib` the build **succeeds** and the
+archive keeps whichever member the linker reached first, so the artifact
+silently holds an implementation nobody chose (issue #82). Where the choice
+is genuinely between named features rather than one boolean, declare them
+mutually exclusive with `[features] exclusive`
+([11-toml-reference.md](11-toml-reference.md),
+[ADR-0021](adr/0021-exclusive-features.md)).
+
 ### What conditionals resolve to
 
 A `match`/`when` value has type `Cfg<T>` after evaluation; nothing is

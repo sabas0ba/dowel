@@ -27,3 +27,4 @@ was originally written in.
 | [0018](0018-backend-layer.md) | The output stage is a backend layer over one neutral build graph | Accepted |
 | [0019](0019-c-abi-label.md) | `abi = "c"` names a boundary, not a language | Accepted |
 | [0020](0020-package-constants.md) | `pkg.name` / `pkg.version` are package constants, readable in value position | Accepted |
+| [0021](0021-exclusive-features.md) | Features stay additive; exclusivity is declared, never inferred | Accepted |
