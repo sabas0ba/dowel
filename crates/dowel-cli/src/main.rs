@@ -282,8 +282,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             if opts.only_failed {
                 // 前回の判定はラベルで持つ。今あるターゲットとの突き合わせに失敗した
                 // ものは黙って落とす（マニフェストから消えた場合）。
+                //
+                // 事例（`[test.<name>.cases]`）のラベルは `<ターゲット>/<事例>`
+                // である。ここではまず組み直す対象を絞り、事例そのものの選別は
+                // 起動する組を数え上げた後で行う。
                 let failed = state.failed();
-                requested.retain(|t| failed.contains(&sess.label(*t).as_str()));
+                requested.retain(|t| {
+                    let label = sess.label(*t);
+                    failed.iter().any(|f| *f == label || f.starts_with(&format!("{label}/")))
+                });
                 if requested.is_empty() {
                     if report(&sess, opts) {
                         return Ok(ExitCode::FAILURE);
@@ -325,14 +332,31 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                     return Ok(ExitCode::FAILURE);
                 }
             }
+            // 走らせるものを数え上げてから選別する。事例は起動の単位であり、
+            // ターゲットの単位ではない。
+            let mut jobs = testing::plan_jobs(&sess, &p, &launcher, &requested, &cfg);
+            if let Some(wanted) = &opts.labels {
+                jobs.retain(|j| j.labels.iter().any(|l| wanted.contains(l)));
+                if jobs.is_empty() {
+                    eprintln!(
+                        "no test carries {}. labels are declared in `[test.<name>.cases]`",
+                        wanted.iter().map(|l| format!("`{l}`")).collect::<Vec<_>>().join(" or ")
+                    );
+                    return Ok(ExitCode::SUCCESS);
+                }
+            }
+            if opts.only_failed {
+                let failed = state.failed();
+                jobs.retain(|j| failed.contains(&j.label.as_str()));
+            }
             let run_opts = test_run_options(opts);
-            let outcomes = testing::run(&sess, &p, &launcher, &requested, &run_opts);
+            let outcomes = testing::run(&jobs, &run_opts);
 
             state.update(&outcomes);
             if let Err(e) = state.save(&p.build_dir) {
                 eprintln!("warning: cannot record the test results: {e}");
             }
-            Ok(report_tests(&outcomes, requested.len(), opts))
+            Ok(report_tests(&outcomes, jobs.len(), opts))
         }
     }
 }
