@@ -41,6 +41,16 @@ impl Merge {
     }
 }
 
+/// 言語ではなく境界を指す ABI 札（[ADR-0019](../../../docs/adr/0019-c-abi-label.md)）。
+///
+/// `extern "C"` の面しか持たない公開面はこれを名乗る。C の関数には多重定義も
+/// テンプレートもインライン関数の実体化も無く、名前の飾りも付かない。この一線を
+/// 跨ぐ呼び出しでは、両側の言語が違っても ODR 違反は起こらない。
+///
+/// 配る側が利用者の言語を知らないまま札を書けるのは、この形だけである。
+/// 言語の札を1つ選ぶと、それを全ての利用者に強制することになる（issue #78）。
+pub const C_ABI: &str = "c";
+
 /// ターゲットの種別。閉じた語彙であり、未知の種別は型検査で落ちる。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableKind {
@@ -359,7 +369,7 @@ pub fn block_props() -> Vec<PropDef> {
             name: "abi",
             ty: Type::AbiLabel,
             merge: Merge::MustEqual,
-            doc: "ABI label. mismatches fail before linking",
+            doc: "ABI label. mismatches fail before linking; `c` names the C ABI boundary and matches any label",
             domain: None,
         },
     ]
@@ -447,9 +457,19 @@ pub fn merge_values(def: &PropDef, values: &[Value], diags: &mut Vec<Diagnostic>
             }
         }
         Merge::MustEqual => {
-            let mut iter = values.iter().filter(|v| !v.is_error());
+            // 境界を指す札は、どの言語の札とも突き合わせない（ADR-0019）。
+            // 除外は ABI 札の語彙が持つ性質であって、`must_equal` の性質では
+            // ない——他のプロパティでの `must_equal` は依然「一致」である。
+            let exempt = |v: &Value| def.ty == Type::AbiLabel && v.as_str() == Some(C_ABI);
+            let mut iter = values.iter().filter(|v| !v.is_error() && !exempt(v));
             let Some(first) = iter.next() else {
-                return Value { ty: def.ty.clone(), data: Data::Error, prov: Prov::none() };
+                // 全てが `c`、あるいは値が無い。`c` は制約を足さないだけで
+                // 消しはしないので、残っているものをそのまま採る。
+                return values.iter().find(|v| !v.is_error()).cloned().unwrap_or_else(|| Value {
+                    ty: def.ty.clone(),
+                    data: Data::Error,
+                    prov: Prov::none(),
+                });
             };
             for v in iter {
                 if v.data != first.data {
@@ -695,6 +715,68 @@ mod tests {
         merge_values(&def, &[label("gnu11", 0), label("cxx11abi0", 9)], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "abi-mismatch");
+    }
+
+    #[test]
+    fn the_c_abi_label_matches_any_language_label() {
+        // ADR-0019。C のライブラリと C++ の利用者は、正しく書けば違う札になる。
+        let def = lookup(Block::Public, "abi").unwrap();
+        let label = |s: &str, at: u32| Value {
+            ty: Type::AbiLabel,
+            data: Data::Str(s.into()),
+            prov: Prov::at(Origin::Literal, site(at)),
+        };
+        let mut diags = Vec::new();
+        let merged = merge_values(&def, &[label("gnu++17", 0), label(C_ABI, 9)], &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        // 制約を足さないだけで、消しはしない。利用者自身の札が残る。
+        assert_eq!(merged.as_str(), Some("gnu++17"));
+
+        // 順序に依らない。
+        let merged = merge_values(&def, &[label(C_ABI, 0), label("gnu++17", 9)], &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(merged.as_str(), Some("gnu++17"));
+
+        // 全てが `c` なら `c`。
+        let merged = merge_values(&def, &[label(C_ABI, 0), label(C_ABI, 9)], &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(merged.as_str(), Some(C_ABI));
+    }
+
+    #[test]
+    fn a_real_mismatch_still_fails_across_a_c_surface() {
+        // `c` は突き合わせを1件緩めるだけで、他の札同士は依然として一致を要する。
+        let def = lookup(Block::Public, "abi").unwrap();
+        let label = |s: &str, at: u32| Value {
+            ty: Type::AbiLabel,
+            data: Data::Str(s.into()),
+            prov: Prov::at(Origin::Literal, site(at)),
+        };
+        let mut diags = Vec::new();
+        merge_values(&def, &[label("gnu11", 0), label(C_ABI, 9), label("gnu++17", 18)], &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, "abi-mismatch");
+    }
+
+    #[test]
+    fn must_equal_on_another_property_is_untouched_by_the_c_label() {
+        // 除外は ABI 札の語彙の性質である。`must_equal` そのものの性質にすると、
+        // 別のプロパティで `"c"` という値が黙って一致扱いになる。
+        let def = PropDef {
+            name: "thing",
+            ty: Type::Str,
+            merge: Merge::MustEqual,
+            doc: "",
+            domain: None,
+        };
+        let v = |s: &str, at: u32| Value {
+            ty: Type::Str,
+            data: Data::Str(s.into()),
+            prov: Prov::at(Origin::Literal, site(at)),
+        };
+        let mut diags = Vec::new();
+        merge_values(&def, &[v("c", 0), v("d", 9)], &mut diags);
+        assert_eq!(diags.len(), 1);
     }
 
     #[test]

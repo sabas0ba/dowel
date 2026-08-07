@@ -2841,3 +2841,116 @@ fn one_source_is_still_accepted() {
     let p = two_source_project("dep-one-source", "");
     p.run("app", &["check"]).success();
 }
+
+/// 配ることを前提にした C のライブラリを、C++ の利用者が自分の札のまま使える
+/// （issue #78、ADR-0019）。
+///
+/// ライブラリの作者は利用者の言語を知らない。言語の札を1つ選ぶと、それを
+/// 全ての利用者に強制することになる。`abi = "c"` は境界を指す札であり、
+/// `extern "C"` の面しか持たない公開面が名乗る。
+fn c_library_project(name: &str, lib_abi: &str, consumer_abi: &str) -> Project {
+    let p = Project::new(name);
+    p.write("libhash/dowel.toml", "[package]\nname    = \"libhash\"\nversion = \"0.4.0\"\n");
+    p.write(
+        "libhash/dowel.build",
+        &format!(
+            r#"
+[lib.hash]
+sources = glob("src/*.c")
+
+[lib.hash.public]
+includes = [dir("include")]
+abi      = "{lib_abi}"
+"#
+        ),
+    );
+    p.write(
+        "libhash/include/hash.h",
+        "#pragma once\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nint hash_of(const char *s);\n#ifdef __cplusplus\n}\n#endif\n",
+    );
+    p.write(
+        "libhash/src/hash.c",
+        "#include \"hash.h\"\nint hash_of(const char *s) { int h = 0; while (*s) h = h * 31 + *s++; return h; }\n",
+    );
+    p.write(
+        "cxxtool/dowel.toml",
+        "[package]\nname    = \"cxxtool\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"libhash\"\npath = \"../libhash\"\n",
+    );
+    p.write(
+        "cxxtool/dowel.build",
+        &format!(
+            r#"
+[bin.hashcxx]
+sources = glob("src/*.cpp")
+
+[bin.hashcxx.private]
+deps = [dep("libhash")]
+abi  = "{consumer_abi}"
+"#
+        ),
+    );
+    p.write(
+        "cxxtool/src/main.cpp",
+        r#"#include <cstdio>
+#include <string>
+#include "hash.h"
+int main() {
+    std::string s = "abc";
+    std::printf("h=%d\n", hash_of(s.c_str()));
+    return 0;
+}
+"#,
+    );
+    p
+}
+
+#[test]
+fn a_cxx_consumer_can_declare_its_own_abi_label_and_still_use_a_c_library() {
+    if !program_exists("c++") {
+        return;
+    }
+    let p = c_library_project("abi-c-boundary", "c", "gnu++17");
+    p.run("cxxtool", &["build"]).success();
+    let bin = build_dir(&p.path("cxxtool"), "debug").join("bin/hashcxx");
+    assert_eq!(run_artifact(&bin), "h=96354\n");
+}
+
+#[test]
+fn a_language_label_on_the_library_still_forces_the_consumer() {
+    // 変えたのは札の語彙であって、突き合わせそのものではない。言語の札同士は
+    // 依然として一致を要する。
+    let p = c_library_project("abi-c-still-checked", "gnu11", "gnu++17");
+    let r = p.run("cxxtool", &["build"]);
+    r.failure();
+    r.stderr_contains("abi-mismatch");
+}
+
+#[test]
+fn the_c_label_does_not_hide_a_real_mismatch_behind_it() {
+    // `c` は制約を足さないだけで、消しはしない。`c` の面の向こうから届いた
+    // 本物の札は、利用者の札と突き合わされる。
+    let p = c_library_project("abi-c-transparent", "c", "gnu++17");
+    p.write("libhash/dowel.toml", "[package]\nname    = \"libhash\"\nversion = \"0.4.0\"\n\n[[dependencies]]\nname = \"libcore\"\npath = \"../libcore\"\n");
+    p.write(
+        "libhash/dowel.build",
+        r#"
+[lib.hash]
+sources = glob("src/*.c")
+
+[lib.hash.public]
+includes = [dir("include")]
+abi      = "c"
+deps     = [dep("libcore")]
+"#,
+    );
+    p.write("libcore/dowel.toml", "[package]\nname    = \"libcore\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "libcore/dowel.build",
+        "[lib.core]\nsources = glob(\"src/*.c\")\n\n[lib.core.public]\nabi = \"gnu11\"\n",
+    );
+    p.write("libcore/src/core.c", "int core(void) { return 7; }\n");
+
+    let r = p.run("cxxtool", &["build"]);
+    r.failure();
+    r.stderr_contains("abi-mismatch");
+}
