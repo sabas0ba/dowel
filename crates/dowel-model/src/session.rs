@@ -213,6 +213,7 @@ impl Session {
             build_file: None,
             deps: Vec::new(),
             features: BTreeMap::new(),
+            exclusive: Vec::new(),
             features_site: None,
             targets: Vec::new(),
             targets_site: None,
@@ -376,6 +377,65 @@ impl Session {
             }
         }
         self.check_forwarded_features();
+        self.check_exclusive_features();
+    }
+
+    /// 排他の宣言（`[features] exclusive`）が守られているか（issue #82）。
+    ///
+    /// 機能は加算である——`--features=x11` は `default` を落とさない。これは
+    /// 規約として正しいが、実装の択一を条件付きの `sources` で書くと真正面から
+    /// ぶつかる。両方立つと両方翻訳され、`bin` ならリンカの `multiple definition`、
+    /// `lib` なら**組み上がって片方が黙って勝つ**。後者は成果物だけが違うものに
+    /// なり、どちらが入ったかはリンカの解決順という記録の外のものが決める。
+    ///
+    /// 排他は推測しない。宣言されたものだけを見る。同じ記号を2つのファイルが
+    /// 定義していることは、ここからは見えない。
+    fn check_exclusive_features(&mut self) {
+        let mut diags = Vec::new();
+        for pkg in &self.packages {
+            let Some(active) = self.active.get(&pkg.id) else { continue };
+            for (group, site) in &pkg.exclusive {
+                let on: Vec<&String> = group.iter().filter(|f| active.contains(*f)).collect();
+                if on.len() < 2 {
+                    continue;
+                }
+                let named = on.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(" and ");
+                let mut d = Diagnostic::error(
+                    "conflicting-features",
+                    format!("{named} cannot be enabled at the same time"),
+                )
+                .at(site.file, site.span, "declared exclusive here");
+                for line in self.why_active(pkg, &on) {
+                    d = d.note(line);
+                }
+                diags.push(d.note("enable exactly one of them"));
+            }
+        }
+        self.diagnostics.append(&mut diags);
+    }
+
+    /// なぜその機能が立っているのか。忘れやすいのは `default` の側である。
+    fn why_active(&self, pkg: &Package, names: &[&String]) -> Vec<String> {
+        let requested: Vec<String> =
+            self.requested_features.get(&pkg.root).into_iter().flatten().cloned().collect();
+        let by_default = package::resolve(pkg, &[], self.features.default).own;
+        let by_request = package::resolve(pkg, &requested, false).own;
+        let is_root = pkg.root == self.root;
+        let mut out = Vec::new();
+        for name in names {
+            if by_default.contains(*name) {
+                out.push(format!(
+                    "`{name}` comes from `default`; `--no-default-features` drops it"
+                ));
+            } else if by_request.contains(*name) {
+                out.push(if is_root {
+                    format!("`{name}` was requested with `--features`")
+                } else {
+                    format!("`{name}` was enabled by a `{}/{name}` forward", pkg.name)
+                });
+            }
+        }
+        out
     }
 
     /// 転送先がその機能を宣言しているか確かめる。

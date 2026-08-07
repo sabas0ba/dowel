@@ -24,6 +24,9 @@ pub struct Package {
     pub features: BTreeMap<String, Vec<String>>,
     /// `[features]` の見出し。宣言されていない名前を指す診断が参照する
     pub features_site: Option<Site>,
+    /// 同時に立ててはならない機能の組（`[features] exclusive`、issue #82）。
+    /// 宣言の位置つき。機能は加算のままで、排他は**宣言された制約**である
+    pub exclusive: Vec<(Vec<String>, Site)>,
     /// `[package] targets`。この木が対象とするトリプル（issue #71）。
     /// 空は「宣言なし」であり、どのトリプルでも組める
     pub targets: Vec<String>,
@@ -180,6 +183,7 @@ pub fn from_document(
         deps: Vec::new(),
         features: BTreeMap::new(),
         features_site: None,
+        exclusive: Vec::new(),
         targets: Vec::new(),
         targets_site: None,
         toolchain: ToolchainDecl::default(),
@@ -315,6 +319,12 @@ pub fn from_document(
         pkg.features_site = Some(t.site);
         for e in &t.entries {
             let name = e.key.join(".");
+            // `exclusive` は機能名ではなく制約の宣言である。`default` と同じく
+            // この表の予約キーとして扱う（issue #82）。
+            if name == EXCLUSIVE {
+                read_exclusive(&mut pkg, e, diags);
+                continue;
+            }
             let mut enables = Vec::new();
             match e.value.as_list() {
                 Some(items) => {
@@ -334,6 +344,7 @@ pub fn from_document(
             }
             pkg.features.insert(name, enables);
         }
+        check_exclusive_names(&mut pkg, diags);
     }
 
     for t in doc.tables_under(&["dependencies"]) {
@@ -436,6 +447,72 @@ fn pinned_rev(t: &dowel_eval::Table) -> Result<String, Option<String>> {
         Ok(rev)
     } else {
         Err(Some(s.to_string()))
+    }
+}
+
+/// `[features]` の予約キー。機能名ではない。
+pub const EXCLUSIVE: &str = "exclusive";
+
+/// `exclusive = [["a", "b"], ...]` を読む。
+///
+/// 値は文字列の配列の配列である。1組は「同時に立ててはならない機能」であり、
+/// 2つ以上の名前を要する——1つだけの組は何も禁じない。
+fn read_exclusive(pkg: &mut Package, e: &dowel_eval::Entry, diags: &mut Vec<Diagnostic>) {
+    let Some(groups) = e.value.as_list() else {
+        type_err(diags, e.site, "features.exclusive", "an array of arrays of strings");
+        return;
+    };
+    for group in groups {
+        let Some(items) = group.as_list() else {
+            type_err(diags, e.site, "features.exclusive", "an array of arrays of strings");
+            continue;
+        };
+        let mut names = Vec::new();
+        for item in items {
+            match item.as_str() {
+                Some(s) => names.push(s.to_string()),
+                None => type_err(diags, e.site, "features.exclusive", "an array of strings"),
+            }
+        }
+        if names.len() < 2 {
+            diags.push(
+                Diagnostic::warning(
+                    "empty-exclusive-group",
+                    "an exclusive group needs at least two features",
+                )
+                .at(pkg.manifest_file, e.site.span, "this group forbids nothing")
+                .note("a group says which features cannot be enabled together"),
+            );
+            continue;
+        }
+        pkg.exclusive.push((names, e.site));
+    }
+}
+
+/// 排他の組が挙げる名前が、この表で宣言されているか。
+///
+/// 表を全て読んでから確かめる。`exclusive` が先に書かれていることがある。
+/// 宣言されていない名前を黙って受けると、その組は永久に成立せず、書いた人には
+/// 「排他にしたはずのものが効かない」としか見えない。
+fn check_exclusive_names(pkg: &mut Package, diags: &mut Vec<Diagnostic>) {
+    let declared: Vec<String> = pkg.features.keys().filter(|k| *k != "default").cloned().collect();
+    for (group, site) in &pkg.exclusive {
+        for name in group {
+            if pkg.features.contains_key(name) {
+                continue;
+            }
+            let mut d = Diagnostic::error("unknown-feature", format!("unknown feature `{name}`"))
+                .at(site.file, site.span, "named in an exclusive group")
+                .note(format!(
+                    "`[features]` declares: {}",
+                    if declared.is_empty() { "(none)".to_string() } else { declared.join(", ") }
+                ));
+            if let Some(c) = dowel_support::diag::closest(name, declared.iter().map(|s| s.as_str()))
+            {
+                d = d.note(format!("did you mean `{c}`?"));
+            }
+            diags.push(d);
+        }
     }
 }
 
@@ -597,6 +674,7 @@ mod tests {
             deps: Vec::new(),
             features: map,
             features_site: None,
+            exclusive: Vec::new(),
             targets: Vec::new(),
             targets_site: None,
             toolchain: ToolchainDecl::default(),

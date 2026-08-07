@@ -150,6 +150,16 @@ changes, only the speed.
   time would mix in the current file system — an unrecorded input
 - Merge rules belong to types: `union` / `append` / `error_on_conflict` /
   `must_equal` / `replace` / `max`
+- Features are additive, and exclusivity is **declared**
+  ([ADR-0021](adr/0021-exclusive-features.md)). `[features] exclusive`
+  takes sets of features that must not be active together; two or more of a
+  group active for a package is `conflicting-features`, naming them and
+  where each came from (`default` is the one that gets forgotten, so it is
+  called out with `--no-default-features`). Nothing is inferred — dowel
+  cannot see that two sources define the same symbol. Without it, choosing
+  an implementation with stacked `when`s compiles both: a `bin` fails with
+  the linker's `multiple definition`, and a `lib` **succeeds**, keeping
+  whichever archive member the linker reached first (issue #82)
 - `pkg.name` / `pkg.version` are package constants readable in value position
   ([ADR-0020](adr/0020-package-constants.md)). They are the only namespace
   that can appear as a value, and the only one refused as a `match`
@@ -526,7 +536,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (486 tests):
+Current breakdown (493 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -535,10 +545,10 @@ Current breakdown (486 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 110 |
+| `e2e` | compile real C and C++, run it, check the output | 117 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (57 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (59 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

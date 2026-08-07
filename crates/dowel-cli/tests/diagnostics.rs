@@ -332,6 +332,24 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "conflicting-features",
+        why: "`--features=x11` does not drop `default = [\"headless\"]`, and the two are declared exclusive",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[features]\ndefault   = [\"headless\"]\nheadless  = []\nx11       = []\nexclusive = [[\"headless\", \"x11\"]]\n",
+        )],
+        args: &["check", "--features=x11", "--message-format=json"],
+    },
+    Case {
+        code: "empty-exclusive-group",
+        why: "a group of one feature forbids nothing",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[features]\ndefault   = []\nx11       = []\nexclusive = [[\"x11\"]]\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "conflicting-dependency-source",
         why: "the dependency names both a path and a git repository",
         files: &[(
