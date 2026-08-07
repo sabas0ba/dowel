@@ -83,6 +83,7 @@ fn write_data<H: Hasher>(h: &mut H, d: &Data) {
             (10u8, pred_key(pred)).hash(h);
             write_value(h, inner);
         }
+        Data::PkgRef(name) => (12u8, name).hash(h),
         Data::Error => 11u8.hash(h),
     }
 }

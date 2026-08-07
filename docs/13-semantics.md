@@ -86,6 +86,14 @@ Specialization turns `Cfg<T>` values into `T` for one configuration:
 `dowel why` shows both sides: which arm was chosen, and what a false
 predicate dropped (`DOWEL_LOG=trace` logs each decision as it happens).
 
+`pkg.name` and `pkg.version` are filled in here too, and deliberately not
+during evaluation ([ADR-0020](adr/0020-package-constants.md)). Evaluation is
+per file and its result is stored keyed by that file's content, and a
+`dowel.build` does not change when its `dowel.toml`'s version does —
+substituting earlier would keep a stale version in the store. Specialization
+already runs per package, which is where the package a value belongs to is
+known.
+
 ## 4. Propagation and merging
 
 Each target's declared blocks combine with its dependencies' interfaces.

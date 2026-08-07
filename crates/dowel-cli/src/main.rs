@@ -492,9 +492,7 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
                 );
             }
         }
-        // 読み込みの段で解決した集合をそのまま使う。二重に求めると、
-        // 「読み込んだ依存」と「有効な機能」が食い違いうる。
-        cfg.features = sess.active_features().clone();
+        sess.configure(&mut cfg);
 
         // ツールチェーンはターゲットトリプルで選ぶ。`[runner.<triple>]` と
         // 同じ形である。宣言の無いトリプルはここで拒む。ホストのコンパイラで
@@ -851,6 +849,19 @@ fn schema_dump() -> String {
         w.begin_object();
         w.field_str("name", name);
         w.field_str("signature", sig);
+        w.field_str("doc", doc);
+        w.end_object();
+    }
+    w.end_array();
+
+    // パッケージの定数は構成ではない（ADR-0020）。値域も網羅性も持たず、
+    // `match` の被検査対象にもならない。同じ表に混ぜると、版でビルドを
+    // 分岐できると述べることになる。
+    w.key("pkg_constants").begin_array();
+    for (name, doc) in dowel_eval::config::PKG_CONSTANTS {
+        w.begin_object();
+        w.field_str("name", &format!("pkg.{name}"));
+        w.field_str("type", "Str");
         w.field_str("doc", doc);
         w.end_object();
     }

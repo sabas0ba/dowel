@@ -44,6 +44,17 @@ pub fn specialize(value: &Value, cfg: &Config) -> Option<Value> {
                 prov: chosen.prov.then(Origin::MatchArm(arm.pattern.display()), Some(arm.site)),
             })
         }
+        // パッケージの定数（ADR-0020）。ここで埋める——評価時に埋めると、
+        // ファイルの内容で鍵付けした保存に古い版が残る。
+        Data::PkgRef(name) => {
+            let v = cfg.pkg_constant(name)?;
+            log_trace!("  pkg.{name} = {v:?}");
+            Some(Value {
+                ty: crate::value::Type::Str,
+                data: Data::Str(v.to_string()),
+                ..value.clone()
+            })
+        }
         Data::List(items) => {
             let out: Vec<Value> = items.iter().filter_map(|v| specialize(v, cfg)).collect();
             Some(Value { ty: value.ty.concrete().clone(), data: Data::List(out), ..value.clone() })
@@ -152,5 +163,27 @@ mod tests {
         let out = specialize(&cond, &Config::host_default()).unwrap();
         assert!(!out.is_conditional());
         assert_eq!(out.ty, Type::Str);
+    }
+
+    #[test]
+    fn a_package_constant_is_filled_in_at_specialization() {
+        // ADR-0020。評価時ではなくここで埋める——評価の結果はファイルの内容で
+        // 鍵付けして保存されるが、`dowel.toml` の版が動いても `dowel.build` の
+        // 内容は変わらない。
+        let mut cfg = Config::host_default();
+        cfg.versions.insert("hashx".into(), "0.4.0".into());
+        let cfg = cfg.for_package("hashx");
+
+        let v = Value {
+            ty: Type::Str,
+            data: Data::PkgRef("version".into()),
+            prov: Prov::at(Origin::Literal, Site::new(FileId(0), Span::new(0, 3))),
+        };
+        let out = specialize(&v, &cfg).expect("the reference must resolve");
+        assert_eq!(out.data, Data::Str("0.4.0".into()));
+        assert_eq!(out.ty, Type::Str);
+
+        let name = Value { data: Data::PkgRef("name".into()), ..v.clone() };
+        assert_eq!(specialize(&name, &cfg).unwrap().data, Data::Str("hashx".into()));
     }
 }

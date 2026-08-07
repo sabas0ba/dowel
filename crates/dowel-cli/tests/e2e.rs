@@ -2954,3 +2954,145 @@ deps     = [dep("libcore")]
     r.failure();
     r.stderr_contains("abi-mismatch");
 }
+
+/// パッケージの定数（issue #80、ADR-0020）。
+///
+/// ライブラリの版は `dowel.toml` と公開する見出しの2か所にあり、一致は誰も
+/// 見ていなかった。`pkg.version` で1か所に戻す。
+fn versioned_project(name: &str, version: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", &format!("[package]\nname    = \"hashx\"\nversion = \"{version}\"\n"));
+    p.write(
+        "dowel.build",
+        r#"
+[bin.hashsum]
+sources = glob("src/*.c")
+
+[bin.hashsum.private]
+defines = { HASHX_VERSION = pkg.version, HASHX_NAME = pkg.name }
+"#,
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint main(void) { printf(\"%s %s\\n\", HASHX_NAME, HASHX_VERSION); return 0; }\n",
+    );
+    p
+}
+
+#[test]
+fn the_manifest_version_reaches_the_translation() {
+    let p = versioned_project("pkg-version", "0.4.0");
+    p.run(".", &["build"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/hashsum");
+    assert_eq!(run_artifact(&bin), "hashx 0.4.0\n");
+}
+
+#[test]
+fn moving_the_manifest_version_alone_is_noticed() {
+    // 版だけを動かす。ソースは1文字も変わらない。以前は無診断で通り、
+    // 成果物は古い版を答え続けていた。
+    let p = versioned_project("pkg-version-moved", "0.4.0");
+    p.run(".", &["build"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/hashsum");
+    assert_eq!(run_artifact(&bin), "hashx 0.4.0\n");
+
+    p.write("dowel.toml", "[package]\nname    = \"hashx\"\nversion = \"9.9.9\"\n");
+    p.run(".", &["build"]).success();
+    assert_eq!(run_artifact(&bin), "hashx 9.9.9\n", "the manifest version did not reach the build");
+}
+
+#[test]
+fn a_dependency_reads_its_own_version_not_the_root_package_s() {
+    // 定数はその値を宣言したパッケージのものである。機能と同じ扱い（ADR-0017）。
+    let p = Project::new("pkg-version-per-package");
+    p.write("liblog/dowel.toml", "[package]\nname    = \"liblog\"\nversion = \"2.1.0\"\n");
+    p.write(
+        "liblog/dowel.build",
+        r#"
+[lib.log]
+sources = glob("src/*.c")
+
+[lib.log.public]
+includes = [dir("include")]
+
+[lib.log.private]
+defines = { LOG_VERSION = pkg.version }
+"#,
+    );
+    p.write("liblog/include/log.h", "#pragma once\nconst char *log_version(void);\n");
+    p.write(
+        "liblog/src/log.c",
+        "#include \"log.h\"\nconst char *log_version(void) { return LOG_VERSION; }\n",
+    );
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"liblog\"\npath = \"../liblog\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        r#"
+[bin.app]
+sources = glob("src/*.c")
+
+[bin.app.private]
+deps    = [dep("liblog")]
+defines = { APP_VERSION = pkg.version }
+"#,
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"log.h\"\nint main(void) { printf(\"app=%s log=%s\\n\", APP_VERSION, log_version()); return 0; }\n",
+    );
+
+    p.run("app", &["build"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "app=0.1.0 log=2.1.0\n");
+}
+
+#[test]
+fn an_unknown_package_constant_gets_a_suggestion() {
+    let p = versioned_project("pkg-typo", "0.1.0");
+    p.write(
+        "dowel.build",
+        "[bin.hashsum]\nsources = glob(\"src/*.c\")\n\n[bin.hashsum.private]\ndefines = { V = pkg.versoin }\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-pkg-constant");
+    r.stderr_contains("did you mean `version`?");
+}
+
+#[test]
+fn a_package_constant_is_not_a_configuration_key() {
+    // 版はビルドが分岐する軸ではない。受けると、そう述べることになる。
+    let p = versioned_project("pkg-not-cfg", "0.1.0");
+    p.write(
+        "dowel.build",
+        r#"
+[bin.hashsum]
+sources = glob("src/*.c")
+
+[bin.hashsum.private]
+defines = match pkg.version {
+    _ => { V = 1 },
+}
+"#,
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("not-a-configuration-key");
+    r.stderr_contains("value position");
+}
+
+#[test]
+fn a_configuration_reference_still_cannot_appear_in_a_value_position() {
+    // 値の位置に書けるようになったのは `pkg.*` だけである。
+    let p = versioned_project("pkg-only-value-position", "0.1.0");
+    p.write(
+        "dowel.build",
+        "[bin.hashsum]\nsources = glob(\"src/*.c\")\n\n[bin.hashsum.private]\ndefines = { V = cfg.opt }\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unexpected-reference");
+}
