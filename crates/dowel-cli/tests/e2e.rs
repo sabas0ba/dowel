@@ -3238,3 +3238,165 @@ sources = [
     let bin = build_dir(&p.path("."), "debug-shell--x11").join("bin/shell");
     assert_eq!(run_artifact(&bin), "x11\n");
 }
+
+/// `[test.<name>.cases]` — 1本の実行ファイルから複数のテストを登録する。
+///
+/// ctest の `add_test` に相当する。事例を分けるのは引数であり、翻訳の単位は
+/// 増えない。
+fn case_project(name: &str, cases: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"suite\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        &format!("[test.suite]\nsources = glob(\"tests/*.c\")\n\n[test.suite.cases]\n{cases}"),
+    );
+    // 第1引数で振る舞いを変える。`fail` は非零、`hang` は終わらない。
+    p.write(
+        "tests/suite.c",
+        r#"#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+    const char *what = argc > 1 ? argv[1] : "ok";
+    if (strcmp(what, "fail") == 0) { return 3; }
+    if (strcmp(what, "hang") == 0) { for (;;) { } }
+    if (strcmp(what, "env") == 0) {
+        const char *v = getenv("SUITE_MODE");
+        printf("mode=%s\n", v ? v : "(unset)");
+        return v && strcmp(v, "strict") == 0 ? 0 : 1;
+    }
+    printf("ran %s\n", what);
+    return 0;
+}
+"#,
+    );
+    p
+}
+
+#[test]
+fn one_binary_registers_several_tests() {
+    let p = case_project(
+        "cases-basic",
+        "parse = { args = [\"parse\"] }\nemit  = { args = [\"emit\"] }\n",
+    );
+    let r = p.run(".", &["test"]);
+    r.success();
+    // 事例ごとに1行。ラベルは `<ターゲット>/<事例>`。
+    r.stderr_contains("suite:suite/parse ... ok");
+    r.stderr_contains("suite:suite/emit ... ok");
+    r.stderr_contains("running 2 tests");
+}
+
+#[test]
+fn a_target_without_cases_is_still_one_test() {
+    // 宣言しない木は今までどおり。
+    let p = case_project("cases-absent", "");
+    p.write("dowel.build", "[test.suite]\nsources = glob(\"tests/*.c\")\n");
+    let r = p.run(".", &["test"]);
+    r.success();
+    r.stderr_contains("suite:suite ... ok");
+    r.stderr_contains("running 1 test");
+}
+
+#[test]
+fn a_case_can_expect_a_nonzero_exit() {
+    let p =
+        case_project("cases-should-fail", "rejects = { args = [\"fail\"], should_fail = true }\n");
+    p.run(".", &["test"]).success().stderr_contains("suite:suite/rejects ... ok");
+}
+
+#[test]
+fn a_should_fail_case_that_succeeds_is_a_failure_and_says_why() {
+    // 「状態0で終了した」だけでは、なぜ失敗なのか読めない。期待の側を述べる。
+    let p = case_project(
+        "cases-should-fail-passed",
+        "rejects = { args = [\"ok\"], should_fail = true }\n",
+    );
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("`should_fail` expects a nonzero exit");
+}
+
+#[test]
+fn a_case_that_does_not_finish_is_killed_and_reported() {
+    let p = case_project("cases-timeout", "slow = { args = [\"hang\"], timeout = 1 }\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("suite:suite/slow ... FAILED");
+    r.stderr_contains("timed out");
+}
+
+#[test]
+fn a_case_can_set_its_own_environment() {
+    let p = case_project(
+        "cases-env",
+        "strict = { args = [\"env\"], env = { SUITE_MODE = \"strict\" } }\n",
+    );
+    p.run(".", &["test"]).success().stderr_contains("suite:suite/strict ... ok");
+}
+
+#[test]
+fn labels_select_which_cases_run() {
+    let p = case_project(
+        "cases-labels",
+        "quick = { args = [\"quick\"], labels = [\"fast\"] }\n\
+         heavy = { args = [\"heavy\"], labels = [\"slow\"] }\n",
+    );
+    let r = p.run(".", &["test", "--label=fast"]);
+    r.success();
+    r.stderr_contains("running 1 test");
+    r.stderr_contains("suite:suite/quick");
+    assert!(!r.stderr.contains("suite:suite/heavy"), "the slow case ran anyway\n{r}");
+
+    // 誰も名乗っていない名前は、黙って0件成功にせず理由を述べる。
+    let r = p.run(".", &["test", "--label=nosuch"]);
+    r.success();
+    r.stderr_contains("no test carries `nosuch`");
+}
+
+#[test]
+fn rerunning_only_the_failures_works_at_case_granularity() {
+    let p = case_project(
+        "cases-failed",
+        "good = { args = [\"good\"] }\nbad  = { args = [\"fail\"] }\n",
+    );
+    p.run(".", &["test"]).failure();
+    let r = p.run(".", &["test", "--failed"]);
+    r.failure();
+    r.stderr_contains("running 1 test");
+    r.stderr_contains("suite:suite/bad");
+    assert!(!r.stderr.contains("suite:suite/good"), "a passing case was rerun\n{r}");
+}
+
+#[test]
+fn a_case_result_is_machine_readable() {
+    let p = case_project("cases-json", "slow = { args = [\"hang\"], timeout = 1 }\n");
+    let r = p.run(".", &["test", "--message-format=json"]);
+    r.failure();
+    r.stdout_contains("\"target\":\"suite:suite/slow\"");
+    r.stdout_contains("\"timed_out\":true");
+}
+
+#[test]
+fn cases_on_a_non_test_target_are_refused() {
+    let p = Project::new("cases-wrong-kind");
+    p.write("dowel.toml", "[package]\nname    = \"p\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.cases]\none = { args = [] }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-block");
+    r.stderr_contains("only `test` targets register cases");
+}
+
+#[test]
+fn an_unknown_case_property_gets_a_suggestion() {
+    let p = case_project("cases-typo", "one = { timout = 5 }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-property");
+    r.stderr_contains("did you mean `timeout`?");
+}

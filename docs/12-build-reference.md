@@ -188,6 +188,45 @@ script. Interpreting a tool's output inside dowel (a `max_flash = ...`
 declaration) needs a decision about per-tool output formats and is not part
 of this.
 
+### `[test.<name>.cases]` — registering several tests from one binary
+
+A `test` target runs its binary once and is judged by exit status. Declaring
+cases registers **several invocations of that same binary**, each reported
+and selected on its own ([ADR-0022](adr/0022-test-cases.md)).
+
+```toml
+[test.suite]
+sources = glob("tests/*.c")
+
+[test.suite.cases]
+parse   = { args = ["parse"], timeout = 10 }
+emit    = { args = ["emit"], labels = ["slow"] }
+rejects = { args = ["bad"], should_fail = true }
+strict  = { args = ["check"], env = { SUITE_MODE = "strict" } }
+```
+
+| Key | Type | Behavior |
+|---|---|---|
+| `args` | `List<Str>` | appended to the launch command. This is what distinguishes one case from another; a case with no `args` runs the binary bare |
+| `env` | `Map<Ident, Str>` | environment variables set for this case only |
+| `timeout` | `Int` | seconds. The case is killed and reported as timed out, whatever exit status the kill produced. Without it, dowel waits |
+| `should_fail` | `Bool` | the case passes on a nonzero exit. Exiting 0 fails, and says that `should_fail` expected otherwise |
+| `labels` | `List<Str>` | names this case answers to; `dowel test --label <name>` selects by them |
+
+- The case's name is the key. Its label is `<package>:<target>/<case>`, which
+  is what the summary, `--message-format=json`, and `--failed` use
+- A target with **no** `cases` block is one test named after the target —
+  the behavior that existed before, unchanged
+- A case adds no translation unit. To compile something else, write another
+  `[test.<name>]`
+- Values are ordinary manifest values, so `match` / `when` apply. A timeout
+  that differs per configuration is the case that needs it: the same test
+  under an emulator is slower than on the host
+- No test harness is imposed. dowel never asks the binary what cases it
+  contains — which framework the tests use stays the project's decision.
+  A suite with many functions is registered per *group*, passing the
+  framework's own filter in `args`
+
 ### `[runner.<triple>]` — execution wrappers
 
 Runners launch cross-compiled test artifacts

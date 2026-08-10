@@ -296,6 +296,60 @@ pub fn inspection_props() -> Vec<PropDef> {
     ]
 }
 
+/// `[test.<name>.cases]` の1項目に置けるプロパティ（issue から、ctest 相当）。
+///
+/// 1つの実行ファイルから複数のテストを登録する。鍵が事例の名前になり、
+/// 値がこの表を取る。
+///
+/// ```toml
+/// [test.suite.cases]
+/// parse = { args = ["parse"], timeout = 10 }
+/// emit  = { args = ["emit"], should_fail = true, labels = ["slow"] }
+/// ```
+///
+/// `sources` も `deps` も置けない。事例は**同じ実行ファイルの別の起動**で
+/// あって、別のターゲットではない。翻訳の単位を増やしたければ `[test.<name>]`
+/// をもう1つ書く。
+pub fn case_props() -> Vec<PropDef> {
+    vec![
+        PropDef {
+            name: "args",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments passed to the test binary; this is what distinguishes one case from another",
+            domain: None,
+        },
+        PropDef {
+            name: "env",
+            ty: Type::Map(Box::new(Type::Str)),
+            merge: Merge::ErrorOnConflict,
+            doc: "environment variables set for this case only",
+            domain: None,
+        },
+        PropDef {
+            name: "timeout",
+            ty: Type::Int,
+            merge: Merge::Replace,
+            doc: "seconds after which the case is killed and reported as timed out",
+            domain: None,
+        },
+        PropDef {
+            name: "should_fail",
+            ty: Type::Bool,
+            merge: Merge::Replace,
+            doc: "the case passes when the binary exits nonzero, and fails when it exits 0",
+            domain: None,
+        },
+        PropDef {
+            name: "labels",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "names this case answers to; `dowel test --label <name>` selects by them",
+            domain: None,
+        },
+    ]
+}
+
 /// `public` / `private` ブロックに置けるプロパティ。
 ///
 /// 両ブロックで同じ集合とする。伝播するか否かはブロックが決めるのであって

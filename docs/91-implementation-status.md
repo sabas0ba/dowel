@@ -358,10 +358,21 @@ changes, only the speed.
   If the triple differs from the host and no runner is declared, launch is
   refused with a diagnostic beforehand — afterward it would surface as
   `Exec format error`, reporting a configuration mistake as a test failure
-- `dowel test` — launches test targets and judges pass/fail by exit status.
+- `dowel test` — launches tests and judges pass/fail by exit status.
   There is no test harness; the C convention ("exit status 0 means success")
   applies. The working directory is the package root. Only failing tests'
   output is shown
+  - `[test.<name>.cases]` registers several tests from one binary
+    ([ADR-0022](adr/0022-test-cases.md)): `args` distinguish them, and each
+    carries its own `env`, `timeout`, `should_fail`, and `labels`. A case's
+    label is `<package>:<target>/<case>`, and selection (`--label`,
+    `--failed`) and reporting operate on cases. A target with no cases is one
+    test, unchanged. Nothing is imposed on the binary — dowel never asks it
+    what cases it contains, so which C test framework a project uses stays
+    the project's decision
+  - `timeout` polls `try_wait`; the standard library has no wait with a
+    deadline and the core takes no dependencies. The kill reaches the test
+    process only, so a test that spawns grandchildren leaks them
   - `--fail-fast` stops at the first failure. The default keeps going (the
     full picture matters); when cut short, the summary reports how many were
     not run
@@ -536,7 +547,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (493 tests):
+Current breakdown (504 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -545,7 +556,7 @@ Current breakdown (493 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 117 |
+| `e2e` | compile real C and C++, run it, check the output | 128 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (59 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

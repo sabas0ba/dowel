@@ -192,8 +192,17 @@ Builds the `test` targets, runs them, and judges pass/fail by exit status
 working directory is the package root. By default only the output of failing
 tests is shown.
 
+A target may register several tests from one binary with
+`[test.<name>.cases]` ([12-build-reference.md](12-build-reference.md),
+[ADR-0022](adr/0022-test-cases.md)), each with its own arguments,
+environment, timeout, expected verdict, and labels. Every option below then
+operates on **cases**, not targets: a case's label is
+`<package>:<target>/<case>`. A target with no cases is one test named after
+the target.
+
 | Option | Values | Default | Meaning |
 |---|---|---|---|
+| `--label <a,b>` | names | — | run only tests carrying one of these labels (declared in `[test.<name>.cases]`). Naming a label nobody carries reports that, rather than passing with zero tests |
 | `--no-run` | — | — | build only; do not run |
 | `--nocapture` | — | — | pass test output through |
 | `--fail-fast` | — | keep going | stop at the first failure; the summary reports how many were not run |
@@ -206,7 +215,11 @@ tests is shown.
   declared runner (`[runner.<triple>]` in
   [12-build-reference.md](12-build-reference.md)). If no runner is declared,
   the launch is refused with a diagnostic beforehand
-- `--message-format=json` emits one result per line on stdout
+- A case with a `timeout` is killed when it expires and reported as timed
+  out, whatever exit status the kill produced. The kill reaches the test
+  process only — a test that spawns grandchildren leaks them
+- `--message-format=json` emits one result per line on stdout, including
+  `timed_out`
 
 ## `dowel inspect`
 

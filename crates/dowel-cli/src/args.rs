@@ -70,6 +70,7 @@ build options:
         --no-compdb          Do not write compile_commands.json
 
 test options:
+        --label <a,b>        Run only tests carrying one of these labels
         --no-run             Build the test targets but do not run them
         --nocapture          Let test output through instead of capturing it
         --fail-fast          Stop at the first failing test
@@ -184,6 +185,8 @@ pub struct Options {
     pub nocapture: bool,
     pub fail_fast: bool,
     pub only_failed: bool,
+    /// `--label`。宣言された名前で事例を選ぶ
+    pub labels: Option<Vec<String>>,
     pub test_jobs: Option<usize>,
     pub graph_kind: GraphKind,
     pub out_format: OutFormat,
@@ -214,6 +217,7 @@ impl Default for Options {
             nocapture: false,
             fail_fast: false,
             only_failed: false,
+            labels: None,
             test_jobs: None,
             graph_kind: GraphKind::Target,
             out_format: OutFormat::Text,
@@ -340,6 +344,10 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     Some(v.parse().map_err(|_| format!("`--jobs` must be a number (got `{v}`)"))?);
             }
             "--no-compdb" => opts.compdb = false,
+            "--label" => {
+                opts.labels =
+                    Some(take("--label")?.split(',').map(|s| s.trim().to_string()).collect())
+            }
             "--no-run" => opts.no_run = true,
             "--nocapture" => opts.nocapture = true,
             "--fail-fast" => opts.fail_fast = true,
@@ -388,6 +396,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--backend",
                     "--jobs",
                     "--no-compdb",
+                    "--label",
                     "--no-run",
                     "--nocapture",
                     "--fail-fast",

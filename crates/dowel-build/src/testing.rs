@@ -13,13 +13,22 @@
 //! 利用者向けの出力ではなく内部状態であり、行指向で足りる。
 
 use crate::plan::Plan;
+use dowel_eval::{Config, Data, Value};
 use dowel_model::{Session, TargetId};
 use dowel_support::{log_debug, log_trace};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// 時間切れを見張る間隔。
+///
+/// std には待ち時間つきの `wait` が無いため、`try_wait` を回す。10ms は
+/// 「テストの時間として誤差になる」側に倒した値であり、走らせている間の
+/// 起床回数は毎分6000回——1つのプロセスにとって無視できる。
+const POLL: Duration = Duration::from_millis(10);
 
 /// 成果物を起動するコマンドを組み立てる（docs/30-devexp.md 1節）。
 ///
@@ -222,6 +231,10 @@ pub struct Outcome {
     pub binary: PathBuf,
     /// プロセスを起動できなかった場合は `None`
     pub status: Option<i32>,
+    /// 時間切れで打ち切った。`status` は殺した結果であって、テストの答ではない
+    pub timed_out: bool,
+    /// 非零の終了を期待していた（`should_fail`）
+    pub should_fail: bool,
     pub passed: bool,
     pub duration_ms: u128,
     /// `capture` が真のときのみ中身を持つ
@@ -243,6 +256,14 @@ impl Outcome {
         if self.passed {
             return None;
         }
+        if self.timed_out {
+            return Some("timed out and was killed".to_string());
+        }
+        // 期待した失敗が起きなかった場合、「状態0で終了した」だけでは
+        // なぜ失敗なのか読めない。期待の側を述べる。
+        if self.should_fail && self.status == Some(0) {
+            return Some("exited with status 0, but `should_fail` expects a nonzero exit".into());
+        }
         Some(match (&self.launch_error, self.status) {
             (Some(e), _) => format!("could not start the test binary: {e}"),
             (None, Some(code)) => format!("exited with status {code}"),
@@ -257,60 +278,111 @@ impl Outcome {
 /// ようにするためである。`Session` は増分エンジンのメモ表を保持しており、
 /// スレッド間で共有できない。起動対象の決定は逐次に行い、スレッドは起動のみを担う。
 #[derive(Clone, Debug)]
-struct Job {
-    target: TargetId,
-    label: String,
+pub struct Job {
+    pub target: TargetId,
+    /// 表示と `--failed` の鍵。事例があれば `<パッケージ>:<ターゲット>/<事例>`
+    pub label: String,
     /// 計画に成果物が無い場合は `None`
-    binary: Option<PathBuf>,
-    cwd: PathBuf,
-    program: String,
-    args: Vec<String>,
+    pub binary: Option<PathBuf>,
+    pub cwd: PathBuf,
+    pub program: String,
+    pub args: Vec<String>,
+    /// この事例だけに設定する環境変数
+    pub env: Vec<(String, String)>,
+    /// 過ぎたら殺す。宣言が無ければ待ち続ける
+    pub timeout: Option<Duration>,
+    /// 非零の終了を期待する
+    pub should_fail: bool,
+    /// `--label` が引く名前
+    pub labels: Vec<String>,
     /// 起動前に走らせる転送コマンド。対象機がビルド機の
     /// ファイルシステムを見られない場合にのみ入る
-    transfer: Option<(String, Vec<String>)>,
+    pub transfer: Option<(String, Vec<String>)>,
 }
 
-fn plan_jobs(sess: &Session, plan: &Plan, launcher: &Launcher, targets: &[TargetId]) -> Vec<Job> {
-    targets
-        .iter()
-        .map(|&tid| {
-            let binary = plan.artifacts.get(&tid).cloned();
-            let (program, args) = match &binary {
-                Some(b) => launcher.command(b),
-                None => (String::new(), Vec::new()),
-            };
-            let transfer = binary.as_ref().and_then(|b| launcher.transfer_command(b));
-            Job {
-                target: tid,
-                label: sess.label(tid),
-                binary,
-                // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
-                // マニフェストに書いたものと同じ基準で解決されるようにする。
-                cwd: sess.package(sess.target(tid).package).root.clone(),
-                program,
-                args,
-                transfer,
-            }
-        })
-        .collect()
+/// 走らせるものを1つずつ数え上げる。
+///
+/// `[test.<name>.cases]` を宣言していないターゲットは、それ自身が1件である
+/// （従来の形）。宣言していれば、同じ実行ファイルを事例の数だけ起動する。
+///
+/// 具体化はここで行う。事例の引数や時間切れは構成で変えられる——
+/// クロスでだけ長い時間を許す、といった形が書ける。
+pub fn plan_jobs(
+    sess: &Session,
+    plan: &Plan,
+    launcher: &Launcher,
+    targets: &[TargetId],
+    cfg: &Config,
+) -> Vec<Job> {
+    let mut out = Vec::new();
+    for &tid in targets {
+        let binary = plan.artifacts.get(&tid).cloned();
+        let (program, base_args) = match &binary {
+            Some(b) => launcher.command(b),
+            None => (String::new(), Vec::new()),
+        };
+        let transfer = binary.as_ref().and_then(|b| launcher.transfer_command(b));
+        // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
+        // マニフェストに書いたものと同じ基準で解決されるようにする。
+        let cwd = sess.package(sess.target(tid).package).root.clone();
+        let cfg = cfg.for_package(&sess.package(sess.target(tid).package).name);
+        let base = Job {
+            target: tid,
+            label: sess.label(tid),
+            binary: binary.clone(),
+            cwd: cwd.clone(),
+            program: program.clone(),
+            args: base_args.clone(),
+            env: Vec::new(),
+            timeout: None,
+            should_fail: false,
+            labels: Vec::new(),
+            transfer: transfer.clone(),
+        };
+        let cases = &sess.target(tid).cases;
+        if cases.is_empty() {
+            out.push(base);
+            continue;
+        }
+        for case in cases {
+            let field =
+                |name: &str| case.fields.get(name).and_then(|v| dowel_eval::specialize(v, &cfg));
+            let mut job = base.clone();
+            job.label = format!("{}/{}", base.label, case.name);
+            job.args.extend(strings(field("args").as_ref()));
+            job.env = pairs(field("env").as_ref());
+            job.timeout = field("timeout").and_then(|v| match v.data {
+                Data::Int(n) if n > 0 => Some(Duration::from_secs(n as u64)),
+                _ => None,
+            });
+            job.should_fail =
+                matches!(field("should_fail").map(|v| v.data), Some(Data::Bool(true)));
+            job.labels = strings(field("labels").as_ref());
+            out.push(job);
+        }
+    }
+    out
+}
+
+fn strings(v: Option<&Value>) -> Vec<String> {
+    let Some(Data::List(items)) = v.map(|v| &v.data) else { return Vec::new() };
+    items.iter().filter_map(|i| i.as_str().map(|s| s.to_string())).collect()
+}
+
+fn pairs(v: Option<&Value>) -> Vec<(String, String)> {
+    let Some(Data::Map(map)) = v.map(|v| &v.data) else { return Vec::new() };
+    map.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()
 }
 
 /// 与えられたテストターゲットを起動する。
 ///
 /// 戻り値は要求順。`fail_fast` で打ち切った場合、起動しなかったものは含まれない。
 /// 呼び出し側は要求数との差から未実行の件数を得る。
-pub fn run(
-    sess: &Session,
-    plan: &Plan,
-    launcher: &Launcher,
-    targets: &[TargetId],
-    opts: &RunOptions,
-) -> Vec<Outcome> {
+pub fn run(planned: &[Job], opts: &RunOptions) -> Vec<Outcome> {
     let _phase = dowel_support::log::Phase::start("test");
-    let jobs = opts.jobs.max(1).min(targets.len().max(1));
-    log_debug!("running {} tests with {jobs} job(s)", targets.len());
-    let planned = plan_jobs(sess, plan, launcher, targets);
-    for j in &planned {
+    let jobs = opts.jobs.max(1).min(planned.len().max(1));
+    log_debug!("running {} tests with {jobs} job(s)", planned.len());
+    for j in planned {
         log_trace!(
             "  planned {}: {} (cwd {})",
             j.label,
@@ -324,7 +396,7 @@ pub fn run(
 
     if jobs == 1 {
         let mut out = Vec::new();
-        for job in &planned {
+        for job in planned {
             let outcome = run_one(job, opts.capture);
             let failed = !outcome.passed;
             out.push(outcome);
@@ -384,78 +456,137 @@ fn transfer(job: &Job) -> Result<(), String> {
 fn run_one(job: &Job, capture: bool) -> Outcome {
     let Job { target: tid, label, binary, cwd, program, args, .. } = job;
     let (label, cwd) = (label.clone(), cwd.clone());
+    // 失敗の作り方を1箇所に閉じる。欄が増えるたびに全ての早期戻りを直すと
+    // 抜けが出る。
+    let failed = |binary: PathBuf, why: String| Outcome {
+        target: *tid,
+        label: label.clone(),
+        binary,
+        status: None,
+        timed_out: false,
+        should_fail: job.should_fail,
+        passed: false,
+        duration_ms: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        launch_error: Some(why),
+    };
     let Some(binary) = binary.clone() else {
-        return Outcome {
-            target: *tid,
-            label,
-            binary: PathBuf::new(),
-            status: None,
-            passed: false,
-            duration_ms: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-            launch_error: Some("no artifact was planned for this target".into()),
-        };
+        return failed(PathBuf::new(), "no artifact was planned for this target".into());
     };
     let tid = *tid;
 
     if let Err(e) = transfer(job) {
-        return Outcome {
-            target: tid,
-            label,
-            binary,
-            status: None,
-            passed: false,
-            duration_ms: 0,
-            stdout: String::new(),
-            stderr: String::new(),
-            launch_error: Some(format!("could not transfer the artifact: {e}")),
-        };
+        return failed(binary, format!("could not transfer the artifact: {e}"));
     }
 
     log_debug!("running {label}");
     log_trace!("  {program} (cwd {})", cwd.display());
+    if let Some(t) = job.timeout {
+        log_trace!("  timeout {}s", t.as_secs());
+    }
 
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(&cwd);
+    for (k, v) in &job.env {
+        cmd.env(k, v);
+    }
     let start = Instant::now();
     let result = if capture {
-        cmd.output().map(|o| {
-            (
-                o.status,
-                String::from_utf8_lossy(&o.stdout).to_string(),
-                String::from_utf8_lossy(&o.stderr).to_string(),
-            )
-        })
+        capture_run(&mut cmd, job.timeout)
     } else {
-        cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-        cmd.status().map(|s| (s, String::new(), String::new()))
+        pass_through(&mut cmd, job.timeout)
     };
     let duration_ms = start.elapsed().as_millis();
 
     match result {
-        Ok((status, stdout, stderr)) => Outcome {
-            target: tid,
-            label,
-            binary,
-            status: status.code(),
-            passed: status.success(),
-            duration_ms,
-            stdout,
-            stderr,
-            launch_error: None,
-        },
-        Err(e) => Outcome {
-            target: tid,
-            label,
-            binary,
-            status: None,
-            passed: false,
-            duration_ms,
-            stdout: String::new(),
-            stderr: String::new(),
-            launch_error: Some(e.to_string()),
-        },
+        Ok((status, timed_out, stdout, stderr)) => {
+            // 時間切れは、終了状態が何であれ失敗である。殺した結果の状態は
+            // テストの答ではない。
+            let passed = if timed_out {
+                false
+            } else if job.should_fail {
+                !status.success()
+            } else {
+                status.success()
+            };
+            Outcome {
+                target: tid,
+                label,
+                binary,
+                status: status.code(),
+                timed_out,
+                should_fail: job.should_fail,
+                passed,
+                duration_ms,
+                stdout,
+                stderr,
+                launch_error: None,
+            }
+        }
+        Err(e) => Outcome { duration_ms, ..failed(binary, e.to_string()) },
+    }
+}
+
+/// 出力を捕まえて走らせる。
+///
+/// `Command::output` を使わないのは、時間切れを見張れないためである。
+/// パイプは別のスレッドで読む。読まずに待つと、子の書き込みがパイプの
+/// 緩衝を埋めた時点で両者が止まる。
+fn capture_run(
+    cmd: &mut Command,
+    timeout: Option<Duration>,
+) -> std::io::Result<(ExitStatus, bool, String, String)> {
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut out_pipe = child.stdout.take().expect("stdout was piped");
+    let mut err_pipe = child.stderr.take().expect("stderr was piped");
+    std::thread::scope(|scope| {
+        let out = scope.spawn(move || {
+            let mut s = Vec::new();
+            let _ = out_pipe.read_to_end(&mut s);
+            s
+        });
+        let err = scope.spawn(move || {
+            let mut s = Vec::new();
+            let _ = err_pipe.read_to_end(&mut s);
+            s
+        });
+        let waited = wait_until(&mut child, timeout);
+        // 殺した後もパイプは閉じるので、読み手は必ず終わる。
+        let stdout = String::from_utf8_lossy(&out.join().unwrap_or_default()).to_string();
+        let stderr = String::from_utf8_lossy(&err.join().unwrap_or_default()).to_string();
+        waited.map(|(s, t)| (s, t, stdout, stderr))
+    })
+}
+
+/// 出力を素通しして走らせる。読む相手がいないので、待つだけでよい。
+fn pass_through(
+    cmd: &mut Command,
+    timeout: Option<Duration>,
+) -> std::io::Result<(ExitStatus, bool, String, String)> {
+    let mut child = cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit()).spawn()?;
+    let (status, timed_out) = wait_until(&mut child, timeout)?;
+    Ok((status, timed_out, String::new(), String::new()))
+}
+
+/// 終了を待つ。`timeout` を過ぎたら殺す。
+///
+/// 殺すのは子だけである。孫は残る——`kill` は直接の子にしか届かない。
+/// プロセスグループごと殺すには std の外へ出る必要があり、そこまでは踏み込まない
+/// （docs/60-cli.md に明記する）。
+fn wait_until(child: &mut Child, timeout: Option<Duration>) -> std::io::Result<(ExitStatus, bool)> {
+    let Some(limit) = timeout else { return Ok((child.wait()?, false)) };
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok((status, false));
+        }
+        if start.elapsed() >= limit {
+            log_debug!("  timed out after {}s; killing", limit.as_secs());
+            let _ = child.kill();
+            return Ok((child.wait()?, true));
+        }
+        std::thread::sleep(POLL);
     }
 }
 
@@ -519,6 +650,8 @@ pub fn render_json(o: &Outcome) -> String {
     w.field_str("target", &o.label);
     w.field_str("binary", &o.binary.display().to_string());
     w.field_bool("passed", o.passed);
+    // 時間切れは終了状態からは読めない。殺した結果が入るだけである。
+    w.field_bool("timed_out", o.timed_out);
     match o.status {
         Some(c) => w.key("exit_status").i64(c as i64),
         None => w.key("exit_status").null(),
@@ -544,6 +677,8 @@ mod tests {
             label: "pkg:unit".into(),
             binary: PathBuf::from("/tmp/unit"),
             status,
+            timed_out: false,
+            should_fail: false,
             passed,
             duration_ms: 12,
             stdout: String::new(),
