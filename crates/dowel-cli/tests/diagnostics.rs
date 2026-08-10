@@ -332,6 +332,33 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "empty-block",
+        why: "a `cases` block with no case in it would silently be one bare run",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[test.t]\nsources = glob(\"src/*.c\")\n\n[test.t.cases]\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "invalid-name",
+        why: "`/` in a case name breaks the `<package>:<target>/<case>` label grammar",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[test.t]\nsources = glob(\"src/*.c\")\n\n[test.t.cases]\n\"a/b\" = { args = [] }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "invalid-value",
+        why: "`timeout = 0` silently means \"wait forever\", the opposite of what it says",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[test.t]\nsources = glob(\"src/*.c\")\n\n[test.t.cases]\nslow = { timeout = 0 }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "not-debuggable",
         why: "a library has nothing a debugger can start",
         files: &[(

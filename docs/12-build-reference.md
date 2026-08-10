@@ -214,14 +214,40 @@ strict  = { args = ["check"], env = { SUITE_MODE = "strict" } }
 | `labels` | `List<Str>` | names this case answers to; `dowel test --label <name>` selects by them |
 
 - The case's name is the key. Its label is `<package>:<target>/<case>`, which
-  is what the summary, `--message-format=json`, and `--failed` use
+  is what the summary, `--message-format=json`, `--failed`, and the command
+  line all read. A name containing `/` or whitespace, or an empty one, breaks
+  that grammar and is refused (`invalid-name`) — use `-` or `_` where a
+  separator is wanted (issue #97)
+- The **working directory is the package root**, the same as a target with no
+  cases. Fixed assets a test reads therefore resolve against the same base
+  the manifest wrote them against
+- `timeout` must be positive. `0` and negative values would silently mean
+  "wait forever", the opposite of what writing a timeout says
+  (`invalid-value`)
+- A `cases` block with no case in it is refused (`empty-block`). "No cases
+  block" and "a cases block that ended up empty" are different intentions,
+  and the second would otherwise become one bare run of the binary with no
+  arguments (issue #99)
 - A target with **no** `cases` block is one test named after the target —
   the behavior that existed before, unchanged
 - A case adds no translation unit. To compile something else, write another
   `[test.<name>]`
-- Values are ordinary manifest values, so `match` / `when` apply. A timeout
-  that differs per configuration is the case that needs it: the same test
-  under an emulator is slower than on the host
+- `match` / `when` apply both **inside** a case and **to the case itself**.
+  A timeout that differs per configuration is one use; the stronger one is a
+  case that must not exist at all for some target — one that only means
+  something on real hardware, or that an emulator cannot finish in a
+  realistic time (issue #92):
+
+  ```toml
+  [test.suite.cases]
+  onhw = { args = ["hw"] } when cfg.target == "thumbv7em-none-eabihf"
+  slow = { args = ["big"], labels = ["slow"] } when feature.long_tests
+  ```
+
+  Every arm is checked, not only the one the current configuration picks —
+  otherwise an error in another arm surfaces on the day the configuration
+  changes. A target whose cases all drop out runs nothing, which is not a
+  failure: it is what the manifest asked for
 - No test harness is imposed. dowel never asks the binary what cases it
   contains — which framework the tests use stays the project's decision.
   A suite with many functions is registered per *group*, passing the

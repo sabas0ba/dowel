@@ -63,8 +63,12 @@ pub struct HarnessDecl {
 pub struct CaseDecl {
     /// 事例の名前。ラベルは `<パッケージ>:<ターゲット>/<名前>` になる
     pub name: String,
-    /// `dowel_eval::schema::case_props` の名前 → 値
-    pub fields: std::collections::BTreeMap<String, Value>,
+    /// 事例そのもの。インライン表、あるいはそれを包む `match` / `when`。
+    ///
+    /// 具体化前の値を丸ごと持つ。事例の**存在**を構成で分けられるように
+    /// するためである（issue #92）——実機でしか意味を持たない事例、
+    /// エミュレータの下では終わらない事例は、値を変えるのではなく落としたい
+    pub value: Value,
     pub site: Site,
 }
 

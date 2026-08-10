@@ -911,7 +911,19 @@ impl TargetSink<'_> {
                             doc.file,
                             table.site.span,
                             "expected `[kind.name]` or `[kind.name.block]`",
-                        ),
+                        )
+                        .note(match table.path.get(2).map(|s| s.as_str()) {
+                            // 一段深く書いてしまう先は、項目を持つブロックである。
+                            // 「深すぎる」とだけ言われても、何が正しい形なのかは
+                            // 読み取れない（issue #98）。
+                            Some(CASES_BLOCK) | Some(ARTIFACTS_BLOCK) | Some(INSPECT_BLOCK) => {
+                                format!(
+                                    "the items of `{}` are inline tables inside it, not tables of their own: `<name> = {{ ... }}`",
+                                    table.path[2]
+                                )
+                            }
+                            _ => "propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)".to_string(),
+                        }),
                     );
                     continue;
                 }
@@ -993,11 +1005,34 @@ impl TargetSink<'_> {
             self.diagnostics.push(both_answer_what_the_cases_are(table.site));
             return;
         }
+        // 事例を書く意図があって1つも残らなかったのは、書かなかったのとは
+        // 別の状況である。0件の目標が黙って「引数なしで1回」になるより、
+        // 書き手に決めさせる（issue #99）。
+        if table.entries.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "empty-block",
+                    format!("`[{}]` declares no case", table.path.join(".")),
+                )
+                .at(table.site.file, table.site.span, "this block is empty")
+                .note("a target with no `cases` block is one test named after the target")
+                .note("remove the block, or add at least one case"),
+            );
+            return;
+        }
         let known = schema::case_props();
         let names: Vec<&str> = known.iter().map(|p| p.name).collect();
         for entry in &table.entries {
             let name = entry.key.join(".");
-            let Data::Map(fields) = &entry.value.data else {
+            if let Some(d) = invalid_case_name(&name, entry.site) {
+                self.diagnostics.push(d);
+                continue;
+            }
+            // 事例そのものが `match` / `when` を被っていてよい（issue #92）。
+            // 検証は条件の葉——実際に登録されうるインライン表——それぞれに対して
+            // 行う。条件は具体化まで解けないため、全ての枝が正しい必要がある。
+            let leaves = case_tables(&entry.value);
+            if leaves.is_empty() {
                 self.diagnostics.push(
                     Diagnostic::error(
                         "type-mismatch",
@@ -1007,45 +1042,67 @@ impl TargetSink<'_> {
                         ),
                     )
                     .at(entry.site.file, entry.site.span, "expected `{ args = [...], ... }`")
-                    .note("write for example `parse = { args = [\"parse\"], timeout = 10 }`"),
+                    .note("write for example `parse = { args = [\"parse\"], timeout = 10 }`")
+                    .note("a case may be wrapped in `match` / `when`, but every arm has to be an inline table"),
                 );
                 continue;
-            };
-            for (prop, value) in fields {
-                match known.iter().find(|p| p.name == prop) {
-                    Some(def) if !def.ty.accepts(&value.ty) => self.diagnostics.push(
-                        Diagnostic::error(
-                            "type-mismatch",
-                            format!(
-                                "`{prop}` is {} but {} was given",
-                                def.ty.display(),
-                                value.ty.display()
+            }
+            for fields in leaves {
+                for (prop, value) in fields {
+                    // 誤っている値そのものに下線を引く。事例全体を指すと、
+                    // どの鍵が悪いのか読み手が探すことになる（issue #101）。
+                    let site = value.prov.nearest_site().unwrap_or(entry.site);
+                    match known.iter().find(|p| p.name == prop) {
+                        Some(def) if !def.ty.accepts(&value.ty) => self.diagnostics.push(
+                            Diagnostic::error(
+                                "type-mismatch",
+                                format!(
+                                    "`{prop}` is {} but {} was given",
+                                    def.ty.display(),
+                                    value.ty.display()
+                                ),
+                            )
+                            .at(
+                                site.file,
+                                site.span,
+                                format!("this value has type {}", value.ty.display()),
                             ),
-                        )
-                        .at(
-                            entry.site.file,
-                            entry.site.span,
-                            format!("this value has type {}", value.ty.display()),
                         ),
-                    ),
-                    Some(_) => {}
-                    None => {
-                        let mut d = Diagnostic::error(
-                            "unknown-property",
-                            format!("unknown property `{prop}`"),
-                        )
-                        .at(entry.site.file, entry.site.span, "a case has no such property")
-                        .note(format!("a case accepts: {}", names.join(", ")));
-                        if let Some(c) = closest(prop, names.iter().copied()) {
-                            d = d.note(format!("did you mean `{c}`?"));
+                        // 0 と負は「待ち続ける」に落ちる。時間切れを書いた意図と
+                        // 正反対であり、黙って落ちる形が一番悪い（issue #96）。
+                        Some(def) if def.name == "timeout" => {
+                            if let Data::Int(n) = value.data {
+                                if n <= 0 {
+                                    self.diagnostics.push(
+                                        Diagnostic::error(
+                                            "invalid-value",
+                                            format!("`timeout = {n}` is not a duration"),
+                                        )
+                                        .at(site.file, site.span, "a timeout is a positive number of seconds")
+                                        .note("without a timeout dowel waits; writing 0 does not mean \"do not wait\""),
+                                    );
+                                }
+                            }
                         }
-                        self.diagnostics.push(d);
+                        Some(_) => {}
+                        None => {
+                            let mut d = Diagnostic::error(
+                                "unknown-property",
+                                format!("unknown property `{prop}`"),
+                            )
+                            .at(site.file, site.span, "a case has no such property")
+                            .note(format!("a case accepts: {}", names.join(", ")));
+                            if let Some(c) = closest(prop, names.iter().copied()) {
+                                d = d.note(format!("did you mean `{c}`?"));
+                            }
+                            self.diagnostics.push(d);
+                        }
                     }
                 }
             }
             self.targets[tid.0].cases.push(CaseDecl {
                 name,
-                fields: fields.clone(),
+                value: entry.value.clone(),
                 site: entry.site,
             });
         }
@@ -1708,4 +1765,41 @@ fn both_answer_what_the_cases_are(site: Site) -> Diagnostic {
         .at(site.file, site.span, "the other one is declared too")
         .note("both answer what the cases of this target are")
         .note("`cases` registers them in the manifest; `harness` asks the binary")
+}
+
+/// 事例の値から、登録されうるインライン表を全て取り出す。
+///
+/// 事例そのものは `match` / `when` を被っていてよい（issue #92）。条件は
+/// 具体化まで解けないので、検証は全ての枝に対して行う。1つも表が無ければ、
+/// この値は事例になりえない。
+fn case_tables(v: &Value) -> Vec<&std::collections::BTreeMap<String, Value>> {
+    match &v.data {
+        Data::Map(fields) => vec![fields],
+        Data::When { inner, .. } => case_tables(inner),
+        Data::Match { arms, .. } => arms.iter().flat_map(|a| case_tables(&a.value)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 事例の名前がラベルの文法を壊さないか（issue #97）。
+///
+/// ラベルは `<パッケージ>:<ターゲット>/<事例>` であり、要約・JSON・`--failed`・
+/// 位置引数がこれを識別子として読む。`/` は目標と事例の区切りであり、空白は
+/// 消費者の区切りであり、空名は目標の綴りと1文字しか違わない。
+fn invalid_case_name(name: &str, site: Site) -> Option<Diagnostic> {
+    let what = if name.is_empty() {
+        "a case needs a name".to_string()
+    } else if name.contains('/') {
+        "`/` separates the target from the case in `<package>:<target>/<case>`".to_string()
+    } else if name.chars().any(char::is_whitespace) {
+        "whitespace splits the label for anything that reads it by words".to_string()
+    } else {
+        return None;
+    };
+    Some(
+        Diagnostic::error("invalid-name", format!("`{name}` cannot be a case name"))
+            .at(site.file, site.span, what)
+            .note("the case's label is `<package>:<target>/<case>`, and it is what the summary, the JSON output, `--failed`, and the command line all read")
+            .note("use `-` or `_` where a separator is wanted"),
+    )
 }
