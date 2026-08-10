@@ -699,7 +699,7 @@ pub fn run(planned: &[Job], opts: &RunOptions) -> Vec<Outcome> {
 }
 
 /// 成果物を対象機へ転送する。失敗した理由をそのまま返す。
-fn transfer(job: &Job) -> Result<(), String> {
+pub(crate) fn transfer(job: &Job) -> Result<(), String> {
     let Some((program, args)) = &job.transfer else { return Ok(()) };
     log_debug!("transferring the artifact for {}", job.label());
     log_trace!("  {program} {}", args.join(" "));
@@ -788,7 +788,7 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
 /// `Command::output` を使わないのは、時間切れを見張れないためである。
 /// パイプは別のスレッドで読む。読まずに待つと、子の書き込みがパイプの
 /// 緩衝を埋めた時点で両者が止まる。
-fn capture_run(
+pub(crate) fn capture_run(
     cmd: &mut Command,
     timeout: Option<Duration>,
 ) -> std::io::Result<(ExitStatus, bool, String, String)> {

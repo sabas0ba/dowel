@@ -65,7 +65,7 @@ pub fn prepare(
     let target = sess.target(tid);
     // 書庫は起動できない。デバッガを書庫に向けるより、起動するものが無いと
     // 述べるほうがよい。
-    if !matches!(target.kind, TableKind::Bin | TableKind::Test) {
+    if !matches!(target.kind, TableKind::Bin | TableKind::Test | TableKind::Bench) {
         return Err(Diagnostic::error(
             "not-debuggable",
             format!(
@@ -75,7 +75,7 @@ pub fn prepare(
             ),
         )
         .at(target.site.file, target.site.span, "declared here")
-        .note("`bin` and `test` targets produce something a debugger can run"));
+        .note("`bin`, `test`, and `bench` targets produce something a debugger can run"));
     }
     let Some(program) = plan.artifacts.get(&tid).cloned() else {
         return Err(Diagnostic::error(

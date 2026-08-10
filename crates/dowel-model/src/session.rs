@@ -984,22 +984,21 @@ impl TargetSink<'_> {
         }
     }
 
-    /// `[test.<name>.cases]` を取り込む。
+    /// `[test.<name>.cases]` / `[bench.<name>.cases]` を取り込む。
     ///
-    /// 1本の実行ファイルから複数のテストを登録する。事例を分けるのは引数で
-    /// あり、翻訳の単位は増えない。`test` 以外の種別には意味が無い——
-    /// 走らせるものが `dowel test` にしか無いためで、黙って読み飛ばすと
-    /// 書いた宣言が記録の外に落ちる。
+    /// 1本の実行ファイルから複数のテスト（計測）を登録する。事例を分けるのは
+    /// 引数であり、翻訳の単位は増えない。走らせる種別以外には意味が無い——
+    /// 黙って読み飛ばすと、書いた宣言が記録の外に落ちる。
     fn declare_cases(&mut self, tid: TargetId, table: &dowel_eval::Table) {
-        if self.targets[tid.0].kind != schema::TableKind::Test {
-            let kind = self.targets[tid.0].kind.name();
+        let kind = self.targets[tid.0].kind;
+        if !matches!(kind, schema::TableKind::Test | schema::TableKind::Bench) {
             self.diagnostics.push(
                 Diagnostic::error(
                     "unknown-block",
-                    format!("`cases` has no meaning on a `{kind}` target"),
+                    format!("`cases` has no meaning on a `{}` target", kind.name()),
                 )
-                .at(table.site.file, table.site.span, "only `test` targets register cases")
-                .note("a case is another invocation of the same test binary; `dowel test` is what runs them"),
+                .at(table.site.file, table.site.span, "only `test` and `bench` targets register cases")
+                .note("a case is another invocation of the same binary; `dowel test` and `dowel bench` are what run them"),
             );
             return;
         }
@@ -1087,6 +1086,20 @@ impl TargetSink<'_> {
                                     );
                                 }
                             }
+                        }
+                        // 計測に判定は無い。`should_fail` を黙って無視すると、
+                        // 書いた宣言が「効いているように見えて効かない」。
+                        Some(def)
+                            if def.name == "should_fail" && kind == schema::TableKind::Bench =>
+                        {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "unknown-property",
+                                    "`should_fail` has no meaning in a bench case".to_string(),
+                                )
+                                .at(site.file, site.span, "a benchmark is measured, not judged")
+                                .note("a bench case fails when a run exits nonzero; there is no verdict to invert"),
+                            );
                         }
                         Some(_) => {}
                         None => {

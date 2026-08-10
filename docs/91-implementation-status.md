@@ -379,6 +379,16 @@ changes, only the speed.
   composes with `--dap`, which then carries the case's arguments and
   environment. The verdict record is not updated — a debugger session is
   interactive, not a judgment
+- `dowel bench` — builds `bench` targets and measures whole-process
+  wall-clock time, min/median over `--iterations` runs (default 10;
+  [ADR-0025](adr/0025-bench-wall-clock.md)). No framework is imposed and
+  none is read — there is no C convention for measurement output.
+  `[bench.<name>.cases]` reuses the test-case shape minus `should_fail`
+  (a benchmark is measured, not judged; the property is refused). Always
+  sequential — parallel measurements are each other's noise. Speed has no
+  verdict: a failure is a run that could not be completed, and a failed
+  measurement reports no numbers at all. JSON (`bench-result`) carries
+  times as integer microseconds
 - `dowel test` — launches tests and judges pass/fail by exit status.
   There is no test harness; the C convention ("exit status 0 means success")
   applies. The working directory is the package root unless a case declares
@@ -617,16 +627,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (559 tests):
+Current breakdown (569 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 304 |
+| `unit-*` | per-crate unit tests | 308 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 171 |
+| `e2e` | compile real C and C++, run it, check the output | 177 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (65 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -696,7 +706,7 @@ cannot be measured with the current fixtures; the scale fixture
 | mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
 | the probe-fact DB | Phase 2 |
-| the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
+| the `template` / `toolchain` kinds | Phase 4 |
 | Meson `introspect` import | Phase 3 backlog; CMake File API import and `migrate verify` are implemented |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |

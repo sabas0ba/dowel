@@ -327,7 +327,7 @@ pub fn plan(
                 producer.insert(tid, id);
                 plan.artifacts.insert(tid, out);
             }
-            TableKind::Bin | TableKind::Test => {
+            TableKind::Bin | TableKind::Test | TableKind::Bench => {
                 let out = build_dir.join("bin").join(&target.name);
                 // リンク閉包のどこかに C++ の翻訳単位があれば、リンクは C++ の
                 // driver で行う。C の driver では C++ 標準ライブラリが付かず、

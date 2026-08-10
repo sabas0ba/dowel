@@ -315,6 +315,42 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             }
         }
 
+        Command::Bench { targets } => {
+            let backend = building_backend(opts, "dowel bench")?;
+            let requested = runnable_targets(&sess, targets, dowel_eval::schema::TableKind::Bench)?;
+            // 測るものが1つも無い木は、誤りではない。宣言が無いだけである。
+            if requested.targets.is_empty() {
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+                eprintln!("no bench targets. declare one with `[bench.<name>]` in dowel.build");
+                return Ok(ExitCode::SUCCESS);
+            }
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested.targets, &*backend)? else {
+                return Ok(ExitCode::FAILURE);
+            };
+            // 計測は必ず走らせる。クロスでランナーが無ければここで断る。
+            let (launcher, runner_diags) = testing::Launcher::for_config(&sess, &cfg);
+            if !runner_diags.is_empty() {
+                sess.diagnostics.extend(runner_diags);
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+            }
+            // ベンチにハーネスは無いので、数え上げに外部プロセスは走らない。
+            let mut jobs = testing::plan_jobs(&sess, &p, &launcher, &requested.targets, &cfg);
+            if !requested.cases.is_empty() {
+                jobs.retain(|j| requested.cases.contains(&j.label()));
+                if jobs.is_empty() {
+                    eprintln!("error: nothing matched the requested benchmarks");
+                    return Ok(ExitCode::FAILURE);
+                }
+            }
+            let iterations = opts.iterations.unwrap_or(dowel_build::bench::DEFAULT_ITERATIONS);
+            let results = dowel_build::bench::measure(&jobs, iterations);
+            Ok(report_bench(&results, opts))
+        }
+
         Command::Test { targets } => {
             let backend = building_backend(opts, "dowel test")?;
             let requested = test_targets(&sess, targets)?;
@@ -560,6 +596,48 @@ fn report_tests(outcomes: &[testing::Outcome], requested: usize, opts: &Options)
     exit_code(failed > 0)
 }
 
+/// 計測の報告。数字に合否は無い——失敗と呼ぶのは走らせられなかったことだけ
+/// （ADR-0025）。
+fn report_bench(results: &[dowel_build::bench::Measurement], opts: &Options) -> ExitCode {
+    if opts.message_format == MessageFormat::Json {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        for m in results {
+            let _ = writeln!(out, "{}", dowel_build::bench::render_json(m));
+        }
+    }
+
+    let n = results.len();
+    eprintln!("measuring {} benchmark{}", n, if n == 1 { "" } else { "s" });
+    for m in results {
+        eprintln!("{}", m.summary_line());
+    }
+    let failed: Vec<_> = results.iter().filter(|m| m.failure.is_some()).collect();
+    if !failed.is_empty() {
+        eprintln!(
+            "
+failures:"
+        );
+        for m in &failed {
+            eprintln!(
+                "
+---- {} ----",
+                m.label()
+            );
+            if let Some(why) = &m.failure {
+                eprintln!("{why}");
+            }
+        }
+        eprintln!(
+            "
+bench result: FAILED. {} of {n} could not be measured",
+            failed.len()
+        );
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
 /// 構成を組み立てる。機能フラグは根のパッケージの `[features]` から解決する。
 ///
 /// `--features` に渡された名前も `[features]` の宣言に照らす。オプション解析の
@@ -656,7 +734,7 @@ fn default_targets(
     let out: Vec<_> = sess
         .targets
         .iter()
-        .filter(|t| matches!(t.kind, TableKind::Bin | TableKind::Test))
+        .filter(|t| matches!(t.kind, TableKind::Bin | TableKind::Test | TableKind::Bench))
         .map(|t| t.id)
         .collect();
     if out.is_empty() {
@@ -953,15 +1031,18 @@ struct Requested {
 }
 
 fn test_targets(sess: &Session, requested: &[String]) -> Result<Requested, String> {
-    use dowel_eval::schema::TableKind;
+    runnable_targets(sess, requested, dowel_eval::schema::TableKind::Test)
+}
+
+/// `test` と `bench` に共通の、目標と事例の数え上げ。
+fn runnable_targets(
+    sess: &Session,
+    requested: &[String],
+    kind: dowel_eval::schema::TableKind,
+) -> Result<Requested, String> {
     if requested.is_empty() {
         return Ok(Requested {
-            targets: sess
-                .targets
-                .iter()
-                .filter(|t| t.kind == TableKind::Test)
-                .map(|t| t.id)
-                .collect(),
+            targets: sess.targets.iter().filter(|t| t.kind == kind).map(|t| t.id).collect(),
             cases: std::collections::BTreeSet::new(),
         });
     }
@@ -975,9 +1056,14 @@ fn test_targets(sess: &Session, requested: &[String]) -> Result<Requested, Strin
         };
         let id = sess.find_target(target_ref)?;
         let t = sess.target(id);
-        // 明示指定が test 以外なら、黙って走らせずに断る。
-        if t.kind != TableKind::Test {
-            return Err(format!("`{}` is a {} target, not a test", sess.label(id), t.kind.name()));
+        // 明示指定が種別違いなら、黙って走らせずに断る。
+        if t.kind != kind {
+            return Err(format!(
+                "`{}` is a {} target, not a {}",
+                sess.label(id),
+                t.kind.name(),
+                kind.name()
+            ));
         }
         if let Some(case) = case {
             cases.insert(format!("{}/{case}", sess.label(id)));

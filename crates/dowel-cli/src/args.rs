@@ -22,8 +22,9 @@ Commands:
     add <path>         Create a lib package in a subdirectory and declare it as a path dependency.
                        With --git <url>, declare a pinned git dependency instead.
     check              Evaluate the manifests and report diagnostics. Does not build.
-    build [target]     Build. With no target, builds every bin and test.
+    build [target]     Build. With no target, builds every bin, test, and bench.
     test [target]      Build and run test targets. With no target, runs every test.
+    bench [target]     Build bench targets and measure their wall-clock time.
     inspect [target]   Build, then run the tools declared in [<kind>.<name>.inspect] and
                        show what they report. With no target, inspects everything declared.
     why <target> <property>
@@ -79,6 +80,9 @@ test options:
         --debug-failed       Open the failing test under the debugger instead
         --test-jobs <n>      Run this many tests at once (default: 1)
 
+bench options:
+        --iterations <n>     Runs per benchmark (default: 10); min and median are reported
+
 graph options:
         --kind <kind>        target | action (default: target)
         --format <fmt>       text | dot | json (default: text)
@@ -114,6 +118,10 @@ pub enum Command {
         targets: Vec<String>,
     },
     Test {
+        targets: Vec<String>,
+    },
+    /// 対象を組んで壁時計を計測する（ADR-0025）
+    Bench {
         targets: Vec<String>,
     },
     /// 宣言された検査を走らせ、道具の出力を見せる（issue #60）
@@ -193,6 +201,8 @@ pub struct Options {
     pub only_failed: bool,
     /// `--debug-failed`。前回落ちた事例をデバッガの下で開き直す
     pub debug_failed: bool,
+    /// `--iterations`。ベンチマークの反復回数
+    pub iterations: Option<usize>,
     /// `--label`。宣言された名前で事例を選ぶ
     pub labels: Option<Vec<String>>,
     /// `--dap`。デバッガを起こす代わりに起動構成を書き出す
@@ -228,6 +238,7 @@ impl Default for Options {
             fail_fast: false,
             only_failed: false,
             debug_failed: false,
+            iterations: None,
             labels: None,
             dap: false,
             test_jobs: None,
@@ -366,6 +377,13 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             "--fail-fast" => opts.fail_fast = true,
             "--failed" => opts.only_failed = true,
             "--debug-failed" => opts.debug_failed = true,
+            "--iterations" => {
+                let v = take("--iterations")?;
+                opts.iterations = Some(
+                    v.parse()
+                        .map_err(|_| format!("`--iterations` must be a number (got `{v}`)"))?,
+                );
+            }
             "--test-jobs" => {
                 let v = take("--test-jobs")?;
                 opts.test_jobs = Some(
@@ -417,6 +435,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--fail-fast",
                     "--failed",
                     "--debug-failed",
+                    "--iterations",
                     "--test-jobs",
                     "--kind",
                     "--format",
@@ -473,6 +492,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             }
             Command::Test { targets: positional }
         }
+        "bench" => Command::Bench { targets: positional },
         "inspect" => Command::Inspect { targets: positional },
         "debug" => {
             if positional.len() != 1 {

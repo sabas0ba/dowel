@@ -99,7 +99,14 @@ impl TableKind {
 
     /// 現時点で実装しているか。実装していない種別は診断で明示する。
     pub fn is_implemented(self) -> bool {
-        matches!(self, TableKind::Lib | TableKind::Bin | TableKind::Test | TableKind::Runner)
+        matches!(
+            self,
+            TableKind::Lib
+                | TableKind::Bin
+                | TableKind::Test
+                | TableKind::Bench
+                | TableKind::Runner
+        )
     }
 
     pub const ALL: &'static [TableKind] = &[

@@ -207,10 +207,10 @@ const CASES: &[Case] = &[
     },
     Case {
         code: "unimplemented-kind",
-        why: "`bench` is a recognized kind that is not implemented yet",
+        why: "`template` is a recognized kind that is not implemented yet",
         files: &[(
             "app/dowel.build",
-            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bench.b]\nsources = glob(\"src/*.c\")\n",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[template.t]\nsources = glob(\"src/*.c\")\n",
         )],
         args: CHECK,
     },

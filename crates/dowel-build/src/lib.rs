@@ -2,6 +2,7 @@
 
 pub mod action;
 pub mod backend;
+pub mod bench;
 pub mod compdb;
 pub mod debug;
 pub mod dump;
