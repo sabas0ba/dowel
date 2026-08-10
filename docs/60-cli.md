@@ -210,6 +210,7 @@ the target.
 | `--nocapture` | — | — | pass test output through |
 | `--fail-fast` | — | keep going | stop at the first failure; the summary reports how many were not run |
 | `--failed` | — | — | rerun only what failed last time; verdicts persist in the build directory, and verdicts of targets not run are kept |
+| `--debug-failed` | — | — | open the failing test under the debugger instead of rerunning it |
 | `--test-jobs <n>` | number | 1 (sequential) | how many tests run at once; display is always in request order |
 
 - The default is sequential because C tests may use shared resources (working
@@ -241,6 +242,19 @@ the target.
 - A case with a `timeout` is killed when it expires and reported as timed
   out, whatever exit status the kill produced. The kill reaches the test
   process only — a test that spawns grandchildren leaks them
+- `--debug-failed` joins the test job list with the debug launch
+  (docs/30-devexp.md section 2.3, [ADR-0024](adr/0024-debug-command.md)): the
+  failing case reopens under the toolchain's debugger with its declared
+  `args`, `env`, and `cwd` — nothing is copied by hand. It reads the same
+  record as `--failed` and narrows the same way (a positional label,
+  `--label`), and it needs the selection to come to **exactly one** case: a
+  debugger attaches to one process, and picking silently would leave the
+  user guessing which one opened. Several failures are listed with a note to
+  name one; none is a success that says so. `--dap` writes the launch
+  configuration instead of starting the debugger, with the case's arguments
+  and environment in it; `--no-run` is refused, since one flag says "do not
+  run" and the other reruns. The verdict record is not updated — the
+  debugger session is interactive, not a judgment
 - A case killed by a signal fails, including one that declared
   `should_fail`: what that declares is a nonzero **exit**, and a crash is not
   one (issue #88). The line says which signal it was

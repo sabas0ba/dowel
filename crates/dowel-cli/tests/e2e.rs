@@ -3741,6 +3741,78 @@ fn debug_takes_exactly_one_target() {
     r.stderr_contains("one target");
 }
 
+/// `dowel test --debug-failed`（docs/30-devexp.md 2.3）。
+///
+/// テストの仕事の列とデバッグの起動は既に揃っていた（ADR-0024）。ここは
+/// 両者を繋ぐ——落ちた事例を、その宣言（引数・環境・作業ディレクトリ）の
+/// ままデバッガの下で開き直す。
+#[test]
+fn the_failing_case_reopens_under_the_debugger_with_its_declaration() {
+    let p = case_project(
+        "debug-failed-dap",
+        "bad = { args = [\"env\", \"--flavor=x\"], env = { SUITE_MODE = \"loose\" }, cwd = dir(\"tests\") }\nok = { args = [\"ok\"] }\n",
+    );
+    p.run(".", &["test"]).failure();
+    let r = p.run(".", &["test", "--debug-failed", "--dap"]);
+    r.success();
+    r.stderr_contains("debugging suite:suite/bad");
+    // 事例の宣言がそのまま構成になる。手で書き写すものは無い。
+    r.stdout_contains("\"--flavor=x\"");
+    r.stdout_contains("\"name\": \"SUITE_MODE\"");
+    r.stdout_contains("\"value\": \"loose\"");
+    r.stdout_contains("tests\"");
+    r.stdout_contains("\"miDebuggerPath\": \"gdb\"");
+}
+
+#[test]
+fn several_failures_ask_to_name_one() {
+    // デバッガは対話するものであり、繋がる相手は1つである。こちらが選ぶと、
+    // どれが開いたのかを利用者が推測することになる。
+    let p = case_project(
+        "debug-failed-many",
+        "f1 = { args = [\"fail\"] }\nf2 = { args = [\"fail\"] }\n",
+    );
+    p.run(".", &["test"]).failure();
+    let r = p.run(".", &["test", "--debug-failed"]);
+    r.failure();
+    r.stderr_contains("2 tests failed last time");
+    r.stderr_contains("suite:suite/f1");
+    r.stderr_contains("suite:suite/f2");
+    r.stderr_contains("--debug-failed");
+}
+
+#[test]
+fn naming_a_case_narrows_the_debug_to_it() {
+    // 名指しは通常の選択と同じ形。並べられたラベルを貼り戻せばよい。
+    let p = case_project(
+        "debug-failed-named",
+        "f1 = { args = [\"fail\"] }\nf2 = { args = [\"fail\"] }\n",
+    );
+    p.run(".", &["test"]).failure();
+    let r = p.run(".", &["test", "suite:suite/f2", "--debug-failed", "--dap"]);
+    r.success();
+    r.stderr_contains("debugging suite:suite/f2");
+}
+
+#[test]
+fn nothing_failed_means_nothing_to_debug() {
+    // 落ちたものが無いのは良い知らせであって、誤りではない。
+    let p = case_project("debug-failed-clean", "ok = { args = [\"ok\"] }\n");
+    p.run(".", &["test"]).success();
+    let r = p.run(".", &["test", "--debug-failed"]);
+    r.success();
+    r.stderr_contains("nothing to debug");
+}
+
+#[test]
+fn debug_failed_does_not_combine_with_no_run() {
+    // 「走らせない」と「デバッガの下で走らせ直す」は両立しない。
+    let p = case_project("debug-failed-norun", "ok = { args = [\"ok\"] }\n");
+    let r = p.run(".", &["test", "--debug-failed", "--no-run"]);
+    r.failure();
+    r.stderr_contains("cannot combine with `--no-run`");
+}
+
 /// 事例の選択と可視性（issue #89 / #91 / #93 / #94）。
 fn selection_project(name: &str) -> Project {
     let p = Project::new(name);

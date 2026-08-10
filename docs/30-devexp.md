@@ -4,8 +4,8 @@
 > integration. Usage of runners and editors is in
 > [63-guides.md](63-guides.md); what is implemented is in
 > [91-implementation-status.md](91-implementation-status.md). `dowel debug`
-> now exists ([ADR-0024](adr/0024-debug-command.md)); section 2.1's
-> `substitute-path` and section 2.3's `--debug-failed` do not.
+> ([ADR-0024](adr/0024-debug-command.md)) and section 2.3's `--debug-failed`
+> now exist; section 2.1's `substitute-path` does not.
 
 ## 1. The runner abstraction
 
@@ -95,9 +95,12 @@ and section 2.1's trade-off has not been taken.
 ### 2.3 Derived features
 
 `dowel test --debug-failed` — rerun a failing test directly under the
-debugger. Realizable from the same information; not implemented. Both halves
-now exist — the test job list and the debug launch — and joining them is
-what remains.
+debugger. Implemented as the join it was described as: the failing case's
+job (its arguments, environment, and working directory) becomes the debug
+launch, through the same `prepare` the `debug` command uses
+([60-cli.md](60-cli.md)). The selection has to come to exactly one case —
+a debugger attaches to one process — and `--dap` writes the configuration,
+case arguments included, instead of starting anything.
 
 ## 3. Editor integration
 

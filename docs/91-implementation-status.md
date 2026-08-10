@@ -370,6 +370,15 @@ changes, only the speed.
   host gdb at a foreign binary. `--dap` writes the launch configuration to
   stdout and starts nothing. No `substitute-path` is emitted: nothing is
   remapped yet, so there is nothing to compensate for (docs/30-devexp.md 2.1)
+- `dowel test --debug-failed` — reopens the failing case under the debugger
+  with its declared `args`, `env`, and `cwd` (docs/30-devexp.md 2.3). The
+  join it was described as: the test job becomes the debug launch, through
+  the same `prepare` as `dowel debug`. Needs the selection to come to
+  exactly one case (a debugger attaches to one process; several failures
+  are listed with a note to name one), narrows like `--failed` does, and
+  composes with `--dap`, which then carries the case's arguments and
+  environment. The verdict record is not updated — a debugger session is
+  interactive, not a judgment
 - `dowel test` — launches tests and judges pass/fail by exit status.
   There is no test harness; the C convention ("exit status 0 means success")
   applies. The working directory is the package root unless a case declares
@@ -608,16 +617,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (552 tests):
+Current breakdown (559 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 302 |
+| `unit-*` | per-crate unit tests | 304 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 166 |
+| `e2e` | compile real C and C++, run it, check the output | 171 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (65 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

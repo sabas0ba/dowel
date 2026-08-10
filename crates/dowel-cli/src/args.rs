@@ -76,6 +76,7 @@ test options:
         --nocapture          Let test output through instead of capturing it
         --fail-fast          Stop at the first failing test
         --failed             Rerun only the tests that failed last time
+        --debug-failed       Open the failing test under the debugger instead
         --test-jobs <n>      Run this many tests at once (default: 1)
 
 graph options:
@@ -190,6 +191,8 @@ pub struct Options {
     pub nocapture: bool,
     pub fail_fast: bool,
     pub only_failed: bool,
+    /// `--debug-failed`。前回落ちた事例をデバッガの下で開き直す
+    pub debug_failed: bool,
     /// `--label`。宣言された名前で事例を選ぶ
     pub labels: Option<Vec<String>>,
     /// `--dap`。デバッガを起こす代わりに起動構成を書き出す
@@ -224,6 +227,7 @@ impl Default for Options {
             nocapture: false,
             fail_fast: false,
             only_failed: false,
+            debug_failed: false,
             labels: None,
             dap: false,
             test_jobs: None,
@@ -361,6 +365,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             "--nocapture" => opts.nocapture = true,
             "--fail-fast" => opts.fail_fast = true,
             "--failed" => opts.only_failed = true,
+            "--debug-failed" => opts.debug_failed = true,
             "--test-jobs" => {
                 let v = take("--test-jobs")?;
                 opts.test_jobs = Some(
@@ -411,6 +416,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--nocapture",
                     "--fail-fast",
                     "--failed",
+                    "--debug-failed",
                     "--test-jobs",
                     "--kind",
                     "--format",
@@ -458,7 +464,15 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
         },
         "check" => Command::Check,
         "build" => Command::Build { targets: positional },
-        "test" => Command::Test { targets: positional },
+        "test" => {
+            // 「走らせない」と「デバッガの下で走らせ直す」は両立しない。
+            if opts.debug_failed && opts.no_run {
+                return Err(
+                    "`--debug-failed` starts the test; it cannot combine with `--no-run`".into()
+                );
+            }
+            Command::Test { targets: positional }
+        }
         "inspect" => Command::Inspect { targets: positional },
         "debug" => {
             if positional.len() != 1 {
