@@ -332,6 +332,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "conflicting-declaration",
+        why: "`cases` and `harness` both answer what the cases of a target are",
+        files: &[(
+            "app/dowel.build",
+            "[test.t]\nsources = glob(\"src/*.c\")\n\n[test.t.cases]\none = { args = [] }\n\n[test.t.harness]\nlist = [\"--list\"]\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "conflicting-features",
         why: "`--features=x11` does not drop `default = [\"headless\"]`, and the two are declared exclusive",
         files: &[(

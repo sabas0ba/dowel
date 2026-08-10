@@ -350,6 +350,57 @@ pub fn case_props() -> Vec<PropDef> {
     ]
 }
 
+/// `[test.<name>.harness]` に置けるプロパティ（ADR-0023）。
+///
+/// 実行ファイルに事例を列挙させ、1件ずつ走らせるための**宣言**である。
+/// dowel は枠組みを1つも知らない。知ると、利用者がどの枠組みで試験を書けるかを
+/// dowel が決めることになる。
+///
+/// ```toml
+/// [test.suite.harness]
+/// list = ["--list"]      # これを渡すと、事例の名前を1行ずつ書き出す
+/// run  = ["--run"]       # これに続けて名前を渡すと、その1件だけ走る
+/// ```
+pub fn harness_props() -> Vec<PropDef> {
+    vec![
+        PropDef {
+            name: "list",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments that make the binary print its case names, one per line",
+            domain: None,
+        },
+        PropDef {
+            name: "run",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments placed before the case name when running one case",
+            domain: None,
+        },
+        PropDef {
+            name: "timeout",
+            ty: Type::Int,
+            merge: Merge::Replace,
+            doc: "seconds allowed to each discovered case, and to the listing itself",
+            domain: None,
+        },
+        PropDef {
+            name: "env",
+            ty: Type::Map(Box::new(Type::Str)),
+            merge: Merge::ErrorOnConflict,
+            doc: "environment variables set for the listing and for every discovered case",
+            domain: None,
+        },
+        PropDef {
+            name: "labels",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "labels every discovered case carries; `dowel test --label` selects by them",
+            domain: None,
+        },
+    ]
+}
+
 /// `public` / `private` ブロックに置けるプロパティ。
 ///
 /// 両ブロックで同じ集合とする。伝播するか否かはブロックが決めるのであって

@@ -195,7 +195,10 @@ tests is shown.
 A target may register several tests from one binary with
 `[test.<name>.cases]` ([12-build-reference.md](12-build-reference.md),
 [ADR-0022](adr/0022-test-cases.md)), each with its own arguments,
-environment, timeout, expected verdict, and labels. Every option below then
+environment, timeout, expected verdict, and labels. Alternatively
+`[test.<name>.harness]` asks the binary itself to list its cases
+([ADR-0023](adr/0023-harness-protocol.md)); a listing that fails or returns
+nothing is reported as a failure of that target rather than as zero tests. Every option below then
 operates on **cases**, not targets: a case's label is
 `<package>:<target>/<case>`. A target with no cases is one test named after
 the target.

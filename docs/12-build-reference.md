@@ -227,6 +227,45 @@ strict  = { args = ["check"], env = { SUITE_MODE = "strict" } }
   A suite with many functions is registered per *group*, passing the
   framework's own filter in `args`
 
+### `[test.<name>.harness]` — letting the binary list its own cases
+
+Where a suite already enumerates itself, the cases can come from the code
+instead of being written a second time in the manifest
+([ADR-0023](adr/0023-harness-protocol.md)).
+
+```toml
+[test.suite]
+sources = glob("tests/*.c")
+
+[test.suite.harness]
+list    = ["--list"]      # these arguments make it print the case names
+run     = ["--run"]       # these, then the name, run one case
+timeout = 30
+labels  = ["unit"]
+```
+
+| Key | Type | Behavior |
+|---|---|---|
+| `list` | `List<Str>` | required. Arguments that make the binary print its case names on stdout, **one per line**. Blank lines and lines starting with `#` are skipped; nothing else is interpreted. There is no default — a harness that does not say how to list says nothing |
+| `run` | `List<Str>` | arguments placed before the case name when running one case. The name is appended positionally, like every other command dowel assembles ([ADR-0008](adr/0008-runner-transfer.md)) |
+| `timeout` | `Int` | seconds, applied to the listing and to each discovered case |
+| `env` | `Map<Ident, Str>` | set for the listing and for every discovered case |
+| `labels` | `List<Str>` | carried by every discovered case |
+
+- Each name becomes a case labelled `<package>:<target>/<name>`. Selection,
+  `--failed`, parallelism, and reporting work exactly as for declared cases
+- The listing runs at test time, through the same runner as the tests, so a
+  cross build asks the binary through its `[runner.<triple>]`
+- A listing that fails, times out, or prints nothing is a **failure of that
+  target** — not zero tests. Being unable to enumerate is not the same as
+  having nothing to run
+- `cases` and `harness` cannot both be declared (`conflicting-declaration`):
+  both answer what the cases are
+- dowel knows no test framework, only these two argument lists. A framework
+  whose listing is not one name per line, or whose selection needs
+  `--flag=NAME` instead of a separate argument, needs a few lines of wrapper
+  in the project that chose it
+
 ### `[runner.<triple>]` — execution wrappers
 
 Runners launch cross-compiled test artifacts

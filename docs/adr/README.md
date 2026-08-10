@@ -29,3 +29,4 @@ was originally written in.
 | [0020](0020-package-constants.md) | `pkg.name` / `pkg.version` are package constants, readable in value position | Accepted |
 | [0021](0021-exclusive-features.md) | Features stay additive; exclusivity is declared, never inferred | Accepted |
 | [0022](0022-test-cases.md) | A test target registers cases; dowel imposes no harness | Accepted |
+| [0023](0023-harness-protocol.md) | The harness protocol is declared; dowel learns no test framework | Accepted |

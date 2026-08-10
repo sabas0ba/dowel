@@ -3400,3 +3400,145 @@ fn an_unknown_case_property_gets_a_suggestion() {
     r.stderr_contains("unknown-property");
     r.stderr_contains("did you mean `timeout`?");
 }
+
+/// `[test.<name>.harness]` — 実行ファイル自身に事例を列挙させる（ADR-0023）。
+///
+/// dowel は枠組みを1つも知らない。「どう尋ねるか」だけをマニフェストから読む。
+fn harness_project(name: &str, harness: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"suite\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        &format!("[test.suite]\nsources = glob(\"tests/*.c\")\n\n[test.suite.harness]\n{harness}"),
+    );
+    // `--list` で名前を1行ずつ、`--run <名前>` で1件だけ走らせる小さな枠組み。
+    p.write(
+        "tests/suite.c",
+        r#"#include <stdio.h>
+#include <string.h>
+static const char *CASES[] = { "adds", "subtracts", "divides" };
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--list") == 0) {
+        for (unsigned i = 0; i < sizeof CASES / sizeof *CASES; i++) {
+            printf("%s\n", CASES[i]);
+        }
+        return 0;
+    }
+    if (argc > 2 && strcmp(argv[1], "--run") == 0) {
+        if (strcmp(argv[2], "divides") == 0) { return 1; }   /* この1件だけ落ちる */
+        printf("ran %s\n", argv[2]);
+        return 0;
+    }
+    if (argc > 1 && strcmp(argv[1], "--empty") == 0) { return 0; }
+    if (argc > 1 && strcmp(argv[1], "--broken") == 0) { return 2; }
+    return 0;
+}
+"#,
+    );
+    p
+}
+
+#[test]
+fn the_binary_is_asked_what_cases_it_contains() {
+    let p = harness_project("harness-basic", "list = [\"--list\"]\nrun  = [\"--run\"]\n");
+    let r = p.run(".", &["test"]);
+    // `divides` だけが落ちる。列挙も選択も効いている証拠になる。
+    r.failure();
+    r.stderr_contains("running 3 tests");
+    r.stderr_contains("suite:suite/adds ... ok");
+    r.stderr_contains("suite:suite/subtracts ... ok");
+    r.stderr_contains("suite:suite/divides ... FAILED");
+}
+
+#[test]
+fn a_harness_that_lists_nothing_is_a_failure_not_a_silent_pass() {
+    // 列挙できないことと事例が無いことは別である。黙って0件成功にすると、
+    // 試験が消えたことに誰も気づかない。
+    let p = harness_project("harness-empty", "list = [\"--empty\"]\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("could not list the cases");
+    r.stderr_contains("listed no cases");
+}
+
+#[test]
+fn a_listing_that_fails_says_so() {
+    let p = harness_project("harness-broken", "list = [\"--broken\"]\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("could not list the cases");
+    r.stderr_contains("status 2");
+}
+
+#[test]
+fn harness_level_options_reach_every_discovered_case() {
+    let p = harness_project(
+        "harness-options",
+        "list   = [\"--list\"]\nrun    = [\"--run\"]\nlabels = [\"unit\"]\n",
+    );
+    // 宣言した名前で全ての事例が選ばれる。
+    let r = p.run(".", &["test", "--label=unit"]);
+    r.failure();
+    r.stderr_contains("running 3 tests");
+    // 名乗っていない名前では1件も選ばれない。
+    let r = p.run(".", &["test", "--label=slow"]);
+    r.success();
+    r.stderr_contains("no test carries `slow`");
+}
+
+#[test]
+fn discovered_cases_are_rerun_individually_by_failed() {
+    let p = harness_project("harness-failed", "list = [\"--list\"]\nrun = [\"--run\"]\n");
+    p.run(".", &["test"]).failure();
+    let r = p.run(".", &["test", "--failed"]);
+    r.failure();
+    r.stderr_contains("running 1 test");
+    r.stderr_contains("suite:suite/divides");
+}
+
+#[test]
+fn a_harness_needs_to_say_how_to_list() {
+    // 既定を当てない。当てると「どう尋ねたのか」がマニフェストから読めない。
+    let p = harness_project("harness-no-list", "run = [\"--run\"]\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("missing-field");
+    r.stderr_contains("`list`");
+}
+
+#[test]
+fn cases_and_harness_cannot_both_be_declared() {
+    let p = harness_project("harness-and-cases", "list = [\"--list\"]\n");
+    p.write(
+        "dowel.build",
+        "[test.suite]\nsources = glob(\"tests/*.c\")\n\n[test.suite.cases]\none = { args = [] }\n\n[test.suite.harness]\nlist = [\"--list\"]\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("conflicting-declaration");
+    r.stderr_contains("both answer what the cases");
+}
+
+#[test]
+fn a_harness_on_a_non_test_target_is_refused() {
+    let p = Project::new("harness-wrong-kind");
+    p.write("dowel.toml", "[package]\nname    = \"p\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.harness]\nlist = [\"--list\"]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-block");
+    r.stderr_contains("only `test` targets have a harness");
+}
+
+#[test]
+fn an_unknown_harness_property_gets_a_suggestion() {
+    let p = harness_project("harness-typo", "list = [\"--list\"]\nrunn = [\"--run\"]\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-property");
+    r.stderr_contains("did you mean `run`?");
+}

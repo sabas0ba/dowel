@@ -370,6 +370,15 @@ changes, only the speed.
     test, unchanged. Nothing is imposed on the binary — dowel never asks it
     what cases it contains, so which C test framework a project uses stays
     the project's decision
+  - `[test.<name>.harness]` is the other shape
+    ([ADR-0023](adr/0023-harness-protocol.md)): `list` arguments make the
+    binary print its case names, one per line, and `run` arguments precede
+    the name when running one. dowel knows no test framework — only those
+    two argument lists — so a framework whose listing differs needs a
+    wrapper in the project that chose it. The listing runs at test time
+    through the same runner as the tests; failing, timing out, or listing
+    nothing is a failure of that target, never a silent zero. `cases` and
+    `harness` together is `conflicting-declaration`
   - `timeout` polls `try_wait`; the standard library has no wait with a
     deadline and the core takes no dependencies. The kill reaches the test
     process only, so a test that spawns grandchildren leaks them
@@ -547,7 +556,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (504 tests):
+Current breakdown (513 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -556,10 +565,10 @@ Current breakdown (504 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 128 |
+| `e2e` | compile real C and C++, run it, check the output | 137 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (59 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (60 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

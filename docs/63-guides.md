@@ -47,7 +47,16 @@ rejects = { args = ["bad"], should_fail = true }
 heavy   = { args = ["heavy"], labels = ["slow"] }
 ```
 
-Results, `--failed`, and `--label` then work per case
+Or, where the suite already enumerates itself, let the binary list its own
+cases:
+
+```toml
+[test.suite.harness]
+list = ["--list"]      # prints one case name per line
+run  = ["--run"]       # this, then the name, runs one case
+```
+
+Results, `--failed`, and `--label` then work per case either way
 ([12-build-reference.md](12-build-reference.md)).
 
 - Pass/fail is the exit status (0 = success). The working directory is the
