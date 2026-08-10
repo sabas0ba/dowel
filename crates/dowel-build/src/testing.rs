@@ -376,8 +376,14 @@ pub fn plan_jobs(
             continue;
         }
         for case in cases {
-            let field =
-                |name: &str| case.fields.get(name).and_then(|v| dowel_eval::specialize(v, &cfg));
+            // 事例そのものが条件付きでありうる。偽なら、この構成にその事例は
+            // 存在しない（issue #92）。
+            let Some(concrete) = dowel_eval::specialize(&case.value, &cfg) else {
+                log_trace!("  case {}/{} is not registered here", base.label, case.name);
+                continue;
+            };
+            let Data::Map(fields) = &concrete.data else { continue };
+            let field = |name: &str| fields.get(name).cloned();
             let mut job = base.clone();
             job.label = format!("{}/{}", base.label, case.name);
             job.args.extend(strings(field("args").as_ref()));

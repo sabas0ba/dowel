@@ -3773,3 +3773,135 @@ fn the_listing_is_machine_readable_with_the_same_labels() {
     r.stdout_contains("\"timeout_s\":30");
     r.stdout_contains("\"should_fail\":true");
 }
+
+/// 事例の宣言の検証（issue #92 / #96 / #97 / #98 / #99 / #101）。
+fn cases_decl_project(name: &str, cases_block: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"c\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        &format!("[test.suite]\nsources = glob(\"tests/*.c\")\n\n{cases_block}"),
+    );
+    p.write("tests/suite.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn a_case_can_be_registered_only_for_some_configurations() {
+    // 値は分岐できるのに存在は分岐できない、という形だった（issue #92）。
+    // 実機でしか意味を持たない事例は、値を変えるのではなく落としたい。
+    let p = cases_decl_project(
+        "cases-conditional",
+        "[test.suite.cases]\nalways  = { args = [\"a\"] }\ndebugly = { args = [\"d\"] } when cfg.opt == \"debug\"\n",
+    );
+    let r = p.run(".", &["test", "--no-run"]);
+    r.success();
+    r.stderr_contains("c:suite/always");
+    r.stderr_contains("c:suite/debugly");
+
+    let r = p.run(".", &["test", "--no-run", "--config=release"]);
+    r.success();
+    r.stderr_contains("c:suite/always");
+    assert!(!r.stderr.contains("debugly"), "the case was registered anyway\n{r}");
+}
+
+#[test]
+fn a_case_can_be_chosen_with_match() {
+    let p = cases_decl_project(
+        "cases-match",
+        "[test.suite.cases]\npick = match cfg.opt { debug => { args = [\"d\"], timeout = 30 }, release => { args = [\"r\"] } }\n",
+    );
+    let r = p.run(".", &["test", "--no-run"]);
+    r.success();
+    r.stderr_contains("timeout 30s");
+    let r = p.run(".", &["test", "--no-run", "--config=release"]);
+    r.success();
+    assert!(!r.stderr.contains("timeout"), "the release arm carried a timeout\n{r}");
+}
+
+#[test]
+fn every_arm_of_a_conditional_case_is_still_checked() {
+    // 条件は具体化まで解けない。通らない枝の誤りを見逃すと、構成を変えた
+    // ときに初めて落ちる。
+    let p = cases_decl_project(
+        "cases-match-checked",
+        "[test.suite.cases]\npick = match cfg.opt { debug => { args = [\"d\"] }, release => { timout = 5 } }\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-property");
+    r.stderr_contains("did you mean `timeout`?");
+}
+
+#[test]
+fn a_case_name_that_breaks_the_label_grammar_is_refused() {
+    let p = cases_decl_project("cases-name-slash", "[test.suite.cases]\n\"a/b\" = { args = [] }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("invalid-name");
+    r.stderr_contains("separates the target from the case");
+
+    let p = cases_decl_project("cases-name-space", "[test.suite.cases]\n\"x y\" = { args = [] }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("invalid-name");
+    r.stderr_contains("whitespace");
+}
+
+#[test]
+fn a_timeout_that_never_expires_is_refused() {
+    // 0 と負は「待ち続ける」に落ちる。時間切れを書いた意図と正反対である。
+    let p =
+        cases_decl_project("cases-timeout-zero", "[test.suite.cases]\nslow = { timeout = 0 }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("invalid-value");
+    r.stderr_contains("positive number of seconds");
+}
+
+#[test]
+fn an_empty_cases_block_is_not_silently_one_bare_run() {
+    // 「事例を書かない」と「事例を書いたが1つも残らなかった」は別の意図である。
+    let p = cases_decl_project("cases-empty", "[test.suite.cases]\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("empty-block");
+    r.stderr_contains("declares no case");
+}
+
+#[test]
+fn a_case_written_as_its_own_table_says_what_the_right_shape_is() {
+    // 「深すぎる」とだけ言われても、何が正しい形なのかは読み取れない。
+    let p = cases_decl_project("cases-own-table", "[test.suite.cases.parse]\nargs = [\"parse\"]\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("too-deep-table");
+    r.stderr_contains("inline tables inside it");
+}
+
+#[test]
+fn a_type_error_underlines_the_key_that_is_wrong() {
+    // 事例全体を指すと、どの鍵が悪いのか読み手が探すことになる。
+    let p = cases_decl_project(
+        "cases-underline",
+        "[test.suite.cases]\none = { args = [\"a\"], timeout = \"soon\" }\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("type-mismatch");
+    // 下線は `\"soon\"` に付く。事例全体ではない。
+    r.stderr_contains("\"soon\"");
+}
+
+#[test]
+fn a_target_whose_cases_all_dropped_runs_nothing_without_failing() {
+    // 条件で空になったのは、書き手の意図と食い違っていない（issue #99 の
+    // 「明示的に空」との区別）。
+    let p = cases_decl_project(
+        "cases-all-dropped",
+        "[test.suite.cases]\nonly = { args = [\"d\"] } when cfg.opt == \"debug\"\n",
+    );
+    let r = p.run(".", &["test", "--config=release"]);
+    r.success();
+    r.stderr_contains("running 0 tests");
+}

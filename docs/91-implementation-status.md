@@ -382,6 +382,19 @@ changes, only the speed.
     test, unchanged. Nothing is imposed on the binary — dowel never asks it
     what cases it contains, so which C test framework a project uses stays
     the project's decision
+  - A case may itself be conditional — `match` / `when` apply to the case,
+    not only to the values inside it (issue #92). The strong use is a case
+    that must not exist for some target at all; expressing that by splitting
+    the `[test.<name>]` instead would add translation units, which is what
+    cases exist to avoid. Every arm is validated, since the condition is not
+    resolved until specialization
+  - The declaration is checked: a case name that breaks the
+    `<package>:<target>/<case>` label grammar is `invalid-name` (issue #97),
+    a non-positive `timeout` is `invalid-value` — it would silently mean
+    "wait forever" (issue #96) — an empty `cases` block is `empty-block`
+    rather than one bare run (issue #99), a type error underlines the key
+    that is wrong rather than the whole case (issue #101), and writing a case
+    as its own table says what the right shape is (issue #98)
   - `[test.<name>.harness]` is the other shape
     ([ADR-0023](adr/0023-harness-protocol.md)): `list` arguments make the
     binary print its case names, one per line, and `run` arguments precede
@@ -579,7 +592,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (530 tests):
+Current breakdown (539 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -588,10 +601,10 @@ Current breakdown (530 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 152 |
+| `e2e` | compile real C and C++, run it, check the output | 161 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (62 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (65 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |

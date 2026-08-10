@@ -401,7 +401,11 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 let failed = state.failed();
                 jobs.retain(|j| failed.contains(&j.label.as_str()));
             }
-            if jobs.is_empty() && discovery_failures.is_empty() {
+            // 選択を求めていないのに空になったのは、意図との食い違いではない。
+            // 事例が条件で全部落ちた形がこれである（issue #92 / #99）。
+            let asked_for_a_selection =
+                !requested.cases.is_empty() || opts.labels.is_some() || opts.only_failed;
+            if jobs.is_empty() && discovery_failures.is_empty() && asked_for_a_selection {
                 let remembered: Vec<String> = if opts.only_failed {
                     state.failed().iter().map(|s| s.to_string()).collect()
                 } else {
