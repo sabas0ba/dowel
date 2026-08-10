@@ -61,8 +61,10 @@ run  = ["--run"]       # this, then the name, runs one case
 Results, `--failed`, and `--label` then work per case either way
 ([12-build-reference.md](12-build-reference.md)).
 
-- Pass/fail is the exit status (0 = success). The working directory is the
-  package root
+- Pass/fail is the exit status (0 = success). A case killed by a signal
+  fails, `should_fail` or not — that declares a nonzero exit, not a crash
+- The working directory is the package root. A case that needs another one
+  says so: `golden = { args = ["golden"], cwd = dir("tests/golden") }`
 - The default is sequential because C tests may use shared resources (the same
   working directory, fixed ports, output files). Results are always displayed
   in request order

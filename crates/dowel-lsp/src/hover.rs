@@ -86,20 +86,71 @@ fn header(node: &Node, src: &str, offset: u32) -> Option<Hover> {
             md
         }
         1 => format!("**`{word}`** — the name of this {} target\n", segments[0].0),
-        2 => {
-            let block = Block::parse(word)?;
-            let mut md = format!("**`{word}`** — property block\n\n");
-            md.push_str(if block == Block::Public {
-                "propagates to dependents.\n"
-            } else {
-                "applies to this target only.\n"
-            });
-            md.push_str("\nsee docs/10-manifest.md section 2.\n");
-            md
-        }
+        2 => match Block::parse(word) {
+            Some(block) => {
+                let mut md = format!("**`{word}`** — property block\n\n");
+                md.push_str(if block == Block::Public {
+                    "propagates to dependents.\n"
+                } else {
+                    "applies to this target only.\n"
+                });
+                md.push_str("\nsee docs/10-manifest.md section 2.\n");
+                md
+            }
+            // ブロックでない入れ子の表（`cases` 等）。プロパティを持つのは
+            // ブロックだけではない（issue #90）。
+            None => {
+                let t = schema::nested_table(word)?;
+                let names: Vec<String> =
+                    (t.props)().iter().map(|p| format!("`{}`", p.name)).collect();
+                format!(
+                    "**`{word}`** — {}\n\n{}\n\naccepts: {}\n",
+                    t.doc,
+                    if t.keyed { t.item } else { "written once for the target" },
+                    names.join(", ")
+                )
+            }
+        },
         _ => return None,
     };
     Some(Hover { markdown, span })
+}
+
+/// カーソル位置を含む鍵に、直前の表の見出しの各段を対応させる。
+///
+/// 木は見出しと鍵値が根の直下に並ぶ形なので、位置より前にある最後の見出しが
+/// その鍵の属する表である。
+fn owning_header<'a>(root: &'a Node, src: &'a str, offset: u32) -> Vec<&'a str> {
+    let mut segments = Vec::new();
+    for node in root.nodes() {
+        if node.span.start > offset {
+            break;
+        }
+        if !matches!(node.kind, NodeKind::TableHeader | NodeKind::ArrayTableHeader) {
+            continue;
+        }
+        segments = node
+            .child(NodeKind::KeyPath)
+            .map(|kp| {
+                kp.tokens()
+                    .filter(|t| t.kind == TokenKind::Ident)
+                    .filter_map(|t| src.get(t.span.range()))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    segments
+}
+
+/// 定義そのものの説明。型と併合規則を出す。
+fn def_markdown(def: &schema::PropDef) -> String {
+    format!(
+        "**`{}`** — `{}`\n\nmerge: `{}`\n\n{}\n",
+        def.name,
+        def.ty.display(),
+        def.merge.name(),
+        def.doc
+    )
 }
 
 /// プロパティ名。型と併合規則を出す。
@@ -111,6 +162,30 @@ fn property(path: &[&Node], src: &str, offset: u32) -> Option<Hover> {
         return None;
     }
     let (word, span) = ident_at(key_path, src, offset)?;
+
+    // 鍵値がいくつ入れ子になっているか。`cases` の中では、外側が事例の名前で、
+    // 内側がその事例のプロパティである。
+    let depth = path.iter().filter(|n| n.kind == NodeKind::KeyValue).count();
+    let header = owning_header(path[0], src, offset);
+
+    // ブロックの外にある鍵表（`cases` / `artifacts` / `inspect` / `harness`）。
+    if let Some(t) = header.get(2).and_then(|w| schema::nested_table(w)) {
+        let props_at = if t.keyed { 2 } else { 1 };
+        if t.keyed && depth == 1 {
+            return Some(Hover { markdown: format!("**`{word}`** — {}\n", t.item), span });
+        }
+        if depth != props_at {
+            return None;
+        }
+        let def = (t.props)().into_iter().find(|p| p.name == word)?;
+        return Some(Hover { markdown: def_markdown(&def), span });
+    }
+
+    // ランナーはターゲットではない。プロパティの集合も別である。
+    if header.first() == Some(&"runner") && depth == 1 {
+        let def = schema::runner_props().into_iter().find(|p| p.name == word)?;
+        return Some(Hover { markdown: def_markdown(&def), span });
+    }
 
     // 段が複数ある場合（`private.flags`）、先頭がブロック名になりうる。
     let names: Vec<&str> = key_path
@@ -137,16 +212,7 @@ fn property(path: &[&Node], src: &str, offset: u32) -> Option<Hover> {
     // ブロックは見出しから決まる。どちらのブロックでも同じ集合であり、
     // 説明も同じであるため、見つかった方を使う。
     let def = schema::lookup(Block::Public, word).or_else(|| schema::lookup(Block::Root, word))?;
-    Some(Hover {
-        markdown: format!(
-            "**`{}`** — `{}`\n\nmerge: `{}`\n\n{}\n",
-            def.name,
-            def.ty.display(),
-            def.merge.name(),
-            def.doc
-        ),
-        span,
-    })
+    Some(Hover { markdown: def_markdown(&def), span })
 }
 
 /// 関数呼び出し。署名と説明を出す。
@@ -262,6 +328,44 @@ mod tests {
 
         let boolean = markdown("[bin.a.private]\nflags = [\"-O2\"] when feat|ure.fast\n");
         assert!(boolean.contains("true or false"), "{boolean}");
+    }
+
+    #[test]
+    fn a_case_and_its_properties_are_answerable() {
+        // 型検査器だけが `cases` の鍵表を知っていて、エディタが何も答えない
+        // 状態だった（issue #90）。
+        let src = "[test.suite.cases]\nparse = { args = [\"parse\"], should_fail = true }\n";
+        assert!(markdown(&src.replacen("cases", "ca|ses", 1)).contains("one binary"));
+        assert!(markdown(&src.replacen("parse =", "par|se =", 1)).contains("`parse`"));
+        let prop = markdown(&src.replacen("should_fail", "should_f|ail", 1));
+        assert!(prop.contains("`should_fail`"), "{prop}");
+        assert!(prop.contains("Bool"), "{prop}");
+        assert!(prop.contains("nonzero"), "{prop}");
+        // 事例の名前とプロパティは段が違う。名前がプロパティと同じ綴りでも、
+        // 名前として説明する。
+        let named = markdown(&src.replacen("parse = ", "arg|s = ", 1));
+        assert!(named.contains("the name of the case"), "{named}");
+    }
+
+    #[test]
+    fn the_other_nested_tables_answer_from_their_own_schema() {
+        let harness = "[test.suite.harness]\nlist = [\"--list\"]\n";
+        assert!(markdown(&harness.replacen("list =", "li|st =", 1)).contains("one per line"));
+        // `harness` は鍵表そのものであって、名前つきの項目を取らない。
+        assert!(markdown(&harness.replacen("harness", "harn|ess", 1)).contains("written once"));
+
+        let artifacts = "[bin.f.artifacts]\nbin = { tool = \"objcopy\" }\n";
+        assert!(markdown(&artifacts.replacen("tool =", "to|ol =", 1)).contains("transform"));
+        assert!(markdown(&artifacts.replacen("bin = ", "b|in = ", 1)).contains("extension"));
+
+        let runner = "[runner.riscv64-unknown-elf]\ncommand = \"qemu-riscv64\"\n";
+        assert!(markdown(&runner.replacen("command", "comm|and", 1)).contains("wraps the artifact"));
+    }
+
+    #[test]
+    fn a_target_property_is_not_answered_inside_a_nested_table() {
+        // `sources` は事例には置けない。説明を出すと、置けると述べることになる。
+        assert!(hover("[test.suite.cases]\nc = { sour|ces = [] }\n").is_none());
     }
 
     #[test]

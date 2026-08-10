@@ -173,6 +173,74 @@ fn set(t: Type) -> Type {
     Type::Set(Box::new(t))
 }
 
+/// ブロックではない入れ子の表（`[<種別>.<名前>.<語>]`）の一覧（issue #90）。
+///
+/// 型検査器（`dowel_model::Session`）も `dowel schema dump` も LSP の
+/// ホバーも、この表から引く。鍵表を各所に持つと、片方だけを足したときに
+/// **黙って食い違う**——`cases` は実際にそうなり、型検査器だけが知っていて
+/// ダンプにもエディタにも無い状態になっていた。
+pub struct NestedTable {
+    /// 見出しの3段目に書く語
+    pub word: &'static str,
+    /// `dowel schema dump` に出る鍵
+    pub dump_key: &'static str,
+    /// 項目の鍵が名前で、値が鍵表を取る形か。
+    /// `cases` は `parse = { ... }` の形（真）、`harness` はこの表が
+    /// 直に鍵表である（偽）
+    pub keyed: bool,
+    /// この表そのものの説明
+    pub doc: &'static str,
+    /// `keyed` のとき、項目の鍵が何であるかの説明
+    pub item: &'static str,
+    pub props: fn() -> Vec<PropDef>,
+}
+
+/// 入れ子の表の語。見出しの解釈と診断がこれを引く。
+pub const ARTIFACTS: &str = "artifacts";
+pub const INSPECT: &str = "inspect";
+pub const CASES: &str = "cases";
+pub const HARNESS: &str = "harness";
+
+pub const NESTED_TABLES: &[NestedTable] = &[
+    NestedTable {
+        word: ARTIFACTS,
+        dump_key: "artifact_properties",
+        keyed: true,
+        doc: "transforms of this target's artifact, each producing another file",
+        item: "the extension of the file the transform produces",
+        props: artifact_props,
+    },
+    NestedTable {
+        word: INSPECT,
+        dump_key: "inspection_properties",
+        keyed: true,
+        doc: "reports about this target's artifact. they produce no file, so `dowel inspect` runs them",
+        item: "the name of the report",
+        props: inspection_props,
+    },
+    NestedTable {
+        word: CASES,
+        dump_key: "case_properties",
+        keyed: true,
+        doc: "several tests from one binary, each a separate launch of it (ADR-0022)",
+        item: "the name of the case; `dowel test <target>/<case>` selects it",
+        props: case_props,
+    },
+    NestedTable {
+        word: HARNESS,
+        dump_key: "harness_properties",
+        keyed: false,
+        doc: "how to ask the binary itself which cases it contains (ADR-0023)",
+        item: "",
+        props: harness_props,
+    },
+];
+
+/// 見出しの3段目から入れ子の表を引く。
+pub fn nested_table(word: &str) -> Option<&'static NestedTable> {
+    NESTED_TABLES.iter().find(|t| t.word == word)
+}
+
 /// ターゲット直下に置けるプロパティ。
 pub fn root_props() -> Vec<PropDef> {
     vec![PropDef {
@@ -359,6 +427,13 @@ pub fn case_props() -> Vec<PropDef> {
             ty: list(Type::Str),
             merge: Merge::Append,
             doc: "names this case answers to; `dowel test --label <name>` selects by them",
+            domain: None,
+        },
+        PropDef {
+            name: "cwd",
+            ty: Type::Path,
+            merge: Merge::Replace,
+            doc: "the directory the case runs in. the default is the root of the package that declares it",
             domain: None,
         },
     ]
@@ -903,5 +978,21 @@ mod tests {
         assert!(prop_names(Block::Public).contains(&"includes"));
         assert!(prop_names(Block::Root).contains(&"sources"));
         assert!(!prop_names(Block::Root).contains(&"includes"));
+    }
+
+    #[test]
+    fn every_nested_table_is_answerable_and_named_once() {
+        // 語と鍵が重複していれば、引く側は先に見つけた方に当たる。
+        // 表を1つ足したときに気づけるのはここだけである（issue #90）。
+        let mut words = std::collections::BTreeSet::new();
+        let mut keys = std::collections::BTreeSet::new();
+        for t in NESTED_TABLES {
+            assert!(words.insert(t.word), "`{}` appears twice", t.word);
+            assert!(keys.insert(t.dump_key), "`{}` appears twice", t.dump_key);
+            assert!(!(t.props)().is_empty(), "`{}` describes no property", t.word);
+            assert!(t.keyed == !t.item.is_empty(), "`{}` must say what its key is", t.word);
+            assert_eq!(nested_table(t.word).map(|f| f.word), Some(t.word));
+        }
+        assert_eq!(nested_table("nosuch").map(|t| t.word), None);
     }
 }

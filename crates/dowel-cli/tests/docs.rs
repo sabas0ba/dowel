@@ -4,12 +4,13 @@
 //! `diagnostics.rs` の網羅検査と同じく、放置を防ぐための機械的な検査である。
 //!
 //! 対象は機械的に判定できる項目に限る。記述内容の妥当性は検査しない。
-//! 検査項目は以下の4つ。
+//! 検査項目は以下の5つ。
 //!
 //! - 相対リンクの指す先が存在すること
 //! - コードとスクリプトが名指しする文書が存在すること
 //! - `docs/README.md` の一覧が `docs/` の中身と一致すること
 //! - `docs/adr/README.md` の表が ADR の実体と一致すること
+//! - スキーマが受け付ける鍵が `12-build-reference.md` に書かれていること
 //!
 //! 設計は [`docs/51-testing.md`](../../../docs/51-testing.md) にある。
 
@@ -258,4 +259,59 @@ fn the_adr_index_matches_the_records() {
         }
     }
     assert!(files.len() >= 7, "only {} ADRs were found; the scan is probably broken", files.len());
+}
+
+/// スキーマが受け付ける鍵が、全て `12-build-reference.md` に書かれていること。
+///
+/// 同頁は冒頭で「この頁とエディタと診断が黙って食い違うことはない」と
+/// 述べている。その約束を支えていたものは何も無く、実際に `cases` が
+/// 型検査器にだけ存在する状態になっていた（issue #90）。
+///
+/// 検査は節ごとに行う。頁のどこかに同じ綴りがあれば通る形にすると、
+/// `args` のように複数の表に現れる名前で素通しになる。
+#[test]
+fn every_property_the_schema_accepts_is_in_the_reference() {
+    use dowel_eval::schema;
+    let text = std::fs::read_to_string(repo_root().join("docs/12-build-reference.md"))
+        .expect("the build reference is part of the repository");
+
+    // 節の見出しに含まれる綴りで引く。表を1つ足した者は、ここで
+    // 「どこに書くのか」を決めることになる。
+    let heading = |t: &schema::NestedTable| match t.word {
+        schema::ARTIFACTS => "`[<kind>.<name>.artifacts]`",
+        schema::INSPECT => "`[<kind>.<name>.inspect]`",
+        schema::CASES => "`[test.<name>.cases]`",
+        schema::HARNESS => "`[test.<name>.harness]`",
+        other => panic!("`{other}` has no section in docs/12-build-reference.md"),
+    };
+    let mut sections: Vec<(String, Vec<schema::PropDef>)> = vec![
+        ("`[<kind>.<name>]`".to_string(), schema::root_props()),
+        ("`[<kind>.<name>.public]`".to_string(), schema::block_props()),
+        ("`[runner.<triple>]`".to_string(), schema::runner_props()),
+    ];
+    for t in schema::NESTED_TABLES {
+        sections.push((heading(t).to_string(), (t.props)()));
+    }
+
+    for (title, props) in sections {
+        let start = text
+            .find(&format!("### {title}"))
+            .unwrap_or_else(|| panic!("no section `### {title} …` in docs/12-build-reference.md"));
+        let rest = &text[start + 4..];
+        // 次の見出しまで。節の水準は問わない——最後の節は `## 4.` で終わる。
+        let end = ["\n### ", "\n## "]
+            .iter()
+            .filter_map(|h| rest.find(h))
+            .min()
+            .map(|i| start + 4 + i)
+            .unwrap_or(text.len());
+        let section = &text[start..end];
+        for p in props {
+            assert!(
+                section.contains(&format!("| `{}` |", p.name)),
+                "`{}` is accepted under {title} but has no row in docs/12-build-reference.md",
+                p.name
+            );
+        }
+    }
 }

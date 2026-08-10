@@ -36,18 +36,22 @@ pub const BUILD_NAME: &str = "dowel.build";
 
 /// `[<kind>.<name>.artifacts]` の見出し。プロパティのブロックではない
 /// （issue #60）。
-const ARTIFACTS_BLOCK: &str = "artifacts";
+///
+/// 語そのものは `schema::NESTED_TABLES` が持つ。ここで綴り直すと、
+/// `schema dump` とホバーが同じ表を知らないまま型検査だけが通る
+/// （issue #90）。以下の3つも同じである。
+const ARTIFACTS_BLOCK: &str = schema::ARTIFACTS;
 
 /// `[<kind>.<name>.inspect]` の見出し。同じく、プロパティのブロックではない。
 /// 変換との違いは出力を持たないことだけである（issue #60）。
-const INSPECT_BLOCK: &str = "inspect";
+const INSPECT_BLOCK: &str = schema::INSPECT;
 
 /// `[test.<name>.cases]` の見出し。1本の実行ファイルから複数のテストを
 /// 登録する。`test` 種別にのみ意味を持つ
-const CASES_BLOCK: &str = "cases";
+const CASES_BLOCK: &str = schema::CASES;
 
 /// `[test.<name>.harness]` の見出し。実行ファイル自身に事例を列挙させる宣言
-const HARNESS_BLOCK: &str = "harness";
+const HARNESS_BLOCK: &str = schema::HARNESS;
 
 /// 読み込みの時点で分かっている機能フラグの選択。
 ///

@@ -135,9 +135,12 @@ resident daemon rejected by [ADR-0002](adr/0002-no-daemon.md). The CLI never
 depends on the language server's existence.
 
 Hover explains the schema itself: property types and merge rules, each level
-of a table header, builtin function signatures, configuration key domains.
-The source is the same table `dowel schema dump` reads; nothing is kept
-twice. Word identification walks the CST rather than evaluated values,
+of a table header, builtin function signatures, configuration key domains,
+and the nested tables that are not property blocks (`cases`, `harness`,
+`artifacts`, `inspect`). The source is the same table `dowel schema dump`
+reads; nothing is kept twice. That is the point of the arrangement — the one
+table dowel kept in two places instead drifted, and the editor went silent
+inside `cases` while the type checker knew every key (issue #90). Word identification walks the CST rather than evaluated values,
 because explanations must appear even in files that contain errors.
 
 The VS Code client lives in `editors/vscode/`. It starts `dowel lsp`,
@@ -173,8 +176,10 @@ diagnostic quality**. Concretely:
    (span + replacement) as rustc does, in a form agents can apply
    mechanically
 2. **A machine-readable schema**: `dowel schema dump` prints every `kind` and
-   property with types and merge rules. Supplying it as context compensates
-   for the missing corpus
+   property with types and merge rules, including the nested tables
+   (`case_properties`, `harness_properties`, `artifact_properties`,
+   `inspection_properties`, `runner_properties`). Supplying it as context
+   compensates for the missing corpus
 3. **A fast `dowel check`**: the faster the generate-verify loop, the faster
    the convergence. Incremental evaluation pays off here
 
