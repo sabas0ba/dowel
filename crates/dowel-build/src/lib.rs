@@ -3,6 +3,7 @@
 pub mod action;
 pub mod backend;
 pub mod compdb;
+pub mod debug;
 pub mod dump;
 pub mod exec;
 pub mod glob;

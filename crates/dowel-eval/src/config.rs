@@ -77,6 +77,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("nm", "nm"),
     ("objdump", "objdump"),
     ("readelf", "readelf"),
+    ("debug", "gdb"),
 ];
 
 /// パスの1要素として安全な形にする。
@@ -236,6 +237,7 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
     ("tc", "nm", Domain::Open, "identifier of the selected symbol lister"),
     ("tc", "objdump", Domain::Open, "identifier of the selected object dumper"),
     ("tc", "readelf", Domain::Open, "identifier of the selected ELF reader"),
+    ("tc", "debug", Domain::Open, "identifier of the selected debugger"),
 ];
 
 /// パッケージの定数（[ADR-0020](../../../docs/adr/0020-package-constants.md)）。

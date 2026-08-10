@@ -280,6 +280,8 @@ nothing, so they have their own property set — target properties like
 | `transfer` | `List<Str>` | a command that copies the artifact before launch, e.g. `["scp", "-q"]`. Source and destination are appended by the implementation — they are not written here ([ADR-0008](adr/0008-runner-transfer.md)) |
 | `remote_dir` | `Str` | directory on the target machine that receives the artifact. Specified together with `transfer` |
 | `host` | `Str` | host part of the transfer destination, forming `<host>:<path>` |
+| `debug_args` | `List<Str>` | arguments that make the runner host the program behind a debug stub, such as qemu's `-g <port>`. Placed before the artifact, where a runner expects its own arguments ([ADR-0024](adr/0024-debug-command.md)) |
+| `debug_connect` | `Str` | where the debugger attaches, such as `localhost:1234`. Written separately from `debug_args` because dowel does not parse the runner's flags and can derive neither from the other. `dowel debug --target=<triple>` needs both, and refuses with `missing-debug-stub` without them |
 
 Runner values may use `match` / `when` like any other property.
 

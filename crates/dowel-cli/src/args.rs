@@ -70,6 +70,7 @@ build options:
         --no-compdb          Do not write compile_commands.json
 
 test options:
+        --dap                Write the debug launch configuration instead of starting
         --label <a,b>        Run only tests carrying one of these labels
         --no-run             Build the test targets but do not run them
         --nocapture          Let test output through instead of capturing it
@@ -117,6 +118,10 @@ pub enum Command {
     /// 宣言された検査を走らせ、道具の出力を見せる（issue #60）
     Inspect {
         targets: Vec<String>,
+    },
+    /// 対象を組んでデバッガを起動する（ADR-0024）
+    Debug {
+        target: String,
     },
     Why {
         target: String,
@@ -187,6 +192,8 @@ pub struct Options {
     pub only_failed: bool,
     /// `--label`。宣言された名前で事例を選ぶ
     pub labels: Option<Vec<String>>,
+    /// `--dap`。デバッガを起こす代わりに起動構成を書き出す
+    pub dap: bool,
     pub test_jobs: Option<usize>,
     pub graph_kind: GraphKind,
     pub out_format: OutFormat,
@@ -218,6 +225,7 @@ impl Default for Options {
             fail_fast: false,
             only_failed: false,
             labels: None,
+            dap: false,
             test_jobs: None,
             graph_kind: GraphKind::Target,
             out_format: OutFormat::Text,
@@ -232,8 +240,8 @@ pub enum Parsed {
 }
 
 const COMMANDS: &[&str] = &[
-    "new", "add", "check", "build", "test", "inspect", "why", "graph", "migrate", "schema",
-    "cache", "lsp",
+    "new", "add", "check", "build", "test", "inspect", "debug", "why", "graph", "migrate",
+    "schema", "cache", "lsp",
 ];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
@@ -344,6 +352,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     Some(v.parse().map_err(|_| format!("`--jobs` must be a number (got `{v}`)"))?);
             }
             "--no-compdb" => opts.compdb = false,
+            "--dap" => opts.dap = true,
             "--label" => {
                 opts.labels =
                     Some(take("--label")?.split(',').map(|s| s.trim().to_string()).collect())
@@ -397,6 +406,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                     "--jobs",
                     "--no-compdb",
                     "--label",
+                    "--dap",
                     "--no-run",
                     "--nocapture",
                     "--fail-fast",
@@ -450,6 +460,12 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
         "build" => Command::Build { targets: positional },
         "test" => Command::Test { targets: positional },
         "inspect" => Command::Inspect { targets: positional },
+        "debug" => {
+            if positional.len() != 1 {
+                return Err("`debug` takes one target: `dowel debug <target>`".into());
+            }
+            Command::Debug { target: positional[0].clone() }
+        }
         "graph" => Command::Graph,
         "lsp" => Command::Lsp,
         "why" => {
