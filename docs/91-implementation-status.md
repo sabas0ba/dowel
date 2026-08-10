@@ -399,6 +399,17 @@ changes, only the speed.
     not run
   - `--failed` reruns only what failed last time. Verdicts persist in the
     build directory; verdicts of targets not run are kept
+  - Selection works on cases: a positional argument names a target or a
+    case (`app:unit/parse`, the spelling the output prints), `--label` picks
+    by declared label, and `--failed` reruns what failed. A selection that
+    matches nothing **fails** — the report goes to stderr where a CI log
+    buries it, so the exit status has to carry it (issues #89 / #91 / #93).
+    A tree with no tests, and `--failed` when nothing failed, stay successes:
+    neither contradicts what was asked
+  - `--no-run` builds and then lists the cases that would run, with their
+    labels, `should_fail`, and `timeout` — the only way to see what exists
+    without running it, and what makes the label vocabulary discoverable
+    (issue #94). It launches nothing, so a cross target needs no runner
   - `--test-jobs=<n>` runs tests in parallel. The default is sequential: C
     tests may use shared resources (the same working directory, fixed ports,
     output files), and a parallel default produces order-dependent failures.
@@ -568,7 +579,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (522 tests):
+Current breakdown (530 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -577,7 +588,7 @@ Current breakdown (522 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 144 |
+| `e2e` | compile real C and C++, run it, check the output | 152 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (62 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

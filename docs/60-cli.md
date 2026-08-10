@@ -205,8 +205,8 @@ the target.
 
 | Option | Values | Default | Meaning |
 |---|---|---|---|
-| `--label <a,b>` | names | — | run only tests carrying one of these labels (declared in `[test.<name>.cases]`). Naming a label nobody carries reports that, rather than passing with zero tests |
-| `--no-run` | — | — | build only; do not run |
+| `--label <a,b>` | names | — | run only tests carrying one of these labels (declared in `[test.<name>.cases]`) |
+| `--no-run` | — | — | build, then **list** what would run instead of running it |
 | `--nocapture` | — | — | pass test output through |
 | `--fail-fast` | — | keep going | stop at the first failure; the summary reports how many were not run |
 | `--failed` | — | — | rerun only what failed last time; verdicts persist in the build directory, and verdicts of targets not run are kept |
@@ -218,6 +218,25 @@ the target.
   declared runner (`[runner.<triple>]` in
   [12-build-reference.md](12-build-reference.md)). If no runner is declared,
   the launch is refused with a diagnostic beforehand
+- A positional argument names either a target (`app:unit`) or a **case**
+  (`app:unit/parse`) — the same string the summary and the JSON output print,
+  so a failing case can be rerun on its own (issue #93). Naming a target runs
+  all of its cases
+- **A selection that matches nothing fails.** `--label` with a name nobody
+  carries, a case that does not exist, or `--failed` whose remembered cases
+  are gone all exit nonzero and say so (issues #89 / #91). The report goes to
+  stderr, where a CI log buries it, so the exit status has to carry it:
+  otherwise a mistyped `--label` is a green step that ran nothing. Two cases
+  are **not** failures, because neither contradicts what was asked: a tree
+  with no `test` targets at all, and `--failed` when nothing failed last time
+- `--no-run` builds and then lists the cases that would run, after the
+  selection is applied, with their labels, `should_fail`, and `timeout`
+  (issue #94). It is the only way to see what exists without running it, and
+  it is what makes `--label` usable — the labels have to be discoverable
+  somewhere. With `--message-format=json` each case is one `test-case` line
+  carrying the same `target` spelling a result would. Nothing is launched, so
+  a cross target needs no runner; the exception is a `harness` target, where
+  listing means asking the binary
 - A case with a `timeout` is killed when it expires and reported as timed
   out, whatever exit status the kill produced. The kill reaches the test
   process only — a test that spawns grandchildren leaks them
