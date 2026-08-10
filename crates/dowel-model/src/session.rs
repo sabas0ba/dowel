@@ -10,7 +10,9 @@ use crate::package::{self, DepKind, Package};
 use crate::persist::Cache;
 use crate::query::{self, Key};
 use crate::runner::Runner;
-use crate::target::{label, ArtifactDecl, CaseDecl, PackageId, PropMap, Target, TargetId};
+use crate::target::{
+    label, ArtifactDecl, CaseDecl, HarnessDecl, PackageId, PropMap, Target, TargetId,
+};
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Data, Document, Ns, Site, Value};
 use dowel_query::{Db, Stats};
@@ -43,6 +45,9 @@ const INSPECT_BLOCK: &str = "inspect";
 /// `[test.<name>.cases]` の見出し。1本の実行ファイルから複数のテストを
 /// 登録する。`test` 種別にのみ意味を持つ
 const CASES_BLOCK: &str = "cases";
+
+/// `[test.<name>.harness]` の見出し。実行ファイル自身に事例を列挙させる宣言
+const HARNESS_BLOCK: &str = "harness";
 
 /// 読み込みの時点で分かっている機能フラグの選択。
 ///
@@ -256,6 +261,7 @@ impl Session {
             artifacts: Vec::new(),
             inspections: Vec::new(),
             cases: Vec::new(),
+            harness: None,
         });
         self.externals.insert(name.to_string(), pid);
         log_debug!("external dependency `{name}` {} via pkg-config", r.version);
@@ -857,10 +863,11 @@ impl TargetSink<'_> {
             let is_artifacts = table.path.len() == 3 && table.path[2] == ARTIFACTS_BLOCK;
             let is_inspect = table.path.len() == 3 && table.path[2] == INSPECT_BLOCK;
             let is_cases = table.path.len() == 3 && table.path[2] == CASES_BLOCK;
+            let is_harness = table.path.len() == 3 && table.path[2] == HARNESS_BLOCK;
 
             let block = match table.path.len() {
                 2 => Block::Root,
-                3 if is_artifacts || is_inspect || is_cases => Block::Root,
+                3 if is_artifacts || is_inspect || is_cases || is_harness => Block::Root,
                 3 => match Block::parse(&table.path[2]) {
                     Some(b) => b,
                     None => {
@@ -871,13 +878,20 @@ impl TargetSink<'_> {
                         .at(
                             doc.file,
                             table.site.span,
-                            "only `public`, `private`, `artifacts`, `inspect`, or `cases`",
+                            "only `public`, `private`, `artifacts`, `inspect`, `cases`, or `harness`",
                         )
                         .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
                         if let (Some(c), Some(&span)) = (
                             closest(
                                 &table.path[2],
-                                ["public", "private", ARTIFACTS_BLOCK, INSPECT_BLOCK, CASES_BLOCK],
+                                [
+                                    "public",
+                                    "private",
+                                    ARTIFACTS_BLOCK,
+                                    INSPECT_BLOCK,
+                                    CASES_BLOCK,
+                                    HARNESS_BLOCK,
+                                ],
                             ),
                             table.path_spans.get(2),
                         ) {
@@ -917,12 +931,17 @@ impl TargetSink<'_> {
                     artifacts: Vec::new(),
                     inspections: Vec::new(),
                     cases: Vec::new(),
+                    harness: None,
                 });
                 tid
             });
 
             if is_cases {
                 self.declare_cases(tid, table);
+                continue;
+            }
+            if is_harness {
+                self.declare_harness(tid, table);
                 continue;
             }
             if is_artifacts || is_inspect {
@@ -966,6 +985,12 @@ impl TargetSink<'_> {
                 .at(table.site.file, table.site.span, "only `test` targets register cases")
                 .note("a case is another invocation of the same test binary; `dowel test` is what runs them"),
             );
+            return;
+        }
+        // どちらも「事例は何か」に答えるものである。両方書かれていたら、
+        // どちらが効いたのかがマニフェストから読めない。
+        if self.targets[tid.0].harness.is_some() {
+            self.diagnostics.push(both_answer_what_the_cases_are(table.site));
             return;
         }
         let known = schema::case_props();
@@ -1024,6 +1049,82 @@ impl TargetSink<'_> {
                 site: entry.site,
             });
         }
+    }
+
+    /// `[test.<name>.harness]` を取り込む（ADR-0023）。
+    ///
+    /// 事例の在り処が実行ファイルの中である場合の宣言である。dowel は枠組みを
+    /// 1つも知らず、「どう尋ねるか」だけをここから読む。
+    fn declare_harness(&mut self, tid: TargetId, table: &dowel_eval::Table) {
+        if self.targets[tid.0].kind != schema::TableKind::Test {
+            let kind = self.targets[tid.0].kind.name();
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "unknown-block",
+                    format!("`harness` has no meaning on a `{kind}` target"),
+                )
+                .at(table.site.file, table.site.span, "only `test` targets have a harness")
+                .note("a harness is how `dowel test` asks a binary what cases it contains"),
+            );
+            return;
+        }
+        if !self.targets[tid.0].cases.is_empty() {
+            self.diagnostics.push(both_answer_what_the_cases_are(table.site));
+            return;
+        }
+        let known = schema::harness_props();
+        let names: Vec<&str> = known.iter().map(|p| p.name).collect();
+        let mut fields = std::collections::BTreeMap::new();
+        for entry in &table.entries {
+            let prop = entry.key.join(".");
+            match known.iter().find(|p| p.name == prop) {
+                Some(def) if !def.ty.accepts(&entry.value.ty) => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "type-mismatch",
+                            format!(
+                                "`{prop}` is {} but {} was given",
+                                def.ty.display(),
+                                entry.value.ty.display()
+                            ),
+                        )
+                        .at(
+                            entry.site.file,
+                            entry.site.span,
+                            format!("this value has type {}", entry.value.ty.display()),
+                        ),
+                    );
+                    continue;
+                }
+                Some(_) => {}
+                None => {
+                    let mut d =
+                        Diagnostic::error("unknown-property", format!("unknown property `{prop}`"))
+                            .at(entry.site.file, entry.site.span, "a harness has no such property")
+                            .note(format!("a harness accepts: {}", names.join(", ")));
+                    if let Some(c) = closest(&prop, names.iter().copied()) {
+                        d = d.note(format!("did you mean `{c}`?"));
+                    }
+                    self.diagnostics.push(d);
+                    continue;
+                }
+            }
+            fields.insert(prop, entry.value.clone());
+        }
+        // 列挙のしかたが無ければ、この宣言は何も述べていない。既定を当てると
+        // 「どう尋ねたのか」がマニフェストから読めなくなる。
+        if !fields.contains_key("list") {
+            self.diagnostics.push(
+                Diagnostic::error("missing-field", "`[harness]` has no `list`")
+                    .at(table.site.file, table.site.span, "write `list = [\"--list\"]`")
+                    .note(
+                        "dowel knows no test framework; the arguments that print the case names \
+                         have to be declared",
+                    ),
+            );
+            return;
+        }
+        self.targets[tid.0].harness = Some(HarnessDecl { fields, site: table.site });
     }
 
     /// `[<kind>.<name>.artifacts]` / `[<kind>.<name>.inspect]` を取り込む
@@ -1597,3 +1698,14 @@ fn lexical(p: &Path) -> PathBuf {
 
 /// 位置を持たない診断のための空スパン。
 pub const NO_SPAN: Span = Span::EMPTY;
+
+/// `cases` と `harness` が両方書かれた。
+///
+/// どちらも「このターゲットの事例は何か」に答えるものであり、両立させると
+/// どちらが効いたのかがマニフェストから読めない（ADR-0023）。
+fn both_answer_what_the_cases_are(site: Site) -> Diagnostic {
+    Diagnostic::error("conflicting-declaration", "`cases` and `harness` cannot both be declared")
+        .at(site.file, site.span, "the other one is declared too")
+        .note("both answer what the cases of this target are")
+        .note("`cases` registers them in the manifest; `harness` asks the binary")
+}

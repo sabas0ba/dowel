@@ -38,6 +38,20 @@ pub struct Target {
     /// `[test.<name>.cases]`。1本の実行ファイルから登録するテスト。宣言順。
     /// 空なら、そのターゲット自身が1件のテストである（従来の形）
     pub cases: Vec<CaseDecl>,
+    /// `[test.<name>.harness]`。実行ファイル自身に事例を列挙させる宣言。
+    /// `cases` と同時には書けない——どちらも「事例は何か」に答えるものである
+    pub harness: Option<HarnessDecl>,
+}
+
+/// `[test.<name>.harness]`（ADR-0023）。
+///
+/// 事例の在り処が実行ファイルの中である場合の宣言。dowel は枠組みを知らず、
+/// 「どう尋ねるか」だけをここから読む。
+#[derive(Clone, Debug)]
+pub struct HarnessDecl {
+    /// `dowel_eval::schema::harness_props` の名前 → 値
+    pub fields: std::collections::BTreeMap<String, Value>,
+    pub site: Site,
 }
 
 /// `[test.<name>.cases]` の1項目。

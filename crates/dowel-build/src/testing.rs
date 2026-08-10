@@ -298,6 +298,19 @@ pub struct Job {
     /// 起動前に走らせる転送コマンド。対象機がビルド機の
     /// ファイルシステムを見られない場合にのみ入る
     pub transfer: Option<(String, Vec<String>)>,
+    /// 実行ファイル自身に事例を列挙させる宣言（ADR-0023）。
+    /// これがある仕事は「まだ事例が分かっていない1件」であり、
+    /// [`discover`] が本当の仕事の列に展開する
+    pub harness: Option<Harness>,
+}
+
+/// 実行ファイルへの尋ね方（ADR-0023）。dowel は枠組みを1つも知らない。
+#[derive(Clone, Debug)]
+pub struct Harness {
+    /// 事例の名前を1行ずつ書き出させる引数
+    pub list: Vec<String>,
+    /// 1件だけ走らせるときに、名前の**前**に置く引数
+    pub run: Vec<String>,
 }
 
 /// 走らせるものを1つずつ数え上げる。
@@ -338,7 +351,25 @@ pub fn plan_jobs(
             should_fail: false,
             labels: Vec::new(),
             transfer: transfer.clone(),
+            harness: None,
         };
+        // ハーネスの宣言があれば、事例はまだ分かっていない。ここでは
+        // 「尋ねるべき1件」として積み、`discover` が展開する。
+        if let Some(decl) = &sess.target(tid).harness {
+            let field =
+                |name: &str| decl.fields.get(name).and_then(|v| dowel_eval::specialize(v, &cfg));
+            let mut job = base.clone();
+            job.env = pairs(field("env").as_ref());
+            job.timeout = seconds(field("timeout").as_ref());
+            job.labels = strings(field("labels").as_ref());
+            job.harness = Some(Harness {
+                list: strings(field("list").as_ref()),
+                run: strings(field("run").as_ref()),
+            });
+            out.push(job);
+            continue;
+        }
+
         let cases = &sess.target(tid).cases;
         if cases.is_empty() {
             out.push(base);
@@ -351,10 +382,7 @@ pub fn plan_jobs(
             job.label = format!("{}/{}", base.label, case.name);
             job.args.extend(strings(field("args").as_ref()));
             job.env = pairs(field("env").as_ref());
-            job.timeout = field("timeout").and_then(|v| match v.data {
-                Data::Int(n) if n > 0 => Some(Duration::from_secs(n as u64)),
-                _ => None,
-            });
+            job.timeout = seconds(field("timeout").as_ref());
             job.should_fail =
                 matches!(field("should_fail").map(|v| v.data), Some(Data::Bool(true)));
             job.labels = strings(field("labels").as_ref());
@@ -362,6 +390,13 @@ pub fn plan_jobs(
         }
     }
     out
+}
+
+fn seconds(v: Option<&Value>) -> Option<Duration> {
+    match v.map(|v| &v.data) {
+        Some(Data::Int(n)) if *n > 0 => Some(Duration::from_secs(*n as u64)),
+        _ => None,
+    }
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -372,6 +407,99 @@ fn strings(v: Option<&Value>) -> Vec<String> {
 fn pairs(v: Option<&Value>) -> Vec<(String, String)> {
     let Some(Data::Map(map)) = v.map(|v| &v.data) else { return Vec::new() };
     map.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()
+}
+
+/// ハーネスの宣言を持つ仕事を、実際の事例へ展開する（ADR-0023）。
+///
+/// 実行ファイルに尋ねるので、外部プロセスが走る。計画の段ではなくここで行う
+/// のは、尋ねる相手がまだ組み上がっていないためである。
+///
+/// 尋ねられなかった場合は、0件成功にせず失敗として報告する。列挙できない
+/// ことと事例が無いことは別である——黙って0件にすると、試験が消えたことに
+/// 誰も気づかない。
+pub fn discover(jobs: Vec<Job>) -> (Vec<Job>, Vec<Outcome>) {
+    let mut out = Vec::new();
+    let mut failures = Vec::new();
+    for job in jobs {
+        let Some(harness) = job.harness.clone() else {
+            out.push(job);
+            continue;
+        };
+        match list_cases(&job, &harness) {
+            Ok(names) if names.is_empty() => {
+                failures.push(discovery_failed(&job, "the harness listed no cases".to_string()))
+            }
+            Ok(names) => {
+                log_debug!("{} lists {} case(s)", job.label, names.len());
+                for name in names {
+                    let mut case = job.clone();
+                    case.label = format!("{}/{}", job.label, name);
+                    case.args.extend(harness.run.iter().cloned());
+                    case.args.push(name);
+                    case.harness = None;
+                    out.push(case);
+                }
+            }
+            Err(e) => failures.push(discovery_failed(&job, e)),
+        }
+    }
+    (out, failures)
+}
+
+/// 列挙に失敗した仕事を、そのターゲットの1件の失敗として報告する。
+fn discovery_failed(job: &Job, why: String) -> Outcome {
+    Outcome {
+        target: job.target,
+        label: job.label.clone(),
+        binary: job.binary.clone().unwrap_or_default(),
+        status: None,
+        timed_out: false,
+        should_fail: false,
+        passed: false,
+        duration_ms: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        launch_error: Some(format!("could not list the cases: {why}")),
+    }
+}
+
+/// 実行ファイルに事例の名前を尋ねる。
+///
+/// 出力は1行1件。空行と `#` で始まる行は読み飛ばす。それ以上の解釈はしない——
+/// 解釈を足すと、その形を出す枠組みだけが使える形になる。
+fn list_cases(job: &Job, harness: &Harness) -> Result<Vec<String>, String> {
+    if job.binary.is_none() {
+        return Err("no artifact was planned for this target".into());
+    }
+    transfer(job).map_err(|e| format!("could not transfer the artifact: {e}"))?;
+
+    let mut cmd = Command::new(&job.program);
+    cmd.args(&job.args).args(&harness.list).current_dir(&job.cwd);
+    for (k, v) in &job.env {
+        cmd.env(k, v);
+    }
+    log_debug!("listing the cases of {}", job.label);
+    log_trace!("  {} {}", job.program, harness.list.join(" "));
+
+    let (status, timed_out, stdout, stderr) = capture_run(&mut cmd, job.timeout)
+        .map_err(|e| format!("cannot start `{}`: {e}", job.program))?;
+    if timed_out {
+        return Err("the listing timed out".into());
+    }
+    if !status.success() {
+        let tail = stderr.trim_end();
+        return Err(match status.code() {
+            Some(c) if tail.is_empty() => format!("the listing exited with status {c}"),
+            Some(c) => format!("the listing exited with status {c}\n{tail}"),
+            None => "the listing was terminated by a signal".into(),
+        });
+    }
+    Ok(stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect())
 }
 
 /// 与えられたテストターゲットを起動する。

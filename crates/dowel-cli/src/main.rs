@@ -334,7 +334,11 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             }
             // 走らせるものを数え上げてから選別する。事例は起動の単位であり、
             // ターゲットの単位ではない。
-            let mut jobs = testing::plan_jobs(&sess, &p, &launcher, &requested, &cfg);
+            // ハーネスを宣言したターゲットは、実行ファイルに事例を尋ねてから
+            // でないと数え上げられない（ADR-0023）。尋ねられなかったものは
+            // 0件成功にせず、その場で失敗として持ち回る。
+            let (mut jobs, discovery_failures) =
+                testing::discover(testing::plan_jobs(&sess, &p, &launcher, &requested, &cfg));
             if let Some(wanted) = &opts.labels {
                 jobs.retain(|j| j.labels.iter().any(|l| wanted.contains(l)));
                 if jobs.is_empty() {
@@ -350,13 +354,15 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 jobs.retain(|j| failed.contains(&j.label.as_str()));
             }
             let run_opts = test_run_options(opts);
-            let outcomes = testing::run(&jobs, &run_opts);
+            let mut outcomes = discovery_failures;
+            let requested_count = jobs.len() + outcomes.len();
+            outcomes.extend(testing::run(&jobs, &run_opts));
 
             state.update(&outcomes);
             if let Err(e) = state.save(&p.build_dir) {
                 eprintln!("warning: cannot record the test results: {e}");
             }
-            Ok(report_tests(&outcomes, jobs.len(), opts))
+            Ok(report_tests(&outcomes, requested_count, opts))
         }
     }
 }
