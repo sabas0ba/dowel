@@ -32,6 +32,11 @@ pub struct Launch {
     pub cwd: PathBuf,
     /// 起動するデバッガ。`[toolchain] debug`（既定 `gdb`）
     pub debugger: String,
+    /// プログラムに渡す引数。事例を開き直すとき、その事例の引数が入る
+    /// （`dowel test --debug-failed`）
+    pub args: Vec<String>,
+    /// プログラムに与える環境変数。同じく、事例のものが入る
+    pub env: Vec<(String, String)>,
     /// クロスの場合の、スタブを立てるコマンドと接続先
     pub stub: Option<Stub>,
 }
@@ -85,7 +90,14 @@ pub fn prepare(
     // ホストと同じトリプルなら、そのまま起動できる。
     let host = dowel_eval::config::default_triple();
     if cfg.target == host {
-        return Ok(Launch { program, cwd, debugger, stub: None });
+        return Ok(Launch {
+            program,
+            cwd,
+            debugger,
+            args: Vec::new(),
+            env: Vec::new(),
+            stub: None,
+        });
     }
 
     // クロス。ランナーがスタブの立て方を述べていなければ断る。ホストの gdb を
@@ -122,6 +134,8 @@ pub fn prepare(
         program,
         cwd,
         debugger,
+        args: Vec::new(),
+        env: Vec::new(),
         stub: Some(Stub { program: stub_program, args: stub_args, connect }),
     })
 }
@@ -147,8 +161,18 @@ pub fn dap(s: &Launch) -> String {
     w.field_str("name", &format!("dowel: {}", file_name(&s.program)));
     w.field_str("program", &s.program.display().to_string());
     w.field_str("cwd", &s.cwd.display().to_string());
-    w.key("args").begin_array();
-    w.end_array();
+    w.field_strs("args", s.args.iter().map(|a| a.as_str()));
+    if !s.env.is_empty() {
+        // `cppdbg` の形。`{name, value}` の列である。
+        w.key("environment").begin_array();
+        for (k, v) in &s.env {
+            w.begin_object();
+            w.field_str("name", k);
+            w.field_str("value", v);
+            w.end_object();
+        }
+        w.end_array();
+    }
     w.field_str("MIMode", "gdb");
     w.field_str("miDebuggerPath", &s.debugger);
     if let Some(stub) = &s.stub {
@@ -156,7 +180,9 @@ pub fn dap(s: &Launch) -> String {
         // 組み立て済みの列をそのまま渡す。
         w.field_str("miDebuggerServerAddress", &stub.connect);
         w.field_str("debugServerPath", &stub.program);
-        w.field_strs("debugServerArgs", stub.args.iter().map(|a| a.as_str()));
+        // プログラムの引数はスタブの側で渡す。デバッガは繋ぐだけであり、
+        // 起動列を持つのはランナーである。
+        w.field_strs("debugServerArgs", stub.args.iter().chain(s.args.iter()).map(|a| a.as_str()));
     }
     // 遠隔でないことを明示する。書かないと、拡張の既定に委ねることになる。
     w.field_bool("stopAtEntry", false);
@@ -177,9 +203,14 @@ pub fn run(s: &Launch) -> Result<(), String> {
         None => None,
         Some(stub) => {
             log_info!("{} {}", stub.program, stub.args.join(" "));
-            let child = Command::new(&stub.program)
-                .args(&stub.args)
-                .current_dir(&s.cwd)
+            let mut cmd = Command::new(&stub.program);
+            // プログラムの引数は成果物の後ろ。qemu も gdbserver も、
+            // プログラム以降を被起動側の引数として渡す。
+            cmd.args(&stub.args).args(&s.args).current_dir(&s.cwd);
+            for (k, v) in &s.env {
+                cmd.env(k, v);
+            }
+            let child = cmd
                 .spawn()
                 .map_err(|e| format!("cannot start the debug stub `{}`: {e}", stub.program))?;
             Some(child)
@@ -190,7 +221,18 @@ pub fn run(s: &Launch) -> Result<(), String> {
     if let Some(stub) = &s.stub {
         cmd.arg("-ex").arg(format!("target remote {}", stub.connect));
     }
-    cmd.arg(&s.program).current_dir(&s.cwd);
+    if s.stub.is_none() {
+        // ホストではデバッガが起動する側なので、引数も環境もこちらに与える。
+        // 被起動側の環境はデバッガから引き継がれる。
+        if !s.args.is_empty() {
+            cmd.arg("--args");
+        }
+        for (k, v) in &s.env {
+            cmd.env(k, v);
+        }
+    }
+    cmd.arg(&s.program).args(if s.stub.is_none() { &s.args[..] } else { &[] });
+    cmd.current_dir(&s.cwd);
     log_info!("{} {}", s.debugger, s.program.display());
     let status = cmd.status();
 
@@ -216,6 +258,8 @@ mod tests {
             program: PathBuf::from("/b/bin/app"),
             cwd: PathBuf::from("/p"),
             debugger: "gdb".into(),
+            args: Vec::new(),
+            env: Vec::new(),
             stub,
         }
     }
@@ -228,6 +272,36 @@ mod tests {
         assert!(text.contains("\"cwd\": \"/p\""), "{text}");
         // ホストでは繋ぎ先が無い。書くと、無い相手を待つ構成になる。
         assert!(!text.contains("miDebuggerServerAddress"), "{text}");
+    }
+
+    #[test]
+    fn a_case_launch_carries_its_arguments_and_environment() {
+        // `--debug-failed` で開き直すとき、事例の宣言がそのまま構成になる。
+        let mut s = session(None);
+        s.args = vec!["parse".into(), "--strict".into()];
+        s.env = vec![("SUITE_MODE".into(), "strict".into())];
+        let text = dap(&s);
+        assert!(text.contains("\"parse\""), "{text}");
+        assert!(text.contains("\"--strict\""), "{text}");
+        assert!(text.contains("\"name\": \"SUITE_MODE\""), "{text}");
+        assert!(text.contains("\"value\": \"strict\""), "{text}");
+    }
+
+    #[test]
+    fn a_cross_case_passes_its_arguments_through_the_stub() {
+        // 引数を受け取るのはスタブに包まれた側である。デバッガは繋ぐだけ。
+        let mut s = session(Some(Stub {
+            program: "qemu-riscv64".into(),
+            args: vec!["-g".into(), "1234".into(), "/b/bin/app".into()],
+            connect: "localhost:1234".into(),
+        }));
+        s.args = vec!["parse".into()];
+        let text = dap(&s);
+        let server = &text[text.find("debugServerArgs").unwrap()..];
+        // 成果物の**後**に来る。qemu はプログラム以降を被起動側に渡す。
+        let artifact = server.find("/b/bin/app").unwrap();
+        let arg = server.find("\"parse\"").unwrap();
+        assert!(artifact < arg, "{server}");
     }
 
     #[test]

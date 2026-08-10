@@ -325,15 +325,18 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             let mut state = testing::State::load(&build_dir);
             let mut targets = requested.targets.clone();
 
-            if opts.only_failed {
+            // `--debug-failed` は「前回落ちたもの」という選択を含む。
+            let only_failed = opts.only_failed || opts.debug_failed;
+            if only_failed {
                 // 前回落ちたものが1件も無いのは良い知らせであって、意図との
                 // 食い違いではない。走らせるものが無いことをそのまま述べる。
                 if state.failed().is_empty() {
                     if report(&sess, opts) {
                         return Ok(ExitCode::FAILURE);
                     }
+                    let doing = if opts.debug_failed { "debug" } else { "rerun" };
                     eprintln!(
-                        "nothing to rerun. no failing tests were recorded in {}",
+                        "nothing to {doing}. no failing tests were recorded in {}",
                         build_dir.display()
                     );
                     return Ok(ExitCode::SUCCESS);
@@ -397,16 +400,16 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             if let Some(wanted) = &opts.labels {
                 jobs.retain(|j| j.labels.iter().any(|l| wanted.contains(l)));
             }
-            if opts.only_failed {
+            if only_failed {
                 let failed = state.failed();
                 jobs.retain(|j| failed.contains(&j.label().as_str()));
             }
             // 選択を求めていないのに空になったのは、意図との食い違いではない。
             // 事例が条件で全部落ちた形がこれである（issue #92 / #99）。
             let asked_for_a_selection =
-                !requested.cases.is_empty() || opts.labels.is_some() || opts.only_failed;
+                !requested.cases.is_empty() || opts.labels.is_some() || only_failed;
             if jobs.is_empty() && discovery_failures.is_empty() && asked_for_a_selection {
-                let remembered: Vec<String> = if opts.only_failed {
+                let remembered: Vec<String> = if only_failed {
                     state.failed().iter().map(|s| s.to_string()).collect()
                 } else {
                     Vec::new()
@@ -426,6 +429,13 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 }
                 list_cases(&jobs, opts);
                 return Ok(ExitCode::SUCCESS);
+            }
+
+            // 落ちた事例をデバッガの下で開き直す（docs/30-devexp.md 2.3）。
+            // 走らせ直して判定するのではなく、デバッガのセッションが再実行
+            // そのものである。判定しないので、記録も更新しない。
+            if opts.debug_failed {
+                return Ok(debug_failed_case(&mut sess, &p, &cfg, opts, &jobs, &launcher));
             }
 
             let run_opts = test_run_options(opts);
@@ -768,6 +778,76 @@ fn status_text(status: &std::process::ExitStatus) -> String {
 ///
 /// `remembered` は `--failed` が覚えているラベル、`known` は今回計画された
 /// 事例のラベル。両方あるとき、消えた事例を名指せる。
+/// 落ちた事例をデバッガの下で開き直す（`dowel test --debug-failed`）。
+///
+/// デバッガは対話するものであり、繋がる相手は1つである。落ちたものが
+/// 複数残っているなら、選ばずに並べて、名指しを求める——こちらが選ぶと、
+/// 「どれが開いたのか」を利用者が推測することになる。
+fn debug_failed_case(
+    sess: &mut Session,
+    p: &build_plan::Plan,
+    cfg: &Config,
+    opts: &Options,
+    jobs: &[testing::Job],
+    launcher: &testing::Launcher,
+) -> ExitCode {
+    let job = match jobs {
+        [one] => one,
+        many => {
+            eprintln!("error: {} tests failed last time; the debugger attaches to one", many.len());
+            for j in many {
+                eprintln!("  {}", j.label());
+            }
+            eprintln!("note: name one: `dowel test <label> --debug-failed`");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut launch = match dowel_build::debug::prepare(sess, p, cfg, job.target) {
+        Ok(s) => s,
+        Err(d) => {
+            sess.diagnostics.push(d);
+            report(sess, opts);
+            return ExitCode::FAILURE;
+        }
+    };
+    // 事例の宣言を引き継ぐ。`job.args` の先頭はランナー由来の分なので、
+    // 事例そのものの引数だけを残す——デバッグの経路ではランナーは
+    // スタブとして別に組まれる。
+    let runner_args = match &job.binary {
+        Some(b) => launcher.command(b).1.len(),
+        None => 0,
+    };
+    launch.args = job.args.iter().skip(runner_args).cloned().collect();
+    launch.env = job.env.clone();
+    launch.cwd = job.cwd.clone();
+    eprintln!("debugging {}", job.label());
+
+    if opts.dap {
+        // 構成は成果物なので stdout。進行は stderr のまま。
+        println!("{}", dowel_build::debug::dap(&launch));
+        return ExitCode::SUCCESS;
+    }
+    if !dowel_build::exec::program_exists(&launch.debugger) {
+        sess.diagnostics.push(
+            Diagnostic::error(
+                "missing-toolchain",
+                format!("the debugger `{}` is not on PATH", launch.debugger),
+            )
+            .note("declare it with `debug = \"...\"` in `[toolchain]` or `[toolchain.<triple>]`")
+            .note("`--dap` writes the launch configuration without starting anything"),
+        );
+        report(sess, opts);
+        return ExitCode::FAILURE;
+    }
+    match dowel_build::debug::run(&launch) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn empty_selection(
     sess: &Session,
     opts: &Options,
@@ -787,7 +867,7 @@ fn empty_selection(
         }
         return ExitCode::FAILURE;
     }
-    if opts.only_failed {
+    if opts.only_failed || opts.debug_failed {
         // ここへ来るのは「覚えているものはあるが、どれも今は存在しない」場合
         // だけである（何も落ちていない場合は先に返している）。記録が現実と
         // 合わなくなっている。消えた事例を名指す——「直す」という行為そのものが、
