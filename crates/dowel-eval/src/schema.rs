@@ -226,6 +226,20 @@ pub fn runner_props() -> Vec<PropDef> {
             doc: "host part of the transfer destination, written as `<host>:<path>`",
             domain: None,
         },
+        PropDef {
+            name: "debug_args",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "arguments that make the runner host the program behind a debug stub, such as qemu's `-g <port>` (ADR-0024)",
+            domain: None,
+        },
+        PropDef {
+            name: "debug_connect",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "where the debugger attaches, such as `localhost:1234`. dowel does not parse the runner's flags, so this cannot be derived from `debug_args`",
+            domain: None,
+        },
     ]
 }
 

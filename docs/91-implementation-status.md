@@ -358,6 +358,18 @@ changes, only the speed.
   If the triple differs from the host and no runner is declared, launch is
   refused with a diagnostic beforehand — afterward it would surface as
   `Exec format error`, reporting a configuration mistake as a test failure
+- `dowel debug <target>` — builds the target and starts the declared
+  debugger on its artifact, package root as the working directory
+  ([ADR-0024](adr/0024-debug-command.md)). `debug` is a toolchain tool
+  (default `gdb`), so a cross build names its own the way it names its
+  compiler, and it is probed only here. Debugging another triple's artifact
+  needs a stub, and the runner **declares** it — `debug_args` hosts the
+  program, `debug_connect` says where to attach. dowel does not parse the
+  runner's flags, so neither is derivable from the other and a cross target
+  declaring neither is refused (`missing-debug-stub`) rather than pointing a
+  host gdb at a foreign binary. `--dap` writes the launch configuration to
+  stdout and starts nothing. No `substitute-path` is emitted: nothing is
+  remapped yet, so there is nothing to compensate for (docs/30-devexp.md 2.1)
 - `dowel test` — launches tests and judges pass/fail by exit status.
   There is no test harness; the C convention ("exit status 0 means success")
   applies. The working directory is the package root. Only failing tests'
@@ -556,19 +568,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (513 tests):
+Current breakdown (522 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 293 |
+| `unit-*` | per-crate unit tests | 295 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 137 |
+| `e2e` | compile real C and C++, run it, check the output | 144 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (60 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (62 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution and index consistency | 5 |
@@ -637,7 +649,6 @@ cannot be measured with the current fixtures; the scale fixture
 | the probe-fact DB | Phase 2 |
 | the `bench` / `template` / `toolchain` kinds | Phase 2 / 4 |
 | Meson `introspect` import | Phase 3 backlog; CMake File API import and `migrate verify` are implemented |
-| `dowel debug` | Phase 4 |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry / tarball dependency source | Phase 5; `version` deps delegate to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and `dowel.lock` records their resolutions — a dowel-run registry, if ever wanted, is a separate future decision |

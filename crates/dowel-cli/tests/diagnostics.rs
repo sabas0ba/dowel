@@ -332,6 +332,27 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "not-debuggable",
+        why: "a library has nothing a debugger can start",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[lib.helper]\nsources = glob(\"src/*.c\")\n",
+        )],
+        args: &["debug", "helper", "--message-format=json"],
+    },
+    Case {
+        code: "missing-debug-stub",
+        why: "debugging another machine's artifact needs a declared stub and address",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[runner.riscv64gc-unknown-linux-gnu]\ncommand = \"true\"\n",
+        ), (
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[toolchain.riscv64gc-unknown-linux-gnu]\nc = \"cc\"\n",
+        )],
+        args: &["debug", "app", "--target=riscv64gc-unknown-linux-gnu", "--message-format=json"],
+    },
+    Case {
         code: "conflicting-declaration",
         why: "`cases` and `harness` both answer what the cases of a target are",
         files: &[(

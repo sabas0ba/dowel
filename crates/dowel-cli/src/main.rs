@@ -270,6 +270,51 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             Ok(exit_code(inspect(&sess, &cfg, &p, &requested, opts)))
         }
 
+        Command::Debug { target } => {
+            // 組んでからデバッガを起こす。組めていない成果物に向けても
+            // 読めるものが無い。
+            let tid = sess.find_target(target)?;
+            let backend = building_backend(opts, "dowel debug")?;
+            let requested = vec![tid];
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
+                return Ok(ExitCode::FAILURE);
+            };
+            let session = match dowel_build::debug::prepare(&sess, &p, &cfg, tid) {
+                Ok(s) => s,
+                Err(d) => {
+                    sess.diagnostics.push(d);
+                    report(&sess, opts);
+                    return Ok(ExitCode::FAILURE);
+                }
+            };
+            if opts.dap {
+                // 構成は成果物なので stdout。進行は stderr のまま。
+                println!("{}", dowel_build::debug::dap(&session));
+                return Ok(ExitCode::SUCCESS);
+            }
+            // デバッガは対話するものである。実在しなければ、起動して
+            // 「見つからない」と言われるより先に述べる。
+            if !dowel_build::exec::program_exists(&session.debugger) {
+                sess.diagnostics.push(
+                    Diagnostic::error(
+                        "missing-toolchain",
+                        format!("the debugger `{}` is not on PATH", session.debugger),
+                    )
+                    .note("declare it with `debug = \"...\"` in `[toolchain]` or `[toolchain.<triple>]`")
+                    .note("`--dap` writes the launch configuration without starting anything"),
+                );
+                report(&sess, opts);
+                return Ok(ExitCode::FAILURE);
+            }
+            match dowel_build::debug::run(&session) {
+                Ok(()) => Ok(ExitCode::SUCCESS),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+
         Command::Test { targets } => {
             let backend = building_backend(opts, "dowel test")?;
             let mut requested = test_targets(&sess, targets)?;

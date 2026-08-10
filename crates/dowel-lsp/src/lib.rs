@@ -37,6 +37,15 @@ use std::io::{BufRead, Write};
 /// 誤りのあるマニフェストが正しいものに見える。
 pub const UNSUPPORTED: &[(&str, &str)] = &[
     ("unreadable-build", "the buffer overlay cannot reproduce an unreadable file on disk"),
+    (
+        "not-debuggable",
+        "raised by `dowel debug` about the target it was asked for; the editor asks for none",
+    ),
+    (
+        "missing-debug-stub",
+        "triggered by `--target` under `dowel debug`; the editor has no `--target` and starts \
+         no debug session",
+    ),
     ("missing-runner", "triggered by `--target`, which is not part of any manifest"),
     (
         "unsupported-target",

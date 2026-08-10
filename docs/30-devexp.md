@@ -3,8 +3,9 @@
 > This is a design document for runners, debugger integration, and editor
 > integration. Usage of runners and editors is in
 > [63-guides.md](63-guides.md); what is implemented is in
-> [91-implementation-status.md](91-implementation-status.md)
-> (`dowel debug` is not implemented).
+> [91-implementation-status.md](91-implementation-status.md). `dowel debug`
+> now exists ([ADR-0024](adr/0024-debug-command.md)); section 2.1's
+> `substitute-path` and section 2.3's `--debug-failed` do not.
 
 ## 1. The runner abstraction
 
@@ -80,10 +81,23 @@ this layer is the only place it can be resolved.**
 - Alternatively emits a DAP (Debug Adapter Protocol) launch configuration so
   an editor reproduces the same environment
 
+**Implemented**, with two departures
+([ADR-0024](adr/0024-debug-command.md), [60-cli.md](60-cli.md)). The gdb
+tied to the toolchain is selected — `debug` is a toolchain tool, defaulting
+to `gdb` and declarable per triple. The DAP configuration is emitted with
+`--dap`. But the stub is **declared, not started by guesswork**: dowel
+cannot know the flag that turns a given runner into a gdbstub, so
+`debug_args` and `debug_connect` say it, and a cross target declaring
+neither is refused instead of hanging. And no `substitute-path` is emitted,
+because dowel does not remap paths yet — there is nothing to compensate for,
+and section 2.1's trade-off has not been taken.
+
 ### 2.3 Derived features
 
 `dowel test --debug-failed` — rerun a failing test directly under the
-debugger. Realizable from the same information.
+debugger. Realizable from the same information; not implemented. Both halves
+now exist — the test job list and the debug launch — and joining them is
+what remains.
 
 ## 3. Editor integration
 

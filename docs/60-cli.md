@@ -224,6 +224,46 @@ the target.
 - `--message-format=json` emits one result per line on stdout, including
   `timed_out`
 
+## `dowel debug`
+
+```
+dowel debug <target> [common options] [build options] [--dap]
+```
+
+Builds the target and starts a debugger on its artifact, with the package
+root as the working directory ([ADR-0024](adr/0024-debug-command.md)).
+Only `bin` and `test` targets can be debugged — a library has nothing to
+start (`not-debuggable`).
+
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `--dap` | — | — | write a DAP launch configuration to stdout and start nothing, so an editor reproduces the same session |
+
+- The debugger is a toolchain tool: `debug` in `[toolchain]` /
+  `[toolchain.<triple>]`, defaulting to `gdb`. A cross build therefore names
+  its own (`debug = "riscv64-linux-gnu-gdb"`) the same way it names its
+  compiler. It is probed only here, so a project that never debugs needs no
+  gdb; missing from PATH is `missing-toolchain`
+- Debugging an artifact built for **another** triple needs a stub. The
+  runner declares both how to host the program and where to attach:
+
+  ```toml
+  [runner.riscv64gc-unknown-linux-gnu]
+  command       = "qemu-riscv64"
+  args          = ["-L", "/usr/riscv64-linux-gnu"]
+  debug_args    = ["-g", "1234"]         # these turn the runner into a stub
+  debug_connect = "localhost:1234"       # this is where the debugger attaches
+  ```
+
+  The port appears twice because dowel does not parse the runner's flags and
+  can derive neither from the other. A cross target whose runner declares
+  neither is refused with `missing-debug-stub` rather than pointing a host
+  gdb at a foreign binary
+- The stub is started before the debugger and killed when it exits
+- No `substitute-path` is emitted: dowel does not pass `-ffile-prefix-map`,
+  so there is no mapping to compensate for, and emitting one would be a
+  fiction (docs/30-devexp.md section 2.1)
+
 ## `dowel inspect`
 
 ```

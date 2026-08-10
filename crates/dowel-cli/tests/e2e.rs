@@ -3542,3 +3542,110 @@ fn an_unknown_harness_property_gets_a_suggestion() {
     r.stderr_contains("unknown-property");
     r.stderr_contains("did you mean `run`?");
 }
+
+/// `dowel debug`（ADR-0024）。
+///
+/// デバッガはツールチェーンの道具の1つであり、トリプルごとに選ばれる。
+/// スタブの立て方は宣言させる——推測すると「それらしく見えて固まる」列ができる。
+fn debug_project(name: &str, extra_toml: &str, extra_build: &str) -> Project {
+    let p = Project::new(name);
+    p.write(
+        "dowel.toml",
+        &format!("[package]\nname    = \"app\"\nversion = \"0.1.0\"\n{extra_toml}"),
+    );
+    p.write(
+        "dowel.build",
+        &format!("[bin.app]\nsources = glob(\"src/*.c\")\n\n[lib.helper]\nsources = glob(\"src/*.c\")\n{extra_build}"),
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn the_launch_configuration_names_the_program_the_debugger_and_the_directory() {
+    let p = debug_project("debug-dap", "", "");
+    let r = p.run(".", &["debug", "app", "--dap"]);
+    r.success();
+    // 構成は成果物なので stdout。
+    r.stdout_contains("\"type\": \"cppdbg\"");
+    r.stdout_contains("\"miDebuggerPath\": \"gdb\"");
+    r.stdout_contains("bin/app");
+    // ホストでは繋ぎ先が無い。書くと、無い相手を待つ構成になる。
+    assert!(!r.stdout.contains("miDebuggerServerAddress"), "a host session named a stub\n{r}");
+    // 実際に組んでいる。構成だけ出して成果物が無いのでは、開いても始まらない。
+    assert!(build_dir(&p.path("."), "debug").join("bin/app").exists());
+}
+
+#[test]
+fn the_declared_debugger_is_the_one_named() {
+    // `[toolchain] debug` が効く。道具の表に載っているので、トリプルごとの
+    // 宣言もそのまま効く。
+    let p = debug_project("debug-declared", "\n[toolchain]\ndebug = \"lldb\"\n", "");
+    let r = p.run(".", &["debug", "app", "--dap"]);
+    r.success();
+    r.stdout_contains("\"miDebuggerPath\": \"lldb\"");
+}
+
+#[test]
+fn a_library_has_nothing_to_start() {
+    let p = debug_project("debug-lib", "", "");
+    let r = p.run(".", &["debug", "helper"]);
+    r.failure();
+    r.stderr_contains("not-debuggable");
+    r.stderr_contains("nothing to start");
+}
+
+#[test]
+fn a_cross_session_without_a_declared_stub_is_refused() {
+    // ホストの gdb を別アーキテクチャの実行ファイルに向けても、読めるのは
+    // 記号までである。断って、何を宣言すればよいかを述べる。
+    let p = debug_project(
+        "debug-cross-nostub",
+        "\n[toolchain.riscv64gc-unknown-linux-gnu]\nc = \"cc\"\n",
+        "\n[runner.riscv64gc-unknown-linux-gnu]\ncommand = \"true\"\n",
+    );
+    let r = p.run(".", &["debug", "app", "--target=riscv64gc-unknown-linux-gnu"]);
+    r.failure();
+    r.stderr_contains("missing-debug-stub");
+    r.stderr_contains("debug_args");
+    r.stderr_contains("debug_connect");
+}
+
+#[test]
+fn a_declared_stub_reaches_the_launch_configuration() {
+    let p = debug_project(
+        "debug-cross-stub",
+        "\n[toolchain.riscv64gc-unknown-linux-gnu]\nc = \"cc\"\ndebug = \"riscv64-linux-gnu-gdb\"\n",
+        "\n[runner.riscv64gc-unknown-linux-gnu]\ncommand       = \"qemu-riscv64\"\nargs          = [\"-L\", \"/usr/riscv64-linux-gnu\"]\ndebug_args    = [\"-g\", \"1234\"]\ndebug_connect = \"localhost:1234\"\n",
+    );
+    let r = p.run(".", &["debug", "app", "--target=riscv64gc-unknown-linux-gnu", "--dap"]);
+    r.success();
+    r.stdout_contains("\"miDebuggerServerAddress\": \"localhost:1234\"");
+    r.stdout_contains("\"debugServerPath\": \"qemu-riscv64\"");
+    // ツールチェーンの gdb が選ばれる。ホストのものではない。
+    r.stdout_contains("riscv64-linux-gnu-gdb");
+    // スタブの引数は成果物の**前**。qemu も gdbserver も自分の引数を先に取る。
+    let args = &r.stdout[r.stdout.find("debugServerArgs").expect("the stub args are missing")..];
+    let g = args.find("\"-g\"").expect("`-g` is not among the stub args");
+    let bin = args.find("bin/app\"").expect("the artifact is not among the stub args");
+    assert!(g < bin, "the stub arguments came after the artifact\n{r}");
+}
+
+#[test]
+fn a_debugger_that_is_not_installed_is_reported_before_starting() {
+    let p = debug_project("debug-missing", "\n[toolchain]\ndebug = \"no-such-debugger\"\n", "");
+    let r = p.run(".", &["debug", "app"]);
+    r.failure();
+    r.stderr_contains("missing-toolchain");
+    r.stderr_contains("no-such-debugger");
+    // 逃げ道を述べる。構成だけなら道具が無くても出せる。
+    r.stderr_contains("--dap");
+}
+
+#[test]
+fn debug_takes_exactly_one_target() {
+    let p = debug_project("debug-arity", "", "");
+    let r = p.run(".", &["debug"]);
+    r.failure();
+    r.stderr_contains("one target");
+}
