@@ -20,7 +20,7 @@ without widening what is detected.
 | diagnostics & coverage | do diagnostics reach the user; is every feature checked | `crates/dowel-cli/tests/diagnostics.rs` | `diagnostics` |
 | example | do the documented examples work | `crates/dowel-cli/tests/example.rs` | `example` |
 | acquisition | can `dowelup` resolve, fetch, and switch versions | `crates/dowel-up/tests/dowelup.rs` | `up` |
-| docs | do links resolve; are the indexes complete | `crates/dowel-cli/tests/docs.rs` | `docs` |
+| docs | do links resolve; are the indexes and the reference complete | `crates/dowel-cli/tests/docs.rs` | `docs` |
 | measurement | is the budget met | `scripts/measure-startup.py` | `startup` |
 
 One entry point (`make verify`); local runs and CI execute the same thing.
@@ -90,6 +90,11 @@ is not validated.
   directions)
 - The crate table in `docs/91-implementation-status.md` matches `crates/`
   (both directions)
+- Every property the schema accepts has a row in the matching section of
+  `docs/12-build-reference.md`. That page opens by promising it cannot
+  disagree with the editor or the diagnostics, and nothing held the promise
+  up: the case properties existed in the type checker while `schema dump`
+  and hover said nothing about them (issue #90)
 
 The last item was added after the language-server crate was left out of the
 table. The status document doubles as the index of what exists; a layer that
@@ -150,6 +155,7 @@ a location go in `WITHOUT_LOCATION` with a reason.
 | a new diagnostic | the case table in `diagnostics.rs` (omission fails the coverage check) |
 | a new document | the index in `docs/README.md` (omission fails the docs check) |
 | a new crate | the crate table in `docs/91-implementation-status.md` (ditto) |
+| a new manifest property | the matching section of `docs/12-build-reference.md` (ditto) |
 
 ## Conventions
 

@@ -3250,7 +3250,8 @@ fn case_project(name: &str, cases: &str) -> Project {
         "dowel.build",
         &format!("[test.suite]\nsources = glob(\"tests/*.c\")\n\n[test.suite.cases]\n{cases}"),
     );
-    // 第1引数で振る舞いを変える。`fail` は非零、`hang` は終わらない。
+    // 第1引数で振る舞いを変える。`fail` は非零、`hang` は終わらない、
+    // `crash` は落ちる、`cwd` は走っている場所を書き出す。
     p.write(
         "tests/suite.c",
         r#"#include <stdio.h>
@@ -3260,6 +3261,13 @@ int main(int argc, char **argv) {
     const char *what = argc > 1 ? argv[1] : "ok";
     if (strcmp(what, "fail") == 0) { return 3; }
     if (strcmp(what, "hang") == 0) { for (;;) { } }
+    if (strcmp(what, "crash") == 0) { *(volatile int *)0 = 1; }
+    if (strcmp(what, "cwd") == 0) {
+        FILE *f = fopen("here.txt", "r");
+        if (!f) { printf("no here.txt\n"); return 1; }
+        fclose(f);
+        return 0;
+    }
     if (strcmp(what, "env") == 0) {
         const char *v = getenv("SUITE_MODE");
         printf("mode=%s\n", v ? v : "(unset)");
@@ -3375,8 +3383,89 @@ fn a_case_result_is_machine_readable() {
     let p = case_project("cases-json", "slow = { args = [\"hang\"], timeout = 1 }\n");
     let r = p.run(".", &["test", "--message-format=json"]);
     r.failure();
-    r.stdout_contains("\"target\":\"suite:suite/slow\"");
+    // 目標と事例は別の欄である。読む側が最後の `/` で割らずに済む（issue #100）。
+    r.stdout_contains("\"target\":\"suite:suite\"");
+    r.stdout_contains("\"case\":\"slow\"");
+    r.stdout_contains("\"label\":\"suite:suite/slow\"");
     r.stdout_contains("\"timed_out\":true");
+    r.stdout_contains("\"timeout\":1");
+    // 時間切れで殺したのはこちらである。プログラムの終わり方ではない。
+    r.stdout_contains("\"signal\":null");
+}
+
+#[test]
+fn a_case_killed_by_a_signal_does_not_satisfy_should_fail() {
+    // `should_fail` を書く場所は「壊れた入力を食わせる事例」であり、
+    // それは落ちやすい事例でもある。落ちたことを期待どおりとすると、
+    // 最も捕まえたい欠陥が緑になる（issue #88）。
+    let p = case_project("cases-crash", "rejects = { args = [\"crash\"], should_fail = true }\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("suite:suite/rejects ... FAILED");
+    r.stderr_contains("killed by signal 11 (SIGSEGV)");
+    r.stderr_contains("not a crash");
+}
+
+#[test]
+fn the_machine_readable_result_separates_a_crash_from_a_nonzero_exit() {
+    // `exit_status: null` は時間切れでもシグナルでも起きる。下流が判定
+    // できるように、それぞれの欄を持たせる（issue #88 / #100）。
+    let p = case_project(
+        "cases-crash-json",
+        "rejects = { args = [\"fail\"], should_fail = true }\ncrashes = { args = [\"crash\"] }\n",
+    );
+    let r = p.run(".", &["test", "--message-format=json"]);
+    r.failure();
+    // 期待された失敗。状態3で終わったことも、期待していたことも読める。
+    r.stdout_contains(
+        "\"case\":\"rejects\",\"label\":\"suite:suite/rejects\",\"labels\":[],\"should_fail\":true",
+    );
+    r.stdout_contains("\"exit_status\":3,\"signal\":null");
+    // 落ちた方。状態は無く、シグナルがある。
+    r.stdout_contains("\"exit_status\":null,\"signal\":11");
+}
+
+#[test]
+fn a_case_can_be_given_the_directory_it_runs_in() {
+    // 資料を相対パスで読むテストは、どこから走るかを決められなければ書けない
+    // （issue #95）。
+    let p = case_project(
+        "cases-cwd",
+        "here = { args = [\"cwd\"], cwd = dir(\"tests/golden\") }\nroot = { args = [\"cwd\"] }\n",
+    );
+    p.write("tests/golden/here.txt", "x\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("suite:suite/here ... ok");
+    // 既定はパッケージの根。そこに `here.txt` は無い。
+    r.stderr_contains("suite:suite/root ... FAILED");
+    r.stderr_contains("no here.txt");
+}
+
+#[test]
+fn a_case_whose_directory_does_not_exist_says_so() {
+    // `spawn` の `No such file or directory` は、実行ファイルが無いようにも
+    // 読める。どちらが無いのかを述べる。
+    let p = case_project("cases-cwd-missing", "one = { cwd = dir(\"nosuch\") }\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("the working directory does not exist");
+    r.stderr_contains("nosuch");
+}
+
+#[test]
+fn the_schema_dump_describes_the_properties_a_case_accepts() {
+    // 文書と型検査器とダンプが同じ表を読む、という約束が破れていた
+    // （issue #90）。`cases` だけが抜けていた。
+    let p = Project::new("schema-cases");
+    let r = p.run(".", &["schema", "dump"]);
+    r.success();
+    r.stdout_contains("\"case_properties\"");
+    r.stdout_contains("\"name\": \"should_fail\"");
+    r.stdout_contains("\"harness_properties\"");
+    // ランナーの鍵表も同じく出ていなかった。
+    r.stdout_contains("\"runner_properties\"");
+    r.stdout_contains("\"name\": \"remote_dir\"");
 }
 
 #[test]
@@ -3764,13 +3853,15 @@ fn the_listing_honours_the_selection_that_was_asked_for() {
 
 #[test]
 fn the_listing_is_machine_readable_with_the_same_labels() {
-    // 下流が突き合わせられるよう、走らせたときと同じ `target` の綴りで出す。
+    // 下流が突き合わせられるよう、走らせたときと同じ欄で出す（issue #100）。
     let p = selection_project("select-list-json");
     let r = p.run(".", &["test", "--no-run", "--message-format=json"]);
     r.success();
     r.stdout_contains("\"kind\":\"test-case\"");
-    r.stdout_contains("\"target\":\"c:suite/emit\"");
-    r.stdout_contains("\"timeout_s\":30");
+    r.stdout_contains("\"target\":\"c:suite\"");
+    r.stdout_contains("\"case\":\"emit\"");
+    r.stdout_contains("\"label\":\"c:suite/emit\"");
+    r.stdout_contains("\"timeout\":30");
     r.stdout_contains("\"should_fail\":true");
 }
 

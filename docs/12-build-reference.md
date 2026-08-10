@@ -212,15 +212,34 @@ strict  = { args = ["check"], env = { SUITE_MODE = "strict" } }
 | `timeout` | `Int` | seconds. The case is killed and reported as timed out, whatever exit status the kill produced. Without it, dowel waits |
 | `should_fail` | `Bool` | the case passes on a nonzero exit. Exiting 0 fails, and says that `should_fail` expected otherwise |
 | `labels` | `List<Str>` | names this case answers to; `dowel test --label <name>` selects by them |
+| `cwd` | `Path` | the directory the case runs in. The default is the package root |
 
 - The case's name is the key. Its label is `<package>:<target>/<case>`, which
   is what the summary, `--message-format=json`, `--failed`, and the command
   line all read. A name containing `/` or whitespace, or an empty one, breaks
   that grammar and is refused (`invalid-name`) — use `-` or `_` where a
   separator is wanted (issue #97)
-- The **working directory is the package root**, the same as a target with no
-  cases. Fixed assets a test reads therefore resolve against the same base
-  the manifest wrote them against
+- The **working directory is the package root** unless the case says
+  otherwise, the same as a target with no cases. Fixed assets a test reads
+  therefore resolve against the same base the manifest wrote them against.
+  This is a promise, not an observation — a test may rely on it (issue #95)
+- `cwd` moves one case elsewhere, for tests that read their data by relative
+  path or write output files. Two cases of the same binary writing to the
+  same place is one of the reasons `--test-jobs` defaults to sequential;
+  giving each its own directory removes it:
+
+  ```toml
+  [test.suite.cases]
+  golden = { args = ["golden"], cwd = dir("tests/golden") }
+  ```
+
+  The path is relative to the package that wrote it, like every other
+  `dir()`. A directory that does not exist is reported as such, rather than
+  as a binary that could not be started
+- `should_fail` says the binary **exits nonzero**. A case killed by a signal
+  does not satisfy it and is reported as a crash — the place where
+  `should_fail` is written is the place a crash is most likely, and treating
+  the two alike turns the defect most worth catching green (issue #88)
 - `timeout` must be positive. `0` and negative values would silently mean
   "wait forever", the opposite of what writing a timeout says
   (`invalid-value`)

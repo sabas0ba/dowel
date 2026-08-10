@@ -189,8 +189,8 @@ dowel test [target...] [common options] [build options] [test options]
 
 Builds the `test` targets, runs them, and judges pass/fail by exit status
 (0 = success). No test harness is imposed; the C convention applies. The
-working directory is the package root. By default only the output of failing
-tests is shown.
+working directory is the package root unless a case declares `cwd`. By
+default only the output of failing tests is shown.
 
 A target may register several tests from one binary with
 `[test.<name>.cases]` ([12-build-reference.md](12-build-reference.md),
@@ -213,7 +213,8 @@ the target.
 | `--test-jobs <n>` | number | 1 (sequential) | how many tests run at once; display is always in request order |
 
 - The default is sequential because C tests may use shared resources (working
-  directory, fixed ports, output files)
+  directory, fixed ports, output files). A case that declares its own `cwd`
+  removes the first of those
 - When `--target=<triple>` differs from the host, launch goes through the
   declared runner (`[runner.<triple>]` in
   [12-build-reference.md](12-build-reference.md)). If no runner is declared,
@@ -234,14 +235,32 @@ the target.
   (issue #94). It is the only way to see what exists without running it, and
   it is what makes `--label` usable — the labels have to be discoverable
   somewhere. With `--message-format=json` each case is one `test-case` line
-  carrying the same `target` spelling a result would. Nothing is launched, so
-  a cross target needs no runner; the exception is a `harness` target, where
-  listing means asking the binary
+  carrying the same `target` / `case` / `label` fields a result would.
+  Nothing is launched, so a cross target needs no runner; the exception is a
+  `harness` target, where listing means asking the binary
 - A case with a `timeout` is killed when it expires and reported as timed
   out, whatever exit status the kill produced. The kill reaches the test
   process only — a test that spawns grandchildren leaks them
-- `--message-format=json` emits one result per line on stdout, including
-  `timed_out`
+- A case killed by a signal fails, including one that declared
+  `should_fail`: what that declares is a nonzero **exit**, and a crash is not
+  one (issue #88). The line says which signal it was
+- `--message-format=json` emits one `test-result` line per case on stdout.
+  The target and the case are separate fields, so nothing downstream has to
+  split a string to group results by target (issue #100):
+
+  ```json
+  {"kind":"test-result","target":"c:suite","case":"parse","label":"c:suite/parse",
+   "labels":["slow"],"should_fail":false,"timeout":null,
+   "binary":"…/bin/suite","args":["parse"],"passed":true,
+   "timed_out":false,"exit_status":0,"signal":null,
+   "duration_ms":1,"stdout":"…","stderr":"","launch_error":null}
+  ```
+
+  `case` is `null` and `label` equals `target` for a target with no cases.
+  There are three separate ways to end without an exit status, and each has
+  its own field: `timed_out` (dowel killed it), `signal` (it died on its
+  own), and `launch_error` (it never started). `args` says which invocation
+  of the binary this was
 
 ## `dowel debug`
 

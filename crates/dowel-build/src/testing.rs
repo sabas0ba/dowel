@@ -227,10 +227,24 @@ impl Default for RunOptions {
 #[derive(Debug)]
 pub struct Outcome {
     pub target: TargetId,
-    pub label: String,
+    /// ターゲットのラベル。事例の名前は含まない
+    pub target_label: String,
+    /// 事例の名前。事例を持たないターゲットでは `None`
+    pub case: Option<String>,
     pub binary: PathBuf,
-    /// プロセスを起動できなかった場合は `None`
+    /// 実行ファイルに渡した引数
+    pub args: Vec<String>,
+    /// この事例が答える名前（`--label` が引く）
+    pub labels: Vec<String>,
+    /// 宣言されていた制限時間
+    pub timeout: Option<Duration>,
+    /// プロセスを起動できなかった場合と、シグナルで終わった場合は `None`
     pub status: Option<i32>,
+    /// シグナルで終わった場合のその番号。
+    ///
+    /// 時間切れで**こちらが**殺した場合は入れない。それはプログラムの
+    /// 終わり方ではなく、`timed_out` が述べている（issue #88）。
+    pub signal: Option<i32>,
     /// 時間切れで打ち切った。`status` は殺した結果であって、テストの答ではない
     pub timed_out: bool,
     /// 非零の終了を期待していた（`should_fail`）
@@ -245,10 +259,40 @@ pub struct Outcome {
 }
 
 impl Outcome {
+    /// 仕事の側から決まる欄を写した、まだ走っていない結果。
+    ///
+    /// 結果の欄だけを後から埋める。欄が増えるたびに全ての生成箇所を直すと、
+    /// どこかが既定のまま残る。
+    fn of(job: &Job) -> Outcome {
+        Outcome {
+            target: job.target,
+            target_label: job.target_label.clone(),
+            case: job.case.clone(),
+            binary: job.binary.clone().unwrap_or_default(),
+            args: job.args.clone(),
+            labels: job.labels.clone(),
+            timeout: job.timeout,
+            status: None,
+            signal: None,
+            timed_out: false,
+            should_fail: job.should_fail,
+            passed: false,
+            duration_ms: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            launch_error: None,
+        }
+    }
+
+    /// 印字される綴り。`<パッケージ>:<ターゲット>[/<事例>]`
+    pub fn label(&self) -> String {
+        label_of(&self.target_label, self.case.as_deref())
+    }
+
     /// 1行の結果表示。`test <ラベル> ... ok (12ms)`
     pub fn summary_line(&self) -> String {
         let verdict = if self.passed { "ok" } else { "FAILED" };
-        format!("test {} ... {verdict} ({}ms)", self.label, self.duration_ms)
+        format!("test {} ... {verdict} ({}ms)", self.label(), self.duration_ms)
     }
 
     /// 失敗の理由を1行で。成功時は `None`。
@@ -258,6 +302,15 @@ impl Outcome {
         }
         if self.timed_out {
             return Some("timed out and was killed".to_string());
+        }
+        if let Some(sig) = self.signal {
+            // 異常な終わり方は、期待された失敗ではない（issue #88）。
+            // 落ちることを期待して `should_fail` を書く者はいない。
+            let crash = format!("killed by signal {sig}{}", named(sig));
+            return Some(match self.should_fail {
+                true => format!("{crash}; `should_fail` expects a nonzero exit, not a crash"),
+                false => crash,
+            });
         }
         // 期待した失敗が起きなかった場合、「状態0で終了した」だけでは
         // なぜ失敗なのか読めない。期待の側を述べる。
@@ -272,6 +325,54 @@ impl Outcome {
     }
 }
 
+fn label_of(target: &str, case: Option<&str>) -> String {
+    match case {
+        Some(c) => format!("{target}/{c}"),
+        None => target.to_string(),
+    }
+}
+
+/// シグナル番号に添える名前。` (SIGSEGV)` の形で返す。
+///
+/// 番号が系によって違うものは名前を付けない。`SIGBUS` は Linux で 7、
+/// macOS で 10 である——取り違えた名前は、番号だけより悪い。
+fn named(sig: i32) -> String {
+    const NAMES: &[(i32, &str)] = &[
+        (1, "SIGHUP"),
+        (2, "SIGINT"),
+        (3, "SIGQUIT"),
+        (4, "SIGILL"),
+        (5, "SIGTRAP"),
+        (6, "SIGABRT"),
+        (8, "SIGFPE"),
+        (9, "SIGKILL"),
+        (11, "SIGSEGV"),
+        (13, "SIGPIPE"),
+        (14, "SIGALRM"),
+        (15, "SIGTERM"),
+    ];
+    match NAMES.iter().find(|(n, _)| *n == sig) {
+        Some((_, name)) => format!(" ({name})"),
+        None => String::new(),
+    }
+}
+
+/// 終了状態からシグナル番号を取り出す。
+///
+/// unix 以外では常に `None`。`ExitStatus::code` が `None` を返す理由は
+/// 系によって違い、そこを跨いで述べられることは無い。
+fn signal_of(status: &ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        std::os::unix::process::ExitStatusExt::signal(status)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
 /// 1本のテストを起動するために必要な情報。
 ///
 /// `Session` から分離しているのは、並列実行の作業スレッドがモデルを参照しない
@@ -280,10 +381,14 @@ impl Outcome {
 #[derive(Clone, Debug)]
 pub struct Job {
     pub target: TargetId,
-    /// 表示と `--failed` の鍵。事例があれば `<パッケージ>:<ターゲット>/<事例>`
-    pub label: String,
+    /// ターゲットのラベル。`<パッケージ>:<ターゲット>`
+    pub target_label: String,
+    /// 事例の名前。持たないターゲットでは `None`
+    pub case: Option<String>,
     /// 計画に成果物が無い場合は `None`
     pub binary: Option<PathBuf>,
+    /// 起動時の作業ディレクトリ。既定は宣言したパッケージの根で、
+    /// 事例の `cwd` で変えられる（issue #95）
     pub cwd: PathBuf,
     pub program: String,
     pub args: Vec<String>,
@@ -302,6 +407,16 @@ pub struct Job {
     /// これがある仕事は「まだ事例が分かっていない1件」であり、
     /// [`discover`] が本当の仕事の列に展開する
     pub harness: Option<Harness>,
+}
+
+impl Job {
+    /// 表示と `--failed` の鍵。`<パッケージ>:<ターゲット>[/<事例>]`
+    ///
+    /// 綴りを組み立てる場所を1つに閉じる。持ち回ると、目標と事例を分けて
+    /// 報告する側（issue #100）が同じ規則を2度書くことになる。
+    pub fn label(&self) -> String {
+        label_of(&self.target_label, self.case.as_deref())
+    }
 }
 
 /// 実行ファイルへの尋ね方（ADR-0023）。dowel は枠組みを1つも知らない。
@@ -341,7 +456,8 @@ pub fn plan_jobs(
         let cfg = cfg.for_package(&sess.package(sess.target(tid).package).name);
         let base = Job {
             target: tid,
-            label: sess.label(tid),
+            target_label: sess.label(tid),
+            case: None,
             binary: binary.clone(),
             cwd: cwd.clone(),
             program: program.clone(),
@@ -379,23 +495,45 @@ pub fn plan_jobs(
             // 事例そのものが条件付きでありうる。偽なら、この構成にその事例は
             // 存在しない（issue #92）。
             let Some(concrete) = dowel_eval::specialize(&case.value, &cfg) else {
-                log_trace!("  case {}/{} is not registered here", base.label, case.name);
+                log_trace!("  case {}/{} is not registered here", base.target_label, case.name);
                 continue;
             };
             let Data::Map(fields) = &concrete.data else { continue };
             let field = |name: &str| fields.get(name).cloned();
             let mut job = base.clone();
-            job.label = format!("{}/{}", base.label, case.name);
+            job.case = Some(case.name.clone());
             job.args.extend(strings(field("args").as_ref()));
             job.env = pairs(field("env").as_ref());
             job.timeout = seconds(field("timeout").as_ref());
             job.should_fail =
                 matches!(field("should_fail").map(|v| v.data), Some(Data::Bool(true)));
             job.labels = strings(field("labels").as_ref());
+            // 作業ディレクトリを述べた事例は、そこで走る（issue #95）。
+            if let Some(dir) = field("cwd").as_ref().and_then(|v| directory(v, sess, tid)) {
+                job.cwd = dir;
+            }
             out.push(job);
         }
     }
     out
+}
+
+/// 事例の `cwd` を実在の場所にする（issue #95）。
+///
+/// 基準はそれを書いたパッケージの根である。`dir()` は書いた場所からの
+/// 相対であり、事例を持つターゲットが別のパッケージから読まれても意味が
+/// 変わらない。
+fn directory(v: &Value, sess: &Session, tid: TargetId) -> Option<PathBuf> {
+    let Data::Path(p) = &v.data else { return None };
+    if p.base != dowel_eval::value::PathBase::Package {
+        return None;
+    }
+    let root = v
+        .prov
+        .nearest_site()
+        .and_then(|s| sess.package_of_file(s.file))
+        .unwrap_or(sess.target(tid).package);
+    Some(sess.package(root).root.join(&p.rel))
 }
 
 fn seconds(v: Option<&Value>) -> Option<Duration> {
@@ -436,10 +574,10 @@ pub fn discover(jobs: Vec<Job>) -> (Vec<Job>, Vec<Outcome>) {
                 failures.push(discovery_failed(&job, "the harness listed no cases".to_string()))
             }
             Ok(names) => {
-                log_debug!("{} lists {} case(s)", job.label, names.len());
+                log_debug!("{} lists {} case(s)", job.label(), names.len());
                 for name in names {
                     let mut case = job.clone();
-                    case.label = format!("{}/{}", job.label, name);
+                    case.case = Some(name.clone());
                     case.args.extend(harness.run.iter().cloned());
                     case.args.push(name);
                     case.harness = None;
@@ -455,17 +593,10 @@ pub fn discover(jobs: Vec<Job>) -> (Vec<Job>, Vec<Outcome>) {
 /// 列挙に失敗した仕事を、そのターゲットの1件の失敗として報告する。
 fn discovery_failed(job: &Job, why: String) -> Outcome {
     Outcome {
-        target: job.target,
-        label: job.label.clone(),
-        binary: job.binary.clone().unwrap_or_default(),
-        status: None,
-        timed_out: false,
+        // 列挙できていないので、この失敗は事例ではなくターゲットのものである。
         should_fail: false,
-        passed: false,
-        duration_ms: 0,
-        stdout: String::new(),
-        stderr: String::new(),
         launch_error: Some(format!("could not list the cases: {why}")),
+        ..Outcome::of(job)
     }
 }
 
@@ -484,7 +615,7 @@ fn list_cases(job: &Job, harness: &Harness) -> Result<Vec<String>, String> {
     for (k, v) in &job.env {
         cmd.env(k, v);
     }
-    log_debug!("listing the cases of {}", job.label);
+    log_debug!("listing the cases of {}", job.label());
     log_trace!("  {} {}", job.program, harness.list.join(" "));
 
     let (status, timed_out, stdout, stderr) = capture_run(&mut cmd, job.timeout)
@@ -519,7 +650,7 @@ pub fn run(planned: &[Job], opts: &RunOptions) -> Vec<Outcome> {
     for j in planned {
         log_trace!(
             "  planned {}: {} (cwd {})",
-            j.label,
+            j.label(),
             if j.program.is_empty() { "<no artifact>" } else { &j.program },
             j.cwd.display()
         );
@@ -570,7 +701,7 @@ pub fn run(planned: &[Job], opts: &RunOptions) -> Vec<Outcome> {
 /// 成果物を対象機へ転送する。失敗した理由をそのまま返す。
 fn transfer(job: &Job) -> Result<(), String> {
     let Some((program, args)) = &job.transfer else { return Ok(()) };
-    log_debug!("transferring the artifact for {}", job.label);
+    log_debug!("transferring the artifact for {}", job.label());
     log_trace!("  {program} {}", args.join(" "));
     let out = Command::new(program)
         .args(args)
@@ -588,30 +719,20 @@ fn transfer(job: &Job) -> Result<(), String> {
 }
 
 fn run_one(job: &Job, capture: bool) -> Outcome {
-    let Job { target: tid, label, binary, cwd, program, args, .. } = job;
-    let (label, cwd) = (label.clone(), cwd.clone());
-    // 失敗の作り方を1箇所に閉じる。欄が増えるたびに全ての早期戻りを直すと
-    // 抜けが出る。
-    let failed = |binary: PathBuf, why: String| Outcome {
-        target: *tid,
-        label: label.clone(),
-        binary,
-        status: None,
-        timed_out: false,
-        should_fail: job.should_fail,
-        passed: false,
-        duration_ms: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        launch_error: Some(why),
-    };
-    let Some(binary) = binary.clone() else {
-        return failed(PathBuf::new(), "no artifact was planned for this target".into());
-    };
-    let tid = *tid;
+    let Job { binary, cwd, program, args, .. } = job;
+    let (label, cwd) = (job.label(), cwd.clone());
+    let failed = |why: String| Outcome { launch_error: Some(why), ..Outcome::of(job) };
+    if binary.is_none() {
+        return failed("no artifact was planned for this target".into());
+    }
 
     if let Err(e) = transfer(job) {
-        return failed(binary, format!("could not transfer the artifact: {e}"));
+        return failed(format!("could not transfer the artifact: {e}"));
+    }
+    // 走る場所が無ければ、起動の失敗として述べる。`spawn` が返す
+    // `No such file or directory` は、実行ファイルが無いようにも読める。
+    if !cwd.is_dir() {
+        return failed(format!("the working directory does not exist: {}", cwd.display()));
     }
 
     log_debug!("running {label}");
@@ -635,9 +756,12 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
 
     match result {
         Ok((status, timed_out, stdout, stderr)) => {
-            // 時間切れは、終了状態が何であれ失敗である。殺した結果の状態は
-            // テストの答ではない。
-            let passed = if timed_out {
+            // 殺したのがこちらなら、シグナルはプログラムの終わり方ではない。
+            let signal = if timed_out { None } else { signal_of(&status) };
+            // 時間切れも異常終了も、終了状態が何であれ失敗である。
+            // `should_fail` が述べているのは「非零で終了すること」であって、
+            // 落ちることではない（issue #88）。
+            let passed = if timed_out || signal.is_some() {
                 false
             } else if job.should_fail {
                 !status.success()
@@ -645,20 +769,17 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
                 status.success()
             };
             Outcome {
-                target: tid,
-                label,
-                binary,
                 status: status.code(),
+                signal,
                 timed_out,
-                should_fail: job.should_fail,
                 passed,
                 duration_ms,
                 stdout,
                 stderr,
-                launch_error: None,
+                ..Outcome::of(job)
             }
         }
-        Err(e) => Outcome { duration_ms, ..failed(binary, e.to_string()) },
+        Err(e) => Outcome { duration_ms, ..failed(e.to_string()) },
     }
 }
 
@@ -756,7 +877,7 @@ impl State {
     /// 今回走らせた分で上書きする。走らせなかったものは前回の判定を残す。
     pub fn update(&mut self, outcomes: &[Outcome]) {
         for o in outcomes {
-            self.results.insert(o.label.clone(), o.passed);
+            self.results.insert(o.label(), o.passed);
         }
     }
 
@@ -777,18 +898,41 @@ impl State {
 }
 
 /// 機械可読な結果。1件1行の JSON とし、逐次消費できるようにする。
+///
+/// 目標と事例は別の欄に置く（issue #100）。1つの欄に `<目標>/<事例>` と
+/// 詰めると、読む側は最後の `/` で割るしかない——ハーネスが列挙した名前は
+/// `/` を含みうるので、その推測は当たらない。
 pub fn render_json(o: &Outcome) -> String {
     let mut w = dowel_support::json::JsonWriter::new();
     w.begin_object();
     w.field_str("kind", "test-result");
-    w.field_str("target", &o.label);
+    w.field_str("target", &o.target_label);
+    match &o.case {
+        Some(c) => w.field_str("case", c),
+        None => w.key("case").null(),
+    };
+    // 印字される綴り。組み立て直さずに済むように、そのまま出す。
+    w.field_str("label", &o.label());
+    w.field_strs("labels", o.labels.iter().map(|s| s.as_str()));
+    w.field_bool("should_fail", o.should_fail);
+    match o.timeout {
+        Some(t) => w.key("timeout").u64(t.as_secs()),
+        None => w.key("timeout").null(),
+    };
     w.field_str("binary", &o.binary.display().to_string());
+    w.field_strs("args", o.args.iter().map(|s| s.as_str()));
     w.field_bool("passed", o.passed);
     // 時間切れは終了状態からは読めない。殺した結果が入るだけである。
     w.field_bool("timed_out", o.timed_out);
     match o.status {
         Some(c) => w.key("exit_status").i64(c as i64),
         None => w.key("exit_status").null(),
+    };
+    // `exit_status` が無い理由は1つではない。時間切れ、シグナル、起動の失敗
+    // ——読む側が区別できるように、それぞれに欄を持たせる（issue #88）。
+    match o.signal {
+        Some(s) => w.key("signal").i64(s as i64),
+        None => w.key("signal").null(),
     };
     w.field_u64("duration_ms", o.duration_ms as u64);
     w.field_str("stdout", &o.stdout);
@@ -808,9 +952,14 @@ mod tests {
     fn outcome(passed: bool, status: Option<i32>, launch_error: Option<&str>) -> Outcome {
         Outcome {
             target: TargetId(0),
-            label: "pkg:unit".into(),
+            target_label: "pkg:unit".into(),
+            case: None,
             binary: PathBuf::from("/tmp/unit"),
+            args: Vec::new(),
+            labels: Vec::new(),
+            timeout: None,
             status,
+            signal: None,
             timed_out: false,
             should_fail: false,
             passed,
@@ -851,6 +1000,62 @@ mod tests {
         assert!(json.contains(r#""launch_error":null"#), "{json}");
     }
 
+    #[test]
+    fn json_names_the_target_and_the_case_separately() {
+        // 1つの欄に詰めると、読む側は最後の `/` で割ることになる（issue #100）。
+        let mut o = outcome(true, Some(0), None);
+        o.case = Some("parse/deep".into());
+        o.labels = vec!["slow".into()];
+        o.timeout = Some(Duration::from_secs(5));
+        o.args = vec!["parse".into()];
+        let json = render_json(&o);
+        assert!(json.contains(r#""target":"pkg:unit""#), "{json}");
+        assert!(json.contains(r#""case":"parse/deep""#), "{json}");
+        assert!(json.contains(r#""label":"pkg:unit/parse/deep""#), "{json}");
+        assert!(json.contains(r#""labels":["slow"]"#), "{json}");
+        assert!(json.contains(r#""should_fail":false"#), "{json}");
+        assert!(json.contains(r#""timeout":5"#), "{json}");
+        assert!(json.contains(r#""args":["parse"]"#), "{json}");
+
+        // 事例を持たないターゲットでは `case` が無く、綴りは目標と同じ。
+        let plain = render_json(&outcome(true, Some(0), None));
+        assert!(plain.contains(r#""case":null"#), "{plain}");
+        assert!(plain.contains(r#""label":"pkg:unit""#), "{plain}");
+        assert!(plain.contains(r#""timeout":null"#), "{plain}");
+    }
+
+    #[test]
+    fn a_crash_is_not_the_failure_that_should_fail_expects() {
+        // `should_fail` が述べているのは「非零で終了すること」である。
+        // 落ちることではない（issue #88）。
+        let mut o = outcome(false, None, None);
+        o.should_fail = true;
+        o.signal = Some(11);
+        let why = o.failure_reason().unwrap();
+        assert!(why.contains("killed by signal 11 (SIGSEGV)"), "{why}");
+        assert!(why.contains("not a crash"), "{why}");
+        assert!(render_json(&o).contains(r#""signal":11"#));
+
+        // `should_fail` を書いていない事例でも、シグナルはそう述べる。
+        let mut plain = outcome(false, None, None);
+        plain.signal = Some(6);
+        assert_eq!(plain.failure_reason().unwrap(), "killed by signal 6 (SIGABRT)");
+
+        // 番号が系によって違うものには名前を付けない。
+        let mut unknown = outcome(false, None, None);
+        unknown.signal = Some(7);
+        assert_eq!(unknown.failure_reason().unwrap(), "killed by signal 7");
+    }
+
+    #[test]
+    fn a_timeout_is_not_reported_as_a_signal() {
+        // 殺したのはこちらである。プログラムの終わり方ではない。
+        let mut o = outcome(false, None, None);
+        o.timed_out = true;
+        assert_eq!(o.failure_reason().unwrap(), "timed out and was killed");
+        assert!(render_json(&o).contains(r#""signal":null"#));
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch").join(name);
@@ -882,7 +1087,7 @@ mod tests {
         // `pkg:a` だけ走らせ直して通った場合、`pkg:b` の判定は残る。
         let mut st = State::load(&dir);
         let mut rerun = outcome(true, Some(0), None);
-        rerun.label = "pkg:a".into();
+        rerun.target_label = "pkg:a".into();
         st.update(&[rerun]);
         assert_eq!(st.results.get("pkg:a"), Some(&true));
         assert_eq!(st.results.get("pkg:b"), Some(&true));

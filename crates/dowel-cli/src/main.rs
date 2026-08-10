@@ -386,20 +386,20 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             // 0件成功にせず、その場で失敗として持ち回る。
             let (mut jobs, discovery_failures) =
                 testing::discover(testing::plan_jobs(&sess, &p, &launcher, &targets, &cfg));
-            let known: Vec<String> = jobs.iter().map(|j| j.label.clone()).collect();
+            let known: Vec<String> = jobs.iter().map(|j| j.label()).collect();
 
             // 選択を順に効かせる。空になったら、そのことを述べて非零で終わる
             // （issue #89 / #91 / #93）——「綴りを間違えた」と「1件通った」が
             // 呼び出し側から同じに見えてはならない。
             if !requested.cases.is_empty() {
-                jobs.retain(|j| requested.cases.contains(&j.label));
+                jobs.retain(|j| requested.cases.contains(&j.label()));
             }
             if let Some(wanted) = &opts.labels {
                 jobs.retain(|j| j.labels.iter().any(|l| wanted.contains(l)));
             }
             if opts.only_failed {
                 let failed = state.failed();
-                jobs.retain(|j| failed.contains(&j.label.as_str()));
+                jobs.retain(|j| failed.contains(&j.label().as_str()));
             }
             // 選択を求めていないのに空になったのは、意図との食い違いではない。
             // 事例が条件で全部落ちた形がこれである（issue #92 / #99）。
@@ -527,7 +527,7 @@ fn report_tests(outcomes: &[testing::Outcome], requested: usize, opts: &Options)
     if failed > 0 {
         eprintln!("\nfailures:");
         for o in outcomes.iter().filter(|o| !o.passed) {
-            eprintln!("\n---- {} ----", o.label);
+            eprintln!("\n---- {} ----", o.label());
             if let Some(reason) = o.failure_reason() {
                 eprintln!("{reason}");
             }
@@ -815,26 +815,32 @@ fn empty_selection(
 /// 確かめる先も、重い事例を見分ける先も、ここ以外に無い。
 fn list_cases(jobs: &[testing::Job], opts: &Options) {
     if opts.message_format == MessageFormat::Json {
-        // 走らせたときと同じ `target` の綴りで出す。下流が突き合わせられる。
+        // 走らせたときと同じ欄で出す。結果と突き合わせるのは下流の仕事であり、
+        // 綴りが揃っていなければ突き合わせられない（issue #100）。
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
         for j in jobs {
             let mut w = JsonWriter::new();
             w.begin_object();
             w.field_str("kind", "test-case");
-            w.field_str("target", &j.label);
+            w.field_str("target", &j.target_label);
+            match &j.case {
+                Some(c) => w.field_str("case", c),
+                None => w.key("case").null(),
+            };
+            w.field_str("label", &j.label());
             w.field_strs("labels", j.labels.iter().map(|l| l.as_str()));
             w.field_bool("should_fail", j.should_fail);
             match j.timeout {
-                Some(t) => w.key("timeout_s").u64(t.as_secs()),
-                None => w.key("timeout_s").null(),
+                Some(t) => w.key("timeout").u64(t.as_secs()),
+                None => w.key("timeout").null(),
             };
             w.end_object();
             let _ = writeln!(out, "{}", w.finish());
         }
         return;
     }
-    let width = jobs.iter().map(|j| j.label.len()).max().unwrap_or(0);
+    let width = jobs.iter().map(|j| j.label().len()).max().unwrap_or(0);
     for j in jobs {
         let mut notes = Vec::new();
         if !j.labels.is_empty() {
@@ -847,9 +853,9 @@ fn list_cases(jobs: &[testing::Job], opts: &Options) {
             notes.push(format!("timeout {}s", t.as_secs()));
         }
         if notes.is_empty() {
-            eprintln!("{}", j.label);
+            eprintln!("{}", j.label());
         } else {
-            eprintln!("{:width$}  {}", j.label, notes.join(" "));
+            eprintln!("{:width$}  {}", j.label(), notes.join(" "));
         }
     }
 }
@@ -1037,23 +1043,30 @@ fn schema_dump() -> String {
     }
     w.end_array();
 
-    // `artifacts` はプロパティのブロックではないため、`blocks` とは別に出す
-    // （issue #60）。項目の鍵は出力の拡張子であり、値がこの表を取る。
-    w.key("artifact_properties").begin_array();
-    for p in schema::artifact_props() {
-        w.begin_object();
-        w.field_str("name", p.name);
-        w.field_str("type", &p.ty.display());
-        w.field_str("doc", p.doc);
-        w.end_object();
+    // 入れ子の表はプロパティのブロックではないため、`blocks` とは別に出す
+    // （issue #60）。一覧は `schema::NESTED_TABLES` が持つ——ここで数え上げると、
+    // 型検査器だけが知っている表ができる（issue #90）。
+    for t in schema::NESTED_TABLES {
+        w.key(t.dump_key).begin_array();
+        for p in (t.props)() {
+            w.begin_object();
+            w.field_str("name", p.name);
+            w.field_str("type", &p.ty.display());
+            w.field_str("merge", p.merge.name());
+            w.field_str("doc", p.doc);
+            w.end_object();
+        }
+        w.end_array();
     }
-    w.end_array();
 
-    w.key("inspection_properties").begin_array();
-    for p in schema::inspection_props() {
+    // ランナーは表種別であってターゲットではない。プロパティの集合も
+    // ターゲットのものとは別である。
+    w.key("runner_properties").begin_array();
+    for p in schema::runner_props() {
         w.begin_object();
         w.field_str("name", p.name);
         w.field_str("type", &p.ty.display());
+        w.field_str("merge", p.merge.name());
         w.field_str("doc", p.doc);
         w.end_object();
     }

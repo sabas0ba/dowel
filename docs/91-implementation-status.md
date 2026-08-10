@@ -372,11 +372,13 @@ changes, only the speed.
   remapped yet, so there is nothing to compensate for (docs/30-devexp.md 2.1)
 - `dowel test` — launches tests and judges pass/fail by exit status.
   There is no test harness; the C convention ("exit status 0 means success")
-  applies. The working directory is the package root. Only failing tests'
-  output is shown
+  applies. The working directory is the package root unless a case declares
+  `cwd`. Only failing tests' output is shown
   - `[test.<name>.cases]` registers several tests from one binary
     ([ADR-0022](adr/0022-test-cases.md)): `args` distinguish them, and each
-    carries its own `env`, `timeout`, `should_fail`, and `labels`. A case's
+    carries its own `env`, `timeout`, `should_fail`, `labels`, and `cwd`
+    (issue #95 — the default, the package root, is a promise now, not an
+    observation). A case's
     label is `<package>:<target>/<case>`, and selection (`--label`,
     `--failed`) and reporting operate on cases. A target with no cases is one
     test, unchanged. Nothing is imposed on the binary — dowel never asks it
@@ -426,9 +428,18 @@ changes, only the speed.
   - `--test-jobs=<n>` runs tests in parallel. The default is sequential: C
     tests may use shared resources (the same working directory, fixed ports,
     output files), and a parallel default produces order-dependent failures.
-    Display is always in request order
-  - `--no-run` / `--nocapture`, and `--message-format=json` for one result
-    per line
+    Display is always in request order. A case with its own `cwd` no longer
+    shares the first of those
+  - A case killed by a signal fails, `should_fail` or not: what that
+    declares is a nonzero **exit**, and a crash is not one (issue #88).
+    `should_fail` is written where broken input is fed in, which is also
+    where a crash is most likely — treating the two alike turns the defect
+    most worth catching green
+  - `--no-run` / `--nocapture`, and `--message-format=json` for one
+    `test-result` per line. The target and the case are separate fields, so
+    grouping by target does not mean splitting a string, and the three ways
+    to end without an exit status each have their own field: `timed_out`,
+    `signal`, `launch_error` (issue #100)
 
 ### Language server (`dowel-lsp`)
 
@@ -444,8 +455,13 @@ which distinguishes it from the resident daemon rejected by
   enforces that every code in the case table either reaches the editor or has
   a reason in `dowel_lsp::UNSUPPORTED`
 - `textDocument/hover`: property types and merge rules, each level of a table
-  header, builtin function signatures, configuration key domains. The source
-  is the same table `dowel schema dump` reads
+  header, builtin function signatures, configuration key domains, and the
+  tables that are not property blocks — `cases`, `harness`, `artifacts`,
+  `inspect`, `[runner.<triple>]`. The source is the same table
+  `dowel schema dump` reads, and the words naming those tables now live
+  there too: keeping them in the type checker alone is what let `cases` be
+  known to the checker while the dump and the editor said nothing
+  (issue #90)
 - Diagnostic ranges are 0-based lines and UTF-16 columns; notes and
   fix-suggestion text are folded into the body
 - `dowel.toml` is recognized by name and held to strict TOML validation
@@ -592,22 +608,22 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (539 tests):
+Current breakdown (552 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 295 |
+| `unit-*` | per-crate unit tests | 302 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 161 |
+| `e2e` | compile real C and C++, run it, check the output | 166 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (65 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
-| `docs` | link resolution and index consistency | 5 |
+| `docs` | link resolution, index consistency, and reference completeness | 6 |
 | `startup` | startup-time measurement (informational; machine noise does not fail the run) | — |
 
 The `scenario` / `fixture` / `diagnostics` layers were added later. Their
