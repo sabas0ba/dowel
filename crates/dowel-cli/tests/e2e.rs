@@ -3348,10 +3348,12 @@ fn labels_select_which_cases_run() {
     r.stderr_contains("suite:suite/quick");
     assert!(!r.stderr.contains("suite:suite/heavy"), "the slow case ran anyway\n{r}");
 
-    // 誰も名乗っていない名前は、黙って0件成功にせず理由を述べる。
+    // 誰も名乗っていない名前は、黙って0件成功にしない。「綴りを間違えた」と
+    // 「1件通った」が呼び出し側から同じに見えてはならない（issue #89）。
     let r = p.run(".", &["test", "--label=nosuch"]);
-    r.success();
+    r.failure();
     r.stderr_contains("no test carries `nosuch`");
+    r.stderr_contains("--no-run");
 }
 
 #[test]
@@ -3480,9 +3482,9 @@ fn harness_level_options_reach_every_discovered_case() {
     let r = p.run(".", &["test", "--label=unit"]);
     r.failure();
     r.stderr_contains("running 3 tests");
-    // 名乗っていない名前では1件も選ばれない。
+    // 名乗っていない名前では1件も選ばれず、状態も非零になる。
     let r = p.run(".", &["test", "--label=slow"]);
-    r.success();
+    r.failure();
     r.stderr_contains("no test carries `slow`");
 }
 
@@ -3648,4 +3650,126 @@ fn debug_takes_exactly_one_target() {
     let r = p.run(".", &["debug"]);
     r.failure();
     r.stderr_contains("one target");
+}
+
+/// 事例の選択と可視性（issue #89 / #91 / #93 / #94）。
+fn selection_project(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"c\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        r#"
+[test.suite]
+sources = glob("tests/*.c")
+
+[test.suite.cases]
+parse   = { args = ["parse"] }
+emit    = { args = ["emit"], labels = ["slow"], timeout = 30 }
+rejects = { args = ["fail"], should_fail = true }
+broken  = { args = ["fail"] }
+"#,
+    );
+    p.write(
+        "tests/suite.c",
+        "#include <string.h>\nint main(int argc, char **argv) { return argc > 1 && strcmp(argv[1], \"fail\") == 0 ? 3 : 0; }\n",
+    );
+    p
+}
+
+#[test]
+fn the_label_a_case_is_reported_under_selects_that_case() {
+    // 画面に出た識別子をそのまま貼り戻せる。落ちた1件だけを再実行する経路は
+    // ここにしか無い（issue #93）。
+    let p = selection_project("select-by-label");
+    let r = p.run(".", &["test", "c:suite/broken"]);
+    r.failure();
+    r.stderr_contains("running 1 test");
+    r.stderr_contains("c:suite/broken ... FAILED");
+    assert!(!r.stderr.contains("c:suite/parse"), "another case ran\n{r}");
+}
+
+#[test]
+fn naming_the_target_runs_all_of_its_cases() {
+    let p = selection_project("select-by-target");
+    let r = p.run(".", &["test", "c:suite"]);
+    r.failure();
+    r.stderr_contains("running 4 tests");
+}
+
+#[test]
+fn naming_a_case_that_does_not_exist_does_not_pass_with_zero_tests() {
+    let p = selection_project("select-missing-case");
+    let r = p.run(".", &["test", "c:suite/nosuch"]);
+    r.failure();
+    r.stderr_contains("nothing matched");
+    r.stderr_contains("--no-run");
+}
+
+#[test]
+fn naming_a_label_nobody_carries_does_not_pass_with_zero_tests() {
+    // stderr の報告は CI のログで埋もれる。状態で伝わらなければ、
+    // 「綴りを間違えた」段が緑になる（issue #89）。
+    let p = selection_project("select-missing-label");
+    let r = p.run(".", &["test", "--label=smok"]);
+    r.failure();
+    r.stderr_contains("no test carries `smok`");
+}
+
+#[test]
+fn rerunning_failures_says_so_when_the_remembered_case_is_gone() {
+    // 「直す」という行為そのものが、記録と現実を食い違わせる契機になる
+    // （issue #91）。
+    let p = selection_project("select-failed-gone");
+    p.run(".", &["test"]).failure();
+
+    // 落ちた事例を改名する。直したつもりの利用者が `--failed` を打つ。
+    p.write(
+        "dowel.build",
+        "[test.suite]\nsources = glob(\"tests/*.c\")\n\n[test.suite.cases]\nparse = { args = [\"parse\"] }\nfixed = { args = [\"ok\"] }\n",
+    );
+    let r = p.run(".", &["test", "--failed"]);
+    r.failure();
+    r.stderr_contains("c:suite/broken");
+    r.stderr_contains("no longer exists");
+    r.stderr_contains("no remembered failure is still present");
+}
+
+#[test]
+fn the_cases_that_would_run_can_be_listed_without_running_them() {
+    // ラベルの語彙を確かめる先も、重い事例を見分ける先も、ここ以外に無い
+    // （issue #94）。
+    let p = selection_project("select-list");
+    let r = p.run(".", &["test", "--no-run"]);
+    r.success();
+    // 「組むだけ」の意味は残る。
+    r.stderr_contains("built:");
+    r.stderr_contains("c:suite/parse");
+    r.stderr_contains("c:suite/emit");
+    // 事例の属性も見える。何が重く、何が失敗を期待しているか。
+    r.stderr_contains("[slow]");
+    r.stderr_contains("timeout 30s");
+    r.stderr_contains("should_fail");
+    // 走ってはいない。
+    assert!(!r.stderr.contains("test result:"), "the tests were run\n{r}");
+}
+
+#[test]
+fn the_listing_honours_the_selection_that_was_asked_for() {
+    let p = selection_project("select-list-filtered");
+    let r = p.run(".", &["test", "--no-run", "--label=slow"]);
+    r.success();
+    r.stderr_contains("c:suite/emit");
+    assert!(!r.stderr.contains("c:suite/parse"), "the selection was ignored\n{r}");
+}
+
+#[test]
+fn the_listing_is_machine_readable_with_the_same_labels() {
+    // 下流が突き合わせられるよう、走らせたときと同じ `target` の綴りで出す。
+    let p = selection_project("select-list-json");
+    let r = p.run(".", &["test", "--no-run", "--message-format=json"]);
+    r.success();
+    r.stdout_contains("\"kind\":\"test-case\"");
+    r.stdout_contains("\"target\":\"c:suite/emit\"");
+    r.stdout_contains("\"timeout_s\":30");
+    r.stdout_contains("\"should_fail\":true");
 }

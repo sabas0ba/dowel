@@ -35,6 +35,8 @@ dowel test --fail-fast           # stop at the first failure
 dowel test --test-jobs=4         # run 4 at a time (default is sequential)
 dowel test --no-run              # build only; do not run
 dowel test --label=fast          # only cases tagged `fast`
+dowel test app:suite/parse       # one case, by the label the output prints
+dowel test --no-run              # list what would run, without running it
 ```
 
 One binary can register several tests, each with its own arguments, timeout,

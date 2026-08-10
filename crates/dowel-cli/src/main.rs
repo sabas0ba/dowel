@@ -317,26 +317,18 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
         Command::Test { targets } => {
             let backend = building_backend(opts, "dowel test")?;
-            let mut requested = test_targets(&sess, targets)?;
+            let requested = test_targets(&sess, targets)?;
             let build_dir = build_plan::build_dir(
                 &sess.root_package().map(|p| p.root.clone()).unwrap_or_default(),
                 &cfg,
             );
             let mut state = testing::State::load(&build_dir);
+            let mut targets = requested.targets.clone();
 
             if opts.only_failed {
-                // 前回の判定はラベルで持つ。今あるターゲットとの突き合わせに失敗した
-                // ものは黙って落とす（マニフェストから消えた場合）。
-                //
-                // 事例（`[test.<name>.cases]`）のラベルは `<ターゲット>/<事例>`
-                // である。ここではまず組み直す対象を絞り、事例そのものの選別は
-                // 起動する組を数え上げた後で行う。
-                let failed = state.failed();
-                requested.retain(|t| {
-                    let label = sess.label(*t);
-                    failed.iter().any(|f| *f == label || f.starts_with(&format!("{label}/")))
-                });
-                if requested.is_empty() {
+                // 前回落ちたものが1件も無いのは良い知らせであって、意図との
+                // 食い違いではない。走らせるものが無いことをそのまま述べる。
+                if state.failed().is_empty() {
                     if report(&sess, opts) {
                         return Ok(ExitCode::FAILURE);
                     }
@@ -346,32 +338,42 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                     );
                     return Ok(ExitCode::SUCCESS);
                 }
+                // 前回の判定はラベルで持つ。事例のラベルは `<ターゲット>/<事例>`
+                // なので、ここではまず組み直す対象を絞り、事例そのものの選別は
+                // 起動する組を数え上げた後で行う。
+                let failed = state.failed();
+                targets.retain(|t| {
+                    let label = sess.label(*t);
+                    failed.iter().any(|f| *f == label || f.starts_with(&format!("{label}/")))
+                });
             }
 
-            if requested.is_empty() {
+            // 走らせるものが1つも無い木は、誤りではない。宣言が無いだけである。
+            if requested.targets.is_empty() {
                 if report(&sess, opts) {
                     return Ok(ExitCode::FAILURE);
                 }
                 eprintln!("no test targets. declare one with `[test.<name>]` in dowel.build");
                 return Ok(ExitCode::SUCCESS);
             }
-            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
+            if targets.is_empty() {
+                // ここへ来るのは `--failed` だけ。記録が現実と合わなくなっている。
+                return Ok(empty_selection(&sess, opts, &state.failed(), &[]));
+            }
+
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &targets, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
             };
-            if opts.no_run {
-                for t in &requested {
-                    if let Some(path) = p.artifacts.get(t) {
-                        eprintln!("built: {}", path.display());
-                    }
-                }
-                return Ok(ExitCode::SUCCESS);
-            }
 
             // ランナーの解決は起動の直前ではなく、この位置で行って診断を出す。
             // クロス構成でランナーが無いまま起動すると `Exec format error` になり、
             // 構成の誤りがテストの失敗として報告される。
+            //
+            // `--no-run` では起動しないため、ランナーが無くても構わない。
+            // 例外はハーネスで、事例を尋ねること自体が起動である——そちらは
+            // 尋ねられなかった失敗として現れる。
             let (launcher, runner_diags) = testing::Launcher::for_config(&sess, &cfg);
-            if !runner_diags.is_empty() {
+            if !opts.no_run && !runner_diags.is_empty() {
                 sess.diagnostics.extend(runner_diags);
                 if report(&sess, opts) {
                     return Ok(ExitCode::FAILURE);
@@ -383,21 +385,45 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
             // でないと数え上げられない（ADR-0023）。尋ねられなかったものは
             // 0件成功にせず、その場で失敗として持ち回る。
             let (mut jobs, discovery_failures) =
-                testing::discover(testing::plan_jobs(&sess, &p, &launcher, &requested, &cfg));
+                testing::discover(testing::plan_jobs(&sess, &p, &launcher, &targets, &cfg));
+            let known: Vec<String> = jobs.iter().map(|j| j.label.clone()).collect();
+
+            // 選択を順に効かせる。空になったら、そのことを述べて非零で終わる
+            // （issue #89 / #91 / #93）——「綴りを間違えた」と「1件通った」が
+            // 呼び出し側から同じに見えてはならない。
+            if !requested.cases.is_empty() {
+                jobs.retain(|j| requested.cases.contains(&j.label));
+            }
             if let Some(wanted) = &opts.labels {
                 jobs.retain(|j| j.labels.iter().any(|l| wanted.contains(l)));
-                if jobs.is_empty() {
-                    eprintln!(
-                        "no test carries {}. labels are declared in `[test.<name>.cases]`",
-                        wanted.iter().map(|l| format!("`{l}`")).collect::<Vec<_>>().join(" or ")
-                    );
-                    return Ok(ExitCode::SUCCESS);
-                }
             }
             if opts.only_failed {
                 let failed = state.failed();
                 jobs.retain(|j| failed.contains(&j.label.as_str()));
             }
+            if jobs.is_empty() && discovery_failures.is_empty() {
+                let remembered: Vec<String> = if opts.only_failed {
+                    state.failed().iter().map(|s| s.to_string()).collect()
+                } else {
+                    Vec::new()
+                };
+                let remembered: Vec<&str> = remembered.iter().map(|s| s.as_str()).collect();
+                return Ok(empty_selection(&sess, opts, &remembered, &known));
+            }
+
+            // 走らせずに並べる。何が走るのかを走らせずに知る手立てが、
+            // ここにしか無い（issue #94）。選択が効いた後の一覧である。
+            // 「組むだけ」という従来の意味は残る——並べることと矛盾しない。
+            if opts.no_run {
+                for t in &targets {
+                    if let Some(path) = p.artifacts.get(t) {
+                        eprintln!("built: {}", path.display());
+                    }
+                }
+                list_cases(&jobs, opts);
+                return Ok(ExitCode::SUCCESS);
+            }
+
             let run_opts = test_run_options(opts);
             let mut outcomes = discovery_failures;
             let requested_count = jobs.len() + outcomes.len();
@@ -730,28 +756,147 @@ fn status_text(status: &std::process::ExitStatus) -> String {
 }
 
 /// `test` の対象。指定がなければ全ての test ターゲット。
-fn test_targets(
+/// 選択が空になった。何を選ぼうとして空になったのかを述べ、非零で終わる。
+///
+/// 「ラベルの綴りを間違えた」と「1件通った」が、呼び出し側から同じに見えては
+/// ならない（issue #89）。報告は stderr に出るため、状態を 0 にすると CI の
+/// ログでは埋もれる。`--failed` も同じ問いであり、同じ答にする（issue #91）。
+///
+/// `remembered` は `--failed` が覚えているラベル、`known` は今回計画された
+/// 事例のラベル。両方あるとき、消えた事例を名指せる。
+fn empty_selection(
     sess: &Session,
-    requested: &[String],
-) -> Result<Vec<dowel_model::TargetId>, String> {
-    use dowel_eval::schema::TableKind;
-    if !requested.is_empty() {
-        let ids: Vec<_> =
-            requested.iter().map(|s| sess.find_target(s)).collect::<Result<_, _>>()?;
-        // 明示指定が test 以外なら、黙って走らせずに断る。
-        for id in &ids {
-            let t = sess.target(*id);
-            if t.kind != TableKind::Test {
-                return Err(format!(
-                    "`{}` is a {} target, not a test",
-                    sess.label(*id),
-                    t.kind.name()
-                ));
-            }
-        }
-        return Ok(ids);
+    opts: &Options,
+    remembered: &[&str],
+    known: &[String],
+) -> ExitCode {
+    if report(sess, opts) {
+        return ExitCode::FAILURE;
     }
-    Ok(sess.targets.iter().filter(|t| t.kind == TableKind::Test).map(|t| t.id).collect())
+    if let Some(wanted) = &opts.labels {
+        eprintln!(
+            "error: no test carries {}. labels are declared in `[test.<name>.cases]`",
+            wanted.iter().map(|l| format!("`{l}`")).collect::<Vec<_>>().join(" or ")
+        );
+        if !known.is_empty() {
+            eprintln!("note: `dowel test --no-run` lists the cases and their labels");
+        }
+        return ExitCode::FAILURE;
+    }
+    if opts.only_failed {
+        // ここへ来るのは「覚えているものはあるが、どれも今は存在しない」場合
+        // だけである（何も落ちていない場合は先に返している）。記録が現実と
+        // 合わなくなっている。消えた事例を名指す——「直す」という行為そのものが、
+        // 記録と現実を食い違わせる契機になる。
+        let gone: Vec<&&str> =
+            remembered.iter().filter(|r| !known.iter().any(|k| k == **r)).collect();
+        for label in &gone {
+            eprintln!("warning: `{label}` failed last time but no longer exists");
+        }
+        eprintln!(
+            "error: no remembered failure is still present. run `dowel test` to start a new record"
+        );
+        return ExitCode::FAILURE;
+    }
+    eprintln!("error: nothing matched the requested tests");
+    if !known.is_empty() {
+        eprintln!("note: `dowel test --no-run` lists the cases that exist");
+    }
+    ExitCode::FAILURE
+}
+
+/// 走るはずのものを並べる（`--no-run`、issue #94）。
+///
+/// 事例は選択の単位になったのに、一覧の単位になっていなかった。ラベルの語彙を
+/// 確かめる先も、重い事例を見分ける先も、ここ以外に無い。
+fn list_cases(jobs: &[testing::Job], opts: &Options) {
+    if opts.message_format == MessageFormat::Json {
+        // 走らせたときと同じ `target` の綴りで出す。下流が突き合わせられる。
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        for j in jobs {
+            let mut w = JsonWriter::new();
+            w.begin_object();
+            w.field_str("kind", "test-case");
+            w.field_str("target", &j.label);
+            w.field_strs("labels", j.labels.iter().map(|l| l.as_str()));
+            w.field_bool("should_fail", j.should_fail);
+            match j.timeout {
+                Some(t) => w.key("timeout_s").u64(t.as_secs()),
+                None => w.key("timeout_s").null(),
+            };
+            w.end_object();
+            let _ = writeln!(out, "{}", w.finish());
+        }
+        return;
+    }
+    let width = jobs.iter().map(|j| j.label.len()).max().unwrap_or(0);
+    for j in jobs {
+        let mut notes = Vec::new();
+        if !j.labels.is_empty() {
+            notes.push(format!("[{}]", j.labels.join(", ")));
+        }
+        if j.should_fail {
+            notes.push("should_fail".to_string());
+        }
+        if let Some(t) = j.timeout {
+            notes.push(format!("timeout {}s", t.as_secs()));
+        }
+        if notes.is_empty() {
+            eprintln!("{}", j.label);
+        } else {
+            eprintln!("{:width$}  {}", j.label, notes.join(" "));
+        }
+    }
+}
+
+/// `dowel test` の位置引数。
+///
+/// 目標の参照（`app:unit`）でも、事例のラベル（`app:unit/parse`）でもよい
+/// （issue #93）。画面に出た識別子をそのまま貼り戻せることは、道具として
+/// 基本的な性質である——落ちた1件だけを再実行する経路がここにしかない。
+struct Requested {
+    /// 組む対象。事例を指した場合はその事例の属する目標
+    targets: Vec<dowel_model::TargetId>,
+    /// 指定された事例ラベルの完全形。空なら目標の全事例
+    cases: std::collections::BTreeSet<String>,
+}
+
+fn test_targets(sess: &Session, requested: &[String]) -> Result<Requested, String> {
+    use dowel_eval::schema::TableKind;
+    if requested.is_empty() {
+        return Ok(Requested {
+            targets: sess
+                .targets
+                .iter()
+                .filter(|t| t.kind == TableKind::Test)
+                .map(|t| t.id)
+                .collect(),
+            cases: std::collections::BTreeSet::new(),
+        });
+    }
+    let mut targets = Vec::new();
+    let mut cases = std::collections::BTreeSet::new();
+    for arg in requested {
+        // 事例の名前に `/` は書けない（検証済み）ので、最初の `/` が境目になる。
+        let (target_ref, case) = match arg.split_once('/') {
+            Some((t, c)) => (t, Some(c)),
+            None => (arg.as_str(), None),
+        };
+        let id = sess.find_target(target_ref)?;
+        let t = sess.target(id);
+        // 明示指定が test 以外なら、黙って走らせずに断る。
+        if t.kind != TableKind::Test {
+            return Err(format!("`{}` is a {} target, not a test", sess.label(id), t.kind.name()));
+        }
+        if let Some(case) = case {
+            cases.insert(format!("{}/{case}", sess.label(id)));
+        }
+        if !targets.contains(&id) {
+            targets.push(id);
+        }
+    }
+    Ok(Requested { targets, cases })
 }
 
 /// 成果物を要求するコマンドのためのバックエンド。
