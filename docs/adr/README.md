@@ -38,3 +38,4 @@ was originally written in.
 | [0029](0029-tarball-dependencies.md) | An archive dependency is pinned by its contents; fetching is delegated, verification is not | Accepted |
 | [0030](0030-shared-libraries.md) | A shared library declares what it exports; the linker's form of that list is generated | Accepted |
 | [0031](0031-toolchain-is-the-builds.md) | The toolchain is a property of the build, not of a package; the diagnostic says so | Accepted |
+| [0032](0032-predicate-composition.md) | `when` predicates compose with `and` / `or` / `not`; `match` stays the way to choose | Accepted |

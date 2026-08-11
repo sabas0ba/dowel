@@ -237,3 +237,24 @@ fn every_type_variant_round_trips() {
         assert_eq!(r.i, r.b.len(), "bytes were left over for {}", ty.display());
     }
 }
+
+#[test]
+fn a_composed_predicate_round_trips() {
+    // 合成のタグ（ADR-0032）は古い記録に現れないため形式の版は動かないが、
+    // 書いたものが読めることは確かめる必要がある。入れ子の順序を取り違えても
+    // 「読めた」ようには見えるので、書き出しの一致で見る。
+    round_trips(&evaluate(
+        r#"
+[bin.app]
+sources = [file("src/main.c")]
+
+[bin.app.private]
+flags = [
+    "-pthread"      when target.os == "linux" or target.os == "macos",
+    "-fPIC"         when not target.os == "windows",
+    "-DBOTH"        when target.os == "linux" and not cfg.opt == "release",
+    "-DGROUPED"     when (target.os == "linux" or target.os == "macos") and cfg.opt == "debug",
+]
+"#,
+    ));
+}

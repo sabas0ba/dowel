@@ -175,6 +175,20 @@ changes, only the speed.
 - `Cfg<T>`: resolution of `match` and postfix `when` is deferred to
   specialization, so switching `--release` or `--target` does not re-run
   manifest evaluation
+- `when` predicates compose with `and` / `or` / `not`, precedence
+  `not` > `and` > `or`, parentheses to override
+  ([ADR-0032](adr/0032-predicate-composition.md)). "Linux or macOS" had to
+  be two identical lines that nothing tied together, and "everywhere except
+  Windows" could only be written by listing the other values — which stops
+  covering them the day a word is added to `target.os`, a vocabulary that
+  is expected to grow. The operators are words to match the rest of the
+  language, and every operator binds on the same line, so a following key
+  named `or` is a key. Domain checking reaches each leaf, so a misspelling
+  inside a composition points at the misspelling. `match` is still the way
+  to choose *between* alternatives: `or` makes one value reachable under
+  several conditions, it does not make two values exclusive. Exhaustiveness
+  checking is untouched — it belongs to `match`, which has arms; `when`
+  has none
 - `glob` is not expanded during evaluation either: scanning at evaluation
   time would mix in the current file system — an unrecorded input
 - Merge rules belong to types: `union` / `append` / `error_on_conflict` /
@@ -799,16 +813,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (644 tests):
+Current breakdown (653 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 341 |
+| `unit-*` | per-crate unit tests | 348 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 217 |
+| `e2e` | compile real C and C++, run it, check the output | 219 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (67 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

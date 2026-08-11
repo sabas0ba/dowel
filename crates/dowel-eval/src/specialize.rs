@@ -79,6 +79,10 @@ fn eval_pred(pred: &Pred, cfg: &Config) -> bool {
             Some(v) => v.display() == *expected,
             None => false,
         },
+        // 合成は木のまま辿る（ADR-0032）。優先順位は構文解析が畳んでいる。
+        Pred::Not(p) => !eval_pred(p, cfg),
+        Pred::And(a, b) => eval_pred(a, cfg) && eval_pred(b, cfg),
+        Pred::Or(a, b) => eval_pred(a, cfg) || eval_pred(b, cfg),
     }
 }
 
@@ -125,6 +129,73 @@ mod tests {
         assert_eq!(chosen.as_str(), Some("-O2"));
         // どのアームを選んだかが来歴に残る。
         assert!(matches!(chosen.prov.origin(), Some(Origin::MatchArm(p)) if p == "release"));
+    }
+
+    fn eq(ns: Ns, name: &str, v: &str) -> Pred {
+        Pred::Eq(CfgKey { ns, name: name.into() }, v.into())
+    }
+
+    #[test]
+    fn the_composed_predicates_follow_their_truth_tables() {
+        // 合成は木のまま辿る（ADR-0032）。ホストは linux としてこれを見る。
+        let cfg = Config::host_default();
+        let linux = eq(Ns::Target, "os", "linux");
+        let macos = eq(Ns::Target, "os", "macos");
+        assert!(eval_pred(&linux, &cfg));
+        assert!(!eval_pred(&macos, &cfg));
+
+        // or は片方で足りる。二行に分けて書いていたものがこれである。
+        assert!(eval_pred(&Pred::Or(Box::new(linux.clone()), Box::new(macos.clone())), &cfg));
+        assert!(!eval_pred(&Pred::Or(Box::new(macos.clone()), Box::new(macos.clone())), &cfg));
+
+        // and は両方要る。
+        assert!(!eval_pred(&Pred::And(Box::new(linux.clone()), Box::new(macos.clone())), &cfg));
+        assert!(eval_pred(&Pred::And(Box::new(linux.clone()), Box::new(linux.clone())), &cfg));
+
+        // not は語彙が増えても正しいままである。値を列挙する書き方は、
+        // `target.os` に語が足された日に静かに誤る。
+        assert!(eval_pred(&Pred::Not(Box::new(macos.clone())), &cfg));
+        assert!(!eval_pred(&Pred::Not(Box::new(linux.clone())), &cfg));
+
+        // 入れ子。
+        let windows = eq(Ns::Target, "os", "windows");
+        let unix = Pred::Or(Box::new(linux.clone()), Box::new(macos.clone()));
+        assert!(eval_pred(
+            &Pred::And(Box::new(unix), Box::new(Pred::Not(Box::new(windows)))),
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn a_composed_predicate_reads_back_with_the_parentheses_it_needs() {
+        let a = eq(Ns::Target, "os", "linux");
+        let b = eq(Ns::Target, "os", "macos");
+        let c = eq(Ns::Cfg, "opt", "debug");
+        // `and` は `or` より強いので、`a and b` の側に括弧は要らない。
+        let and_or = Pred::Or(
+            Box::new(Pred::And(Box::new(a.clone()), Box::new(b.clone()))),
+            Box::new(c.clone()),
+        );
+        assert_eq!(
+            and_or.display(),
+            "target.os == \"linux\" and target.os == \"macos\" or cfg.opt == \"debug\""
+        );
+        // 逆向きは括弧が要る。無ければ別の木として読み直される。
+        let or_and = Pred::And(
+            Box::new(Pred::Or(Box::new(a.clone()), Box::new(b.clone()))),
+            Box::new(c.clone()),
+        );
+        assert_eq!(
+            or_and.display(),
+            "(target.os == \"linux\" or target.os == \"macos\") and cfg.opt == \"debug\""
+        );
+        // `not` の下も同じ。
+        assert_eq!(
+            Pred::Not(Box::new(Pred::Or(Box::new(a.clone()), Box::new(b.clone())))).display(),
+            "not (target.os == \"linux\" or target.os == \"macos\")"
+        );
+        // 読む鍵は全部数える。
+        assert_eq!(or_and.keys().len(), 3);
     }
 
     #[test]

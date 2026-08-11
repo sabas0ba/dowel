@@ -36,7 +36,9 @@ To decide:
 - Which further dimensions belong in `cfg` (these become candidate
   components of the ABI label). `target.os` / `target.arch` are the first
   two, and are easier to compose with than a triple string
-- Predicate composition rules (allow anything beyond implicit AND?)
+- ~~Predicate composition rules~~ — decided by
+  [ADR-0032](adr/0032-predicate-composition.md): `and` / `or` / `not`,
+  precedence `not` > `and` > `or`, parentheses to override
 - Whether the vocabulary is fixed or extensible by toolchains
 
 ### The provisional vocabulary used by the implementation
@@ -56,7 +58,8 @@ available from `dowel schema dump`.
 | `tc` | `c` | identifier of the selected C toolchain |
 | `tc` | `cxx` | identifier of the selected C++ toolchain |
 
-Predicate composition is implicit AND only. Exhaustiveness checking of `match`
+Predicates compose with `and` / `or` / `not`
+([ADR-0032](adr/0032-predicate-composition.md)). Exhaustiveness checking of `match`
 applies to keys with finite domains (`cfg.opt` / `host.*` / `target.*`);
 `cfg.target` has an unbounded domain and requires a `_` arm. That asymmetry
 is what ADR-0026 addressed for the target: the triple stays open, and the

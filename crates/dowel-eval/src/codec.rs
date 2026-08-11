@@ -187,6 +187,35 @@ impl W {
         }
     }
 
+    /// 述語を木のまま書く。合成のタグ（2..4）は古い記録に現れないため、
+    /// 形式の版は動かない（ADR-0032）。
+    fn pred(&mut self, p: &Pred) {
+        match p {
+            Pred::Flag(k) => {
+                self.u8(0);
+                self.cfg_key(k);
+            }
+            Pred::Eq(k, v) => {
+                self.u8(1);
+                self.cfg_key(k);
+                self.str(v);
+            }
+            Pred::Not(a) => {
+                self.u8(2);
+                self.pred(a);
+            }
+            Pred::And(a, b) => {
+                self.u8(3);
+                self.pred(a);
+                self.pred(b);
+            }
+            Pred::Or(a, b) => {
+                self.u8(4);
+                self.pred(a);
+                self.pred(b);
+            }
+        }
+    }
     fn cfg_key(&mut self, k: &CfgKey) {
         self.u8(match k.ns {
             Ns::Cfg => 0,
@@ -269,17 +298,7 @@ impl W {
             }
             Data::When { pred, inner } => {
                 self.u8(10);
-                match pred {
-                    Pred::Flag(k) => {
-                        self.u8(0);
-                        self.cfg_key(k);
-                    }
-                    Pred::Eq(k, v) => {
-                        self.u8(1);
-                        self.cfg_key(k);
-                        self.str(v);
-                    }
-                }
+                self.pred(pred);
                 self.value(inner);
             }
             Data::PkgRef(name) => {
@@ -429,6 +448,16 @@ impl R<'_> {
         })
     }
 
+    fn pred(&mut self) -> Option<Pred> {
+        Some(match self.u8()? {
+            0 => Pred::Flag(self.cfg_key()?),
+            1 => Pred::Eq(self.cfg_key()?, self.str()?),
+            2 => Pred::Not(Box::new(self.pred()?)),
+            3 => Pred::And(Box::new(self.pred()?), Box::new(self.pred()?)),
+            4 => Pred::Or(Box::new(self.pred()?), Box::new(self.pred()?)),
+            _ => return None,
+        })
+    }
     fn cfg_key(&mut self) -> Option<CfgKey> {
         let ns = match self.u8()? {
             0 => Ns::Cfg,
@@ -491,14 +520,7 @@ impl R<'_> {
                 }
                 Data::Match { scrutinee, arms }
             }
-            10 => {
-                let pred = match self.u8()? {
-                    0 => Pred::Flag(self.cfg_key()?),
-                    1 => Pred::Eq(self.cfg_key()?, self.str()?),
-                    _ => return None,
-                };
-                Data::When { pred, inner: Box::new(self.value()?) }
-            }
+            10 => Data::When { pred: self.pred()?, inner: Box::new(self.value()?) },
             11 => Data::Error,
             12 => Data::PkgRef(self.str()?),
             _ => return None,

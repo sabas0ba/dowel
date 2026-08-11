@@ -550,9 +550,30 @@ Two predicate forms:
 - `when <key> == "value"` — string comparison; on finite domains the value
   is checked against the vocabulary (`unknown-pattern` otherwise)
 
-Composition is implicit AND only (chain `when` inside `match` arms for
-anything more complex). A `when` binds to the expression before it on the
-same line — it does not reach across a newline.
+Predicates compose with `and` / `or` / `not`
+([ADR-0032](adr/0032-predicate-composition.md)):
+
+```toml
+flags = ["-pthread"] when target.os == "linux" or target.os == "macos"
+flags = ["-fPIC"]    when not target.os == "windows"
+deps  = [dep("zlib") when feature.zlib and not feature.minimal]
+flags = ["-DX"]      when (target.os == "linux" or target.os == "macos") and cfg.opt == "debug"
+```
+
+Precedence is `not` > `and` > `or`, with parentheses to override. The
+operators are words, not symbols, matching the rest of the language
+(`when`, `match`, `glob`).
+
+`not` is what keeps "everywhere except Windows" correct when the
+vocabulary grows; listing the other values silently stops covering them
+the day a word is added to `target.os`.
+
+A `when` — and every operator inside it — binds on the same line. It does
+not reach across a newline, so a following key that happens to be named
+`or` is a key, not an operator.
+
+Domain checking reaches every leaf: a misspelled value is `unknown-pattern`
+inside `and` / `or` / `not` exactly as it is on its own.
 
 **Use `match`, not stacked `when`s, to choose between implementations.**
 Feature flags are additive — `--features=x11` does not switch `headless`
