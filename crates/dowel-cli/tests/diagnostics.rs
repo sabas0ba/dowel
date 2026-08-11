@@ -550,6 +550,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unreadable-toolchains",
+        why: "`[package] toolchains` names a file that is not there (ADR-0033)",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\ntoolchains = \"nowhere.toml\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "missing-exports",
         why: "a shared library does not say what it exports (ADR-0030)",
         files: &[(

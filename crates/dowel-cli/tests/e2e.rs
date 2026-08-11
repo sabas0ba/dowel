@@ -5487,3 +5487,124 @@ fn a_misspelling_inside_a_composed_predicate_is_reported_at_the_leaf() {
     r.stderr_contains("windwos");
     r.stderr_contains("did you mean `windows`");
 }
+
+/// 複数の使う側が1つの道具立ての表を共有する木（issue #125、ADR-0033）。
+fn a_tree_sharing_one_toolchain_file(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write(
+        "toolchains.toml",
+        "[toolchain.thumbv7em-none-eabihf]\nc  = \"cc\"\nar = \"ar\"\n\n\
+         [toolchain.aarch64-unknown-linux-gnu]\n\
+         c  = \"aarch64-linux-gnu-gcc\"\nar = \"aarch64-linux-gnu-ar\"\n",
+    );
+    for pkg in ["cli", "fw"] {
+        p.write(
+            &format!("{pkg}/dowel.toml"),
+            &format!(
+                "[package]\nname = \"{pkg}\"\nversion = \"0\"\n\
+                 toolchains = \"../toolchains.toml\"\n"
+            ),
+        );
+        p.write(
+            &format!("{pkg}/dowel.build"),
+            &format!("[bin.{pkg}]\nsources = [file(\"src/main.c\")]\n"),
+        );
+        p.write(&format!("{pkg}/src/main.c"), "int main(void) { return 0; }\n");
+    }
+    p
+}
+
+#[test]
+fn a_shared_toolchain_file_supplies_the_declaration() {
+    // 使う側それぞれが同じ表を写していた。1箇所に置いて名指しできる
+    // （ADR-0033）。
+    let p = a_tree_sharing_one_toolchain_file("shared-toolchain");
+    for pkg in ["cli", "fw"] {
+        p.run(pkg, &["build", "--target=thumbv7em-none-eabihf"]).success();
+        assert!(build_dir(&p.path(pkg), "debug")
+            .parent()
+            .unwrap()
+            .join("thumbv7em-none-eabihf-debug/bin")
+            .join(pkg)
+            .is_file());
+    }
+}
+
+#[test]
+fn a_local_declaration_overrides_one_tool_of_the_shared_file() {
+    // 上書きの単位は道具1つである。三つ組ごとにすると、1つの道具を替える
+    // ために表全体を写し直すことになり、この機構の目的に反する（ADR-0033）。
+    let p = a_tree_sharing_one_toolchain_file("shared-toolchain-override");
+    p.write(
+        "cli/dowel.toml",
+        "[package]\nname = \"cli\"\nversion = \"0\"\n\
+         toolchains = \"../toolchains.toml\"\n\n\
+         [toolchain.thumbv7em-none-eabihf]\nc = \"nonexistent-cc\"\n",
+    );
+    let r = p.run("cli", &["build", "--target=thumbv7em-none-eabihf"]);
+    r.failure();
+    // ローカルの `c` が勝ち、位置もそこを指す。
+    r.stderr_contains("nonexistent-cc");
+    r.stderr_contains("cli/dowel.toml");
+    // `ar` は共有ファイルのまま。上書きされた道具に巻き込まれていない。
+    assert!(!r.stderr.contains("cannot find the archiver"), "{}", r.stderr);
+}
+
+#[test]
+fn a_missing_toolchain_file_is_reported_where_it_is_named() {
+    let p = a_tree_sharing_one_toolchain_file("shared-toolchain-missing");
+    p.write(
+        "cli/dowel.toml",
+        "[package]\nname = \"cli\"\nversion = \"0\"\ntoolchains = \"../nowhere.toml\"\n",
+    );
+    let r = p.run("cli", &["check"]);
+    r.failure();
+    r.stderr_contains("unreadable-toolchains");
+    r.stderr_contains("relative to the `dowel.toml` that names it");
+}
+
+#[test]
+fn a_toolchain_file_holds_toolchains_only() {
+    // 他の表を黙って無視すると、「dowel.toml のつもりで書いた」ことと
+    // 「何も起きなかった」ことが同じに見える（ADR-0033）。
+    let p = a_tree_sharing_one_toolchain_file("shared-toolchain-stray");
+    p.write(
+        "toolchains.toml",
+        "[package]\nname = \"oops\"\n\n[toolchain.thumbv7em-none-eabihf]\nc = \"cc\"\n",
+    );
+    let r = p.run("cli", &["check", "--target=thumbv7em-none-eabihf"]);
+    r.failure();
+    r.stderr_contains("is not read from a toolchain file");
+}
+
+#[test]
+fn a_dependencys_shared_toolchain_file_is_not_read_either() {
+    // ADR-0031 の立場は変わらない。この ADR が与えるのは、使う側が表を
+    // 1度だけ書く場所であって、継ぐ手段ではない。
+    let p = Project::new("shared-toolchain-not-inherited");
+    p.write("toolchains.toml", "[toolchain.thumbv7em-none-eabihf]\nc = \"cc\"\nar = \"ar\"\n");
+    p.write(
+        "mylib/dowel.toml",
+        "[package]\nname = \"mylib\"\nversion = \"0\"\ntoolchains = \"../toolchains.toml\"\n",
+    );
+    p.write("mylib/dowel.build", "[lib.mylib]\nsources = [file(\"src/mylib.c\")]\n");
+    p.write("mylib/src/mylib.c", "int mylib_add(int a, int b) { return a + b; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"mylib\"\npath = \"../mylib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"mylib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "int mylib_add(int, int);\nint main(void) { return mylib_add(1, 1) == 2 ? 0 : 1; }\n",
+    );
+
+    let r = p.run("app", &["build", "--target=thumbv7em-none-eabihf"]);
+    r.failure();
+    r.stderr_contains("missing-toolchain");
+}

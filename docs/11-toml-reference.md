@@ -33,6 +33,8 @@ version = "0.3.1"
 | `version` | string | no | the package version. Readable from `dowel.build` as `pkg.version` ([12-build-reference.md](12-build-reference.md), [ADR-0020](adr/0020-package-constants.md)), so the value a library reports at run time comes from here rather than being written a second time in a header. Not yet used for resolving this package as someone else's dependency. Default `0.0.0` |
 | `targets` | list of strings | no | the target triples this package is for. When declared, any other triple — the host included — is refused with `unsupported-target` before building. Undeclared (the default) means the package builds for any triple. This is deliberately separate from `[toolchain.<triple>]`: a package that builds for the host but swaps tools when cross-compiling declares toolchains without narrowing its targets |
 
+| `toolchains` | string | no | a file of shared toolchain declarations ([ADR-0033](adr/0033-shared-toolchain-file.md)), resolved relative to this `dowel.toml`. See below |
+
 A missing `[package]` table is `missing-table`. A `dowel.toml` whose
 directory has no `dowel.build` defines no targets but can still be depended
 on for its metadata (in practice every package has both).
@@ -62,6 +64,46 @@ cxx = "aarch64-linux-gnu-g++"
 Any other key is `unknown-property`, with a suggestion — a misspelled tool
 would otherwise silently fall back to its default, which for a cross
 archiver means the host's `ar` quietly builds the archives.
+
+### Sharing one file between several packages
+
+Several consumers in one tree usually need the same triple-to-tools
+mapping. `[package] toolchains` names a file that holds it
+([ADR-0033](adr/0033-shared-toolchain-file.md)):
+
+```toml
+# cli/dowel.toml
+[package]
+name       = "cli"
+toolchains = "../toolchains.toml"
+```
+
+```toml
+# toolchains.toml — the same tables, in a file of their own
+[toolchain.aarch64-unknown-linux-gnu]
+c  = "aarch64-linux-gnu-gcc"
+ar = "aarch64-linux-gnu-ar"
+
+[toolchain.thumbv7em-none-eabihf]
+c       = "arm-none-eabi-gcc"
+ar      = "arm-none-eabi-ar"
+objcopy = "arm-none-eabi-objcopy"
+```
+
+- **A local declaration wins, one tool at a time.** Declaring
+  `[toolchain.thumbv7em-none-eabihf] c = "..."` next to the `toolchains`
+  key replaces the compiler for that triple and leaves `ar` and `objcopy`
+  coming from the file. Overriding per triple would mean rewriting the
+  whole table to change one tool
+- The file holds `[toolchain]` and `[toolchain.<triple>]` and nothing
+  else; another table there is `unknown-table` rather than ignored
+- It cannot name a further file — reading is one level
+- A file that cannot be read is `unreadable-toolchains`, reported at the
+  key that names it
+- **A dependency's `toolchains` is not read**, exactly as its
+  `[toolchain]` is not ([ADR-0031](adr/0031-toolchain-is-the-builds.md)).
+  This gives a consumer one place to write the table, not a way to
+  inherit one
 
 ### The argument style
 
