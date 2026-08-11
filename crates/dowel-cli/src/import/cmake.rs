@@ -6,8 +6,10 @@
 //! ## CMake 固有の写像
 //!
 //! - `EXECUTABLE` → `bin`、`STATIC_LIBRARY` / `OBJECT_LIBRARY` → `lib`。
-//!   `SHARED_LIBRARY` も `lib` にする（共有ライブラリは未実装のため、
-//!   その旨をコメントに残す）。`UTILITY` は読み飛ばす
+//!   `SHARED_LIBRARY` も静的な `lib` にする。共有ライブラリは作れるように
+//!   なったが、書き出す記号の一覧が要る（ADR-0030）——reply はそれを
+//!   答えない。当てずっぽうの一覧を置くより、その旨をコメントに残して
+//!   読み手に委ねる。`UTILITY` は読み飛ばす
 //! - 翻訳の引数は `compileGroups` で `defines` / `includes` /
 //!   `compileCommandFragments` に分かれている。仕分けは reply の側が
 //!   済ませており、こちらは写すだけでよい
@@ -106,7 +108,7 @@ fn extract(t: &Json, source_dir: &Path) -> Option<Imported> {
         "EXECUTABLE" => ("bin", None),
         "STATIC_LIBRARY" | "OBJECT_LIBRARY" => ("lib", None),
         "SHARED_LIBRARY" => {
-            ("lib", Some("was a SHARED_LIBRARY; dowel builds static archives today"))
+            ("lib", Some("was a SHARED_LIBRARY. imported as a static library: dowel needs an explicit\n#       `exports` list for a shared one (ADR-0030), and the File API does not report it"))
         }
         _ => return None,
     };

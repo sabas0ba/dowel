@@ -248,15 +248,37 @@ pub fn nested_table(word: &str) -> Option<&'static NestedTable> {
     NESTED_TABLES.iter().find(|t| t.word == word)
 }
 
+/// ライブラリの繋ぎ方（[ADR-0030](../../../docs/adr/0030-shared-libraries.md)）。
+///
+/// 有限の値域とする。`match` の網羅性検査が効き、対象ごとに繋ぎ方を変える
+/// 記述が他のプロパティと同じ書き方で済む。
+pub const LINKAGES: &[&str] = &["static", "shared"];
+
 /// ターゲット直下に置けるプロパティ。
 pub fn root_props() -> Vec<PropDef> {
-    vec![PropDef {
-        name: "sources",
-        ty: list(Type::Path),
-        merge: Merge::Append,
-        doc: "sources to compile. does not propagate",
-        domain: None,
-    }]
+    vec![
+        PropDef {
+            name: "sources",
+            ty: list(Type::Path),
+            merge: Merge::Append,
+            doc: "sources to compile. does not propagate",
+            domain: None,
+        },
+        PropDef {
+            name: "linkage",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "how a `lib` is linked: `static` (the default) or `shared` (ADR-0030)",
+            domain: Some(LINKAGES),
+        },
+        PropDef {
+            name: "exports",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "symbols a shared library exports. becomes a version script, symbol list, or .def",
+            domain: None,
+        },
+    ]
 }
 
 /// `[runner.<triple>]` に置けるプロパティ（docs/30-devexp.md 1節）。

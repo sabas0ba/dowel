@@ -36,3 +36,4 @@ was originally written in.
 | [0027](0027-toolchain-style.md) | A toolchain declares its argument style; dowel spells what it assembles, and translates nothing else | Accepted |
 | [0028](0028-probe-facts.md) | What was asked of a tool is recorded outside the project, keyed by the tool's identity | Accepted |
 | [0029](0029-tarball-dependencies.md) | An archive dependency is pinned by its contents; fetching is delegated, verification is not | Accepted |
+| [0030](0030-shared-libraries.md) | A shared library declares what it exports; the linker's form of that list is generated | Accepted |

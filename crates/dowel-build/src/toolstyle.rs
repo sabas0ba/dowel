@@ -146,6 +146,172 @@ pub fn archive_name(cfg: &Config, target: &str) -> String {
     }
 }
 
+// --- 共有ライブラリ（ADR-0030）---
+
+/// 書き出す形式。同じ `exports` の一覧から、リンカが読む形を作る。
+///
+/// 様式だけでは決まらない。GNU 様式の中で Mach-O だけが版指令書を読まず、
+/// 別の綴りと別の名前の付け方を要求する——`target.os` が語彙として在る
+/// （[ADR-0026](../../../docs/adr/0026-target-os-arch.md)）ので、そこで分ける。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExportForm {
+    /// ELF の版指令書（`--version-script`）
+    VersionScript,
+    /// Mach-O の記号一覧（`-exported_symbols_list`）。名前に `_` が付く
+    SymbolList,
+    /// Windows のモジュール定義（`/DEF:`）
+    ModuleDefinition,
+}
+
+/// 形式は**対象の形式**が決める。様式ではない。
+///
+/// mingw は GNU 様式のまま PE を作る。版指令書は ELF のものであり、PE では
+/// 意味を持たない——この2つが別の軸であることは、ここで分けておかないと
+/// 「GNU 様式なら版指令書」という取り違えとして残る。
+pub fn export_form(cfg: &Config) -> ExportForm {
+    match (cfg.style, dowel_eval::config::triple_os(&cfg.target)) {
+        (Style::Msvc, _) => ExportForm::ModuleDefinition,
+        (Style::Gnu, "windows") => ExportForm::ModuleDefinition,
+        (Style::Gnu, "macos") => ExportForm::SymbolList,
+        (Style::Gnu, _) => ExportForm::VersionScript,
+    }
+}
+
+/// 生成する記述の中身。
+///
+/// 記号の綴りは書かれたままにする。C++ の飾り名は利用者が書くものであり、
+/// dowel は飾らない——飾り方こそ実装していない ABI そのものである
+/// （ADR-0030）。Mach-O の `_` は飾りではなく platform 一律の接頭辞なので、
+/// 書かれたものに付ける。
+pub fn export_file(form: ExportForm, exports: &[String]) -> String {
+    match form {
+        ExportForm::VersionScript => {
+            let mut s = String::from("{\n  global:\n");
+            for name in exports {
+                s.push_str(&format!("    {name};\n"));
+            }
+            // 挙げられていないものは局所。既定で全部出る側を、
+            // 挙げた分だけに閉じるのがこの生成の目的である。
+            s.push_str("  local:\n    *;\n};\n");
+            s
+        }
+        ExportForm::SymbolList => {
+            let mut s = String::new();
+            for name in exports {
+                s.push_str(&format!("_{name}\n"));
+            }
+            s
+        }
+        ExportForm::ModuleDefinition => {
+            let mut s = String::from("EXPORTS\n");
+            for name in exports {
+                s.push_str(&format!("    {name}\n"));
+            }
+            s
+        }
+    }
+}
+
+/// 生成する記述のファイル名の末尾。
+pub fn export_file_extension(form: ExportForm) -> &'static str {
+    match form {
+        ExportForm::VersionScript => "map",
+        ExportForm::SymbolList => "symbols",
+        ExportForm::ModuleDefinition => "def",
+    }
+}
+
+/// 共有ライブラリに入りうるオブジェクトの翻訳時の追加。
+///
+/// 位置独立にするだけである。`-fvisibility=hidden` は**足さない**——
+/// 翻訳時に隠された記号は版指令書の `global:` では戻らず、隠す指定と
+/// 挙げる指定を併せると何も出ない共有ライブラリが出来る（ADR-0030）。
+/// 隠すのは指令書の役目であり、指令書だけで足りる。
+pub fn shared_object_flags(cfg: &Config) -> Vec<String> {
+    match cfg.style {
+        Style::Gnu => vec!["-fPIC".into()],
+        // MSVC の目的コードは元より位置独立であり、既定で何も出さない。
+        Style::Msvc => Vec::new(),
+    }
+}
+
+/// 共有ライブラリの綴り。
+pub fn shared_library_name(cfg: &Config, target: &str) -> String {
+    match (cfg.style, dowel_eval::config::triple_os(&cfg.target)) {
+        (Style::Msvc, _) => format!("{target}.dll"),
+        (Style::Gnu, "macos") => format!("lib{target}.dylib"),
+        // mingw も GNU 様式だが、出来上がるのは DLL である。
+        (Style::Gnu, "windows") => format!("lib{target}.dll"),
+        (Style::Gnu, _) => format!("lib{target}.so"),
+    }
+}
+
+/// 共有ライブラリを作るリンクの引数。
+///
+/// `soname` を付けるのは、付けないと依存側がリンク時のパスをそのまま
+/// 記録し、rpath が無意味になるためである（ADR-0030）。
+pub fn link_shared(
+    cfg: &Config,
+    inputs: &[String],
+    link_flags: &[String],
+    out: &Path,
+    export_file: &Path,
+) -> Vec<String> {
+    let name = out.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let mut args = Vec::new();
+    let mut trailing_inputs: Vec<String> = Vec::new();
+    // 様式が綴りを決め、形式が記述の渡し方を決める。mingw のように
+    // 「GNU 様式で PE」の組み合わせがあるため、2つを別に見る。
+    match cfg.style {
+        Style::Gnu => {
+            match export_form(cfg) {
+                ExportForm::VersionScript => {
+                    args.push("-shared".into());
+                    args.push(format!("-Wl,-soname,{name}"));
+                    args.push(format!("-Wl,--version-script={}", export_file.display()));
+                }
+                ExportForm::SymbolList => {
+                    args.push("-dynamiclib".into());
+                    args.push(format!("-Wl,-install_name,@rpath/{name}"));
+                    args.push("-Wl,-exported_symbols_list".into());
+                    args.push(export_file.display().to_string());
+                }
+                // PE では記述を入力ファイルとして置く。soname は無い。
+                ExportForm::ModuleDefinition => {
+                    args.push("-shared".into());
+                    trailing_inputs.push(export_file.display().to_string());
+                }
+            }
+        }
+        Style::Msvc => {
+            args.push("/nologo".into());
+            args.push("/DLL".into());
+            args.push(format!("/DEF:{}", export_file.display()));
+        }
+    }
+    args.extend(inputs.iter().cloned());
+    args.extend(trailing_inputs);
+    args.extend(link_flags.iter().cloned());
+    match cfg.style {
+        Style::Gnu => {
+            args.push("-o".into());
+            args.push(out.display().to_string());
+        }
+        Style::Msvc => args.push(format!("/OUT:{}", out.display())),
+    }
+    args
+}
+
+/// 共有ライブラリに繋ぐ側が、実行時にそれを見つけるための引数。
+///
+/// Windows には rpath が無い。実行する側が環境で渡す（ADR-0030）。
+pub fn runtime_search_path(cfg: &Config, dir: &Path) -> Vec<String> {
+    match dowel_eval::config::triple_os(&cfg.target) {
+        "windows" => Vec::new(),
+        _ => vec![format!("-Wl,-rpath,{}", dir.display())],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -210,6 +376,101 @@ mod tests {
         // 導出された様式に応じて道具の既定も動く。
         assert_eq!(Config::for_target("x86_64-pc-windows-msvc".into()).tool("ar"), "lib");
         assert_eq!(Config::for_target("x86_64-unknown-linux-gnu".into()).tool("ar"), "ar");
+    }
+
+    fn for_target(triple: &str) -> Config {
+        Config::for_target(triple.into())
+    }
+
+    #[test]
+    fn the_export_form_follows_the_object_format_not_the_argument_style() {
+        // mingw は GNU 様式のまま PE を作る。版指令書は ELF のものであり、
+        // 「GNU 様式なら版指令書」と決めると PE で意味を失う。
+        assert_eq!(export_form(&for_target("x86_64-unknown-linux-gnu")), ExportForm::VersionScript);
+        assert_eq!(export_form(&for_target("aarch64-apple-darwin")), ExportForm::SymbolList);
+        assert_eq!(export_form(&for_target("x86_64-pc-windows-gnu")), ExportForm::ModuleDefinition);
+        assert_eq!(
+            export_form(&for_target("x86_64-pc-windows-msvc")),
+            ExportForm::ModuleDefinition
+        );
+    }
+
+    #[test]
+    fn one_export_list_becomes_each_linkers_own_form() {
+        let exports = vec!["core_open".to_string(), "core_close".to_string()];
+
+        let map = export_file(ExportForm::VersionScript, &exports);
+        assert!(map.contains("core_open;"), "{map}");
+        // 挙げていないものが閉じることが目的である。
+        assert!(map.contains("local:") && map.contains("*;"), "{map}");
+
+        // Mach-O は platform 一律の接頭辞を要求する。飾り名ではない。
+        assert_eq!(export_file(ExportForm::SymbolList, &exports), "_core_open\n_core_close\n");
+
+        let def = export_file(ExportForm::ModuleDefinition, &exports);
+        assert!(def.starts_with("EXPORTS\n"), "{def}");
+        assert!(def.contains("core_open"), "{def}");
+    }
+
+    #[test]
+    fn a_shared_library_is_spelled_and_named_per_target() {
+        let exports = Path::new("core.map");
+        let linux = for_target("x86_64-unknown-linux-gnu");
+        assert_eq!(shared_library_name(&linux, "core"), "libcore.so");
+        let args =
+            link_shared(&linux, &["a.o".into()], &[], Path::new("/b/lib/libcore.so"), exports);
+        assert!(args.contains(&"-shared".to_string()), "{args:?}");
+        // soname が無いと、依存側はリンク時のパスを記録し rpath が効かない。
+        assert!(args.contains(&"-Wl,-soname,libcore.so".to_string()), "{args:?}");
+        assert!(args.iter().any(|a| a.starts_with("-Wl,--version-script=")), "{args:?}");
+
+        let mac = for_target("aarch64-apple-darwin");
+        assert_eq!(shared_library_name(&mac, "core"), "libcore.dylib");
+        let args = link_shared(&mac, &["a.o".into()], &[], Path::new("/b/libcore.dylib"), exports);
+        assert!(args.contains(&"-dynamiclib".to_string()), "{args:?}");
+        assert!(args.contains(&"-Wl,-install_name,@rpath/libcore.dylib".to_string()), "{args:?}");
+        assert!(!args.iter().any(|a| a.contains("version-script")), "{args:?}");
+
+        let msvc = for_target("x86_64-pc-windows-msvc");
+        assert_eq!(shared_library_name(&msvc, "core"), "core.dll");
+        let args = link_shared(&msvc, &["a.obj".into()], &[], Path::new("/b/core.dll"), exports);
+        assert!(args.contains(&"/DLL".to_string()), "{args:?}");
+        assert!(args.iter().any(|a| a.starts_with("/DEF:")), "{args:?}");
+        assert!(!args.contains(&"-shared".to_string()), "{args:?}");
+
+        // mingw: GNU の綴りで、記述は入力ファイルとして置く。
+        let mingw = for_target("x86_64-pc-windows-gnu");
+        assert_eq!(shared_library_name(&mingw, "core"), "libcore.dll");
+        let args = link_shared(
+            &mingw,
+            &["a.o".into()],
+            &[],
+            Path::new("/b/libcore.dll"),
+            Path::new("c.def"),
+        );
+        assert!(args.contains(&"-shared".to_string()), "{args:?}");
+        assert!(args.contains(&"c.def".to_string()), "{args:?}");
+        assert!(!args.iter().any(|a| a.contains("soname")), "{args:?}");
+    }
+
+    #[test]
+    fn the_objects_are_position_independent_but_not_hidden() {
+        let gnu = shared_object_flags(&for_target("x86_64-unknown-linux-gnu"));
+        assert!(gnu.contains(&"-fPIC".to_string()), "{gnu:?}");
+        // 翻訳時に隠すと版指令書の `global:` では戻らず、挙げた記号まで
+        // 出なくなる。隠すのは指令書の役目である（ADR-0030）。
+        assert!(!gnu.iter().any(|f| f.contains("visibility")), "{gnu:?}");
+        // MSVC の目的コードは元より位置独立で、既定で何も出さない。
+        assert!(shared_object_flags(&for_target("x86_64-pc-windows-msvc")).is_empty());
+
+        let dir = Path::new("/b/lib");
+        assert_eq!(
+            runtime_search_path(&for_target("x86_64-unknown-linux-gnu"), dir),
+            vec!["-Wl,-rpath,/b/lib"]
+        );
+        // Windows に rpath は無い。実行する側が環境で渡す。
+        assert!(runtime_search_path(&for_target("x86_64-pc-windows-msvc"), dir).is_empty());
+        assert!(runtime_search_path(&for_target("x86_64-pc-windows-gnu"), dir).is_empty());
     }
 
     #[test]

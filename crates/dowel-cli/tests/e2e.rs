@@ -5099,3 +5099,133 @@ fn a_target_whose_cases_all_dropped_runs_nothing_without_failing() {
     r.success();
     r.stderr_contains("running 0 tests");
 }
+
+#[test]
+fn a_shared_library_exports_what_it_declares_and_nothing_else() {
+    // 共有ライブラリの書き出す記号は宣言が決める（ADR-0030）。挙げたものが
+    // 出て、挙げていないものは——`static` でなく外部結合であっても——出ない。
+    // 既定に落とすと ELF では全部出て Windows では何も出ず、同じ宣言が
+    // platform ごとに別の interface を意味することになる。
+    let p = Project::new("shared-exports");
+    p.write("dowel.toml", "[package]\nname = \"shared-exports\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\"]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"core\")]\n",
+    );
+    p.write(
+        "src/core.c",
+        "int core_open(void) { return 42; }\n\
+         int core_internal(void) { return 1; }\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint core_open(void);\n\
+         int main(void) { printf(\"v=%d\\n\", core_open()); return 0; }\n",
+    );
+
+    p.run(".", &["build"]).success();
+
+    let lib_dir = build_dir(&p.path("."), "debug").join("lib");
+    let shared = lib_dir.join("libcore.so");
+    assert!(shared.is_file(), "no shared library at {}", shared.display());
+
+    // 生成された版指令書がリンクの入力として在ること。
+    let script = lib_dir.join("core.map");
+    let text = std::fs::read_to_string(&script).expect("no generated version script");
+    assert!(text.contains("core_open;") && text.contains("local:"), "{text}");
+
+    // 実際に出ている記号を、出来上がったものに聞く。
+    let out = std::process::Command::new("nm")
+        .args(["-D", "--defined-only", &shared.display().to_string()])
+        .output()
+        .expect("nm is not available");
+    let symbols = String::from_utf8_lossy(&out.stdout);
+    assert!(symbols.contains("core_open"), "core_open is not exported:\n{symbols}");
+    assert!(
+        !symbols.contains("core_internal"),
+        "core_internal was exported although it is not declared:\n{symbols}"
+    );
+
+    // 繋いだ実行ファイルが、焼き込んだ探索路で共有ライブラリを見つけて動くこと。
+    let bin = build_dir(&p.path("."), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "v=42\n");
+}
+
+#[test]
+fn a_static_library_inside_a_shared_one_is_compiled_position_independent() {
+    // 繋ぎ方の宣言は、依存の翻訳の仕方まで動かす。静的ライブラリの目的コードが
+    // 位置独立でなければ、共有ライブラリへの取り込みはリンカに弾かれる
+    // （ADR-0030）。
+    //
+    // 検査はリンクの成否ではなく翻訳の引数で行う。既定で PIE を出す
+    // コンパイラでは、多くの目的コードが `-fPIC` 無しでも共有ライブラリに
+    // 収まってしまい、症状は組み合わせ次第で消える——決めているのは計画の側
+    // なので、そこを見る。
+    let p = Project::new("shared-pic-closure");
+    p.write("dowel.toml", "[package]\nname = \"shared-pic-closure\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.helper]\nsources = [file(\"src/helper.c\")]\n\n\
+         [lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\"]\n\n\
+         [lib.core.private]\ndeps = [target(\"helper\")]\n\n\
+         [lib.spare]\nsources = [file(\"src/spare.c\")]\n",
+    );
+    p.write(
+        "src/helper.c",
+        "int helper_table[4] = {1, 2, 3, 41};\n\
+         int *helper_rows(void) { return helper_table; }\n",
+    );
+    p.write(
+        "src/core.c",
+        "int *helper_rows(void);\nint core_open(void) { return helper_rows()[3] + 1; }\n",
+    );
+    p.write("src/spare.c", "int spare_value(void) { return 1; }\n");
+
+    p.run(".", &["build", "core", "spare"]).success();
+    assert!(build_dir(&p.path("."), "debug").join("lib/libcore.so").is_file());
+
+    let text =
+        std::fs::read_to_string(build_dir(&p.path("."), "debug").join("compile_commands.json"))
+            .expect("no compile_commands.json");
+    let db: Vec<dowel_support::json::Json> =
+        dowel_support::json::parse(&text).unwrap().as_array().unwrap().to_vec();
+    let pic_for = |name: &str| -> bool {
+        db.iter()
+            .find(|e| e.get("file").and_then(|f| f.as_str()).is_some_and(|f| f.ends_with(name)))
+            .map(|e| {
+                e.get("arguments")
+                    .and_then(|a| a.as_array())
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(|a| a.as_str() == Some("-fPIC"))
+            })
+            .unwrap_or_else(|| panic!("{name} is not in compile_commands.json"))
+    };
+    assert!(pic_for("core.c"), "the shared library itself is not position independent");
+    assert!(
+        pic_for("helper.c"),
+        "a static library linked into a shared one is not position independent"
+    );
+    // 共有ライブラリの閉包の外は、従来どおり位置独立にしない。
+    assert!(!pic_for("spare.c"), "an unrelated static library was made position independent");
+}
+
+#[test]
+fn a_shared_library_without_exports_is_refused() {
+    // 既定に落とさないことがこの設計の要点である。何を書き出すかは
+    // 宣言でなければならない（ADR-0030）。
+    let p = Project::new("shared-no-exports");
+    p.write("dowel.toml", "[package]\nname = \"shared-no-exports\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[lib.core]\nsources = [file(\"src/core.c\")]\nlinkage = \"shared\"\n");
+    p.write("src/core.c", "int core_open(void) { return 1; }\n");
+
+    p.run(".", &["build"]).failure().stderr_contains("missing-exports");
+}
