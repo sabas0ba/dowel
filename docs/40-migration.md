@@ -84,4 +84,6 @@ which is what makes it incremental.
 | Bazel aquery import | high | low (motivation exists but the scale assumptions differ) |
 | Static translation | high | negative |
 
-Start with `verify`; limit `import` to CMake.
+The order that was followed: `verify` first, then CMake `import`, then Meson.
+Both readers are implemented; Bazel and static translation are not, and the
+table above is why.

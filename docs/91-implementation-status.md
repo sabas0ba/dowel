@@ -745,7 +745,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (628 tests):
+Current breakdown (630 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -760,7 +760,7 @@ Current breakdown (628 tests):
 | `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
-| `docs` | link resolution, index consistency, and reference completeness | 6 |
+| `docs` | link resolution, index consistency, and reference completeness | 8 |
 | `startup` | startup-time measurement (informational; machine noise does not fail the run) | — |
 
 The `scenario` / `fixture` / `diagnostics` layers were added later. Their
@@ -823,12 +823,10 @@ cannot be measured with the current fixtures; the scale fixture
 |---|---|
 | mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
-| the probe-fact DB | Phase 2 |
 | the `template` / `toolchain` kinds | Phase 4 |
-| Meson `introspect` import | Phase 3 backlog; CMake File API import and `migrate verify` are implemented |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
-| a native registry / tarball dependency source | Phase 5; `version` deps delegate to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and `dowel.lock` records their resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
+| a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
 | prebuilt acquisition for `dowelup` | Q10; today source builds only |
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi`. Nothing verifies that a surface declaring `abi = "c"` really is `extern "C"` — the claim is narrower and more checkable than a language label, and is what an IDL or a header scan would confirm ([ADR-0019](adr/0019-c-abi-label.md)) |
 | automatic composition of the ABI label from its components | Q2; `c_std` / `cxx_std` are now typed values the label can read ([ADR-0016](adr/0016-language-standard-property.md)), but which components make up the label, and at what granularity, is still open |

@@ -383,3 +383,48 @@ fn every_property_the_schema_accepts_is_in_the_reference() {
         }
     }
 }
+
+/// 検証の内訳表が、掲げている総数と合っていること。
+///
+/// 表は「どの層に何件在るか」の索引である。層を足したときに総数だけを
+/// 直すと、その層は在っても数の上では見えない——実際に `docs` の1件が
+/// 表に反映されないまま残っていた。
+///
+/// 実行結果（`.work/verify/results.json`）とは突き合わせない。文書の検査は
+/// 検証の一段であり、自分より後の段の結果はまだ無い。突き合わせられるのは
+/// 表の中の整合であり、それでも取り違えの大半は捕まる。
+#[test]
+fn the_verification_table_adds_up_to_the_total() {
+    let status = repo_root().join("docs/91-implementation-status.md");
+    let text =
+        std::fs::read_to_string(&status).expect("docs/91-implementation-status.md is missing");
+
+    let marker = "Current breakdown (";
+    let start = text.find(marker).expect("no `Current breakdown (N tests):` line");
+    let rest = &text[start + marker.len()..];
+    let total: usize = rest
+        .split(' ')
+        .next()
+        .and_then(|n| n.parse().ok())
+        .expect("the breakdown line does not state a number of tests");
+
+    // 直後の表だけを読む。文書には他にも表が在る。
+    let mut sum = 0;
+    let mut rows = 0;
+    for line in rest.lines().skip_while(|l| !l.starts_with('|')).take_while(|l| l.starts_with('|'))
+    {
+        let Some(count) = line.trim_end().trim_end_matches('|').rsplit('|').next() else {
+            continue;
+        };
+        if let Ok(n) = count.trim().parse::<usize>() {
+            sum += n;
+            rows += 1;
+        }
+    }
+
+    assert!(rows >= 10, "only {rows} counted rows were read; the table scan is probably broken");
+    assert_eq!(
+        sum, total,
+        "the verification table lists {sum} tests across its rows, but the text says {total}"
+    );
+}
