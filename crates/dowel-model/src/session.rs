@@ -549,6 +549,28 @@ impl Session {
                             queue.push((canonical(&d), Some(dep.source_site)));
                         }
                     }
+                    // 書庫の依存（ADR-0029）。git と同じ形で、固定しているのが
+                    // rev ではなく内容の指紋であるだけ。
+                    DepKind::Tarball { url, sha256 } => {
+                        let first = self.resolved_deps.insert((id, dep.name.clone()));
+                        if self.fetch && first {
+                            match crate::fetch::ensure_archive(
+                                &self.root,
+                                &dep.name,
+                                url,
+                                sha256,
+                                dep.source_site,
+                            ) {
+                                Ok(d) => queue.push((canonical(&d), Some(dep.source_site))),
+                                Err(d) => self.diagnostics.push(*d),
+                            }
+                        } else if let Some(d) =
+                            crate::fetch::existing_archive(&self.root, &dep.name, sha256)
+                        {
+                            // エディタからは取得しない（git と同じ扱い）。
+                            queue.push((canonical(&d), Some(dep.source_site)));
+                        }
+                    }
                     // `version` 依存はシステムの pkg-config で解決する（ADR-0015）。
                     // 解決結果は合成パッケージとして繋ぎ、dowel.lock と突き合わせる。
                     // エディタからは外部プロセスを起動しない（git と同じ扱い）。
@@ -1660,6 +1682,10 @@ impl Session {
             DepKind::Git { rev, .. } => self
                 .by_root
                 .get(&canonical(&crate::fetch::checkout_dir(&self.root, &dep.name, rev)))
+                .copied(),
+            DepKind::Tarball { sha256, .. } => self
+                .by_root
+                .get(&canonical(&crate::fetch::archive_dir(&self.root, &dep.name, sha256)))
                 .copied(),
             DepKind::PkgConfig { .. } => self.externals.get(dep_name).copied(),
             DepKind::Unsupported(_) => None,

@@ -125,6 +125,9 @@ pub enum DepKind {
     /// `version` 依存。システムの pkg-config で解決する（ADR-0015）。
     /// 値は版の下限
     PkgConfig { min_version: String },
+    /// 書庫の取得（[ADR-0029](../../../docs/adr/0029-tarball-dependencies.md)）。
+    /// `sha256` は 64 桁の16進で、内容そのものを固定する
+    Tarball { url: String, sha256: String },
     /// 未実装の供給形態。診断済みで、下流はターゲットを見つけられない
     Unsupported(&'static str),
 }
@@ -445,6 +448,20 @@ pub fn from_document(
                     DepKind::Unsupported("git")
                 }
             }
+        } else if let Some(e) = t.entry("url") {
+            match e.value.as_str() {
+                Some(url) => match declared_sha256(t) {
+                    Ok(sha256) => DepKind::Tarball { url: url.to_string(), sha256 },
+                    Err(found) => {
+                        unhashed(diags, manifest_file, t, &name, found);
+                        DepKind::Unsupported("url")
+                    }
+                },
+                None => {
+                    type_err(diags, e.site, "dependencies.url", "a string");
+                    DepKind::Unsupported("url")
+                }
+            }
         } else if let Some(e) = t.entry("version") {
             match e.value.as_str() {
                 Some(v) => DepKind::PkgConfig { min_version: v.to_string() },
@@ -462,7 +479,7 @@ pub fn from_document(
                 .at(
                     manifest_file,
                     t.site.span,
-                    "one of `path`, `version` or `git` is required",
+                    "one of `path`, `git`, `url` or `version` is required",
                 ),
             );
             DepKind::Unsupported("none")
@@ -488,6 +505,49 @@ fn pinned_rev(t: &dowel_eval::Table) -> Result<String, Option<String>> {
     } else {
         Err(Some(s.to_string()))
     }
+}
+
+/// `sha256` が 64 桁の16進であることを確かめる。
+///
+/// git の `rev` と同じ要請である（[`pinned_rev`]）。書庫には rev に当たる
+/// ものが無いので、**内容そのもの**で固定する——URL は同じ名前で別の中身を
+/// 指しうるし、実際に差し替わる（[ADR-0029](../../../docs/adr/0029-tarball-dependencies.md)）。
+fn declared_sha256(t: &dowel_eval::Table) -> Result<String, Option<String>> {
+    let Some(e) = t.entry("sha256") else { return Err(None) };
+    let Some(s) = e.value.as_str() else { return Err(Some(String::new())) };
+    let hash = s.to_ascii_lowercase();
+    if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(hash)
+    } else {
+        Err(Some(s.to_string()))
+    }
+}
+
+/// 固定されていない書庫の依存を断る。
+fn unhashed(
+    diags: &mut Vec<Diagnostic>,
+    file: dowel_support::FileId,
+    t: &dowel_eval::Table,
+    name: &str,
+    found: Option<String>,
+) {
+    let span = t.entry("sha256").map(|e| e.site.span).unwrap_or(t.site.span);
+    let d = match found {
+        None => Diagnostic::error(
+            "unpinned-dependency",
+            format!("dependency `{name}` has a `url` but no `sha256`"),
+        )
+        .at(file, span, "an archive is pinned by its contents")
+        .note("a URL can serve different bytes tomorrow; the hash is what makes the build the same one")
+        .note("`dowel build` prints the hash it received, which can be pasted in once it has been checked"),
+        Some(bad) => Diagnostic::error(
+            "unpinned-dependency",
+            format!("`{bad}` is not a sha256 digest"),
+        )
+        .at(file, span, "expected 64 hexadecimal digits")
+        .note("this is the digest of the archive itself, not of its contents once unpacked"),
+    };
+    diags.push(d);
 }
 
 /// `[features]` の予約キー。機能名ではない。
@@ -559,8 +619,12 @@ fn check_exclusive_names(pkg: &mut Package, diags: &mut Vec<Diagnostic>) {
 /// 依存の出所を名乗るキーと、その言い表し方。
 ///
 /// 「1つだけ」という規則をこの表が持つ。出所を足すときはここに1行足す。
-const SOURCE_KEYS: &[(&str, &str)] =
-    &[("path", "a local path"), ("git", "a git repository"), ("version", "a system package")];
+const SOURCE_KEYS: &[(&str, &str)] = &[
+    ("path", "a local path"),
+    ("git", "a git repository"),
+    ("version", "a system package"),
+    ("url", "an archive"),
+];
 
 /// 出所を2つ以上名乗っていないか。
 ///
