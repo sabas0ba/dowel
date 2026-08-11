@@ -295,7 +295,7 @@ mod tests {
         assert!(markdown("[l|ib.foo]\n").contains("produces an artifact"));
         assert!(markdown("[run|ner.riscv64]\n").contains("does not produce an artifact"));
         // 未実装の種別はそう書く。
-        assert!(markdown("[ben|ch.b]\n").contains("not implemented"));
+        assert!(markdown("[temp|late.b]\n").contains("not implemented"));
     }
 
     #[test]

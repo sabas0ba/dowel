@@ -31,3 +31,4 @@ was originally written in.
 | [0022](0022-test-cases.md) | A test target registers cases; dowel imposes no harness | Accepted |
 | [0023](0023-harness-protocol.md) | The harness protocol is declared; dowel learns no test framework | Accepted |
 | [0024](0024-debug-command.md) | `dowel debug` starts a declared debugger; the stub is declared, not guessed | Accepted |
+| [0025](0025-bench-wall-clock.md) | `bench` measures whole-process wall-clock time; no framework is imposed | Accepted |

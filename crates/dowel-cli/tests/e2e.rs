@@ -3480,7 +3480,7 @@ fn cases_on_a_non_test_target_are_refused() {
     let r = p.run(".", &["check"]);
     r.failure();
     r.stderr_contains("unknown-block");
-    r.stderr_contains("only `test` targets register cases");
+    r.stderr_contains("only `test` and `bench` targets register cases");
 }
 
 #[test]
@@ -3739,6 +3739,108 @@ fn debug_takes_exactly_one_target() {
     let r = p.run(".", &["debug"]);
     r.failure();
     r.stderr_contains("one target");
+}
+
+/// `dowel bench`（ADR-0025）。
+///
+/// 測るのはプロセス全体の壁時計であり、枠組みは課さない。dowel が失敗と
+/// 呼ぶのは走らせられなかったことだけで、速さに合否は無い。
+fn bench_project(name: &str, extra: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"b\"\nversion = \"0.1.0\"\n");
+    p.write("dowel.build", &format!("[bench.spin]\nsources = glob(\"bench/*.c\")\n{extra}"));
+    p.write(
+        "bench/spin.c",
+        r#"#include <string.h>
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "boom") == 0) { return 7; }
+    volatile int x = 0;
+    for (int i = 0; i < 1000; i++) { x += i; }
+    return 0;
+}
+"#,
+    );
+    p
+}
+
+#[test]
+fn a_bench_target_reports_min_and_median() {
+    let p = bench_project("bench-basic", "");
+    let r = p.run(".", &["bench", "--iterations=3"]);
+    r.success();
+    r.stderr_contains("measuring 1 benchmark");
+    r.stderr_contains("bench b:spin ... min ");
+    r.stderr_contains("median ");
+    r.stderr_contains("(3 runs)");
+}
+
+#[test]
+fn bench_cases_measure_the_same_binary_with_different_arguments() {
+    // 事例の形はテストと同じ（ADR-0022 の再利用）。翻訳の単位は増えない。
+    let p = bench_project(
+        "bench-cases",
+        "\n[bench.spin.cases]\nsmall = { args = [] }\nbig   = { args = [\"x\"] }\n",
+    );
+    let r = p.run(".", &["bench", "--iterations=2"]);
+    r.success();
+    r.stderr_contains("bench b:spin/small ... min ");
+    r.stderr_contains("bench b:spin/big ... min ");
+    // 事例の名指しも同じ形。
+    let one = p.run(".", &["bench", "b:spin/big", "--iterations=2"]);
+    one.success();
+    one.stderr_contains("measuring 1 benchmark");
+}
+
+#[test]
+fn a_bench_that_cannot_run_is_a_failure_without_numbers() {
+    // 速さに合否は無いが、走らせられなかったことは失敗である。
+    // 途中までの数字は「揃った計測」ではないので、出さない。
+    let p = bench_project("bench-broken", "\n[bench.spin.cases]\nboom = { args = [\"boom\"] }\n");
+    let r = p.run(".", &["bench", "--iterations=3"]);
+    r.failure();
+    r.stderr_contains("bench b:spin/boom ... FAILED");
+    r.stderr_contains("run 1 exited with status 7");
+    r.stderr_contains("could not be measured");
+    assert!(!r.stderr.contains("median "), "a failed measurement reported numbers\n{r}");
+}
+
+#[test]
+fn bench_results_are_machine_readable_in_microseconds() {
+    let p = bench_project("bench-json", "");
+    let r = p.run(".", &["bench", "--iterations=3", "--message-format=json"]);
+    r.success();
+    r.stdout_contains("\"kind\":\"bench-result\"");
+    r.stdout_contains("\"target\":\"b:spin\"");
+    r.stdout_contains("\"case\":null");
+    r.stdout_contains("\"runs\":3");
+    r.stdout_contains("\"min_us\":");
+    r.stdout_contains("\"failure\":null");
+}
+
+#[test]
+fn a_bench_case_does_not_take_should_fail() {
+    // 計測に判定は無い。黙って無視すると「効いているように見えて効かない」。
+    let p = bench_project(
+        "bench-should-fail",
+        "\n[bench.spin.cases]\nboom = { args = [\"boom\"], should_fail = true }\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-property");
+    r.stderr_contains("a benchmark is measured, not judged");
+}
+
+#[test]
+fn a_tree_without_bench_targets_says_so_and_succeeds() {
+    let p = bench_project("bench-none", "");
+    p.write("dowel.build", "[bin.app]\nsources = glob(\"bench/*.c\")\n");
+    let r = p.run(".", &["bench"]);
+    r.success();
+    r.stderr_contains("no bench targets");
+    // 名指しが種別違いなら断る。
+    let wrong = p.run(".", &["bench", "app"]);
+    wrong.failure();
+    wrong.stderr_contains("not a bench");
 }
 
 /// `dowel test --debug-failed`（docs/30-devexp.md 2.3）。

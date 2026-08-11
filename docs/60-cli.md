@@ -276,6 +276,50 @@ the target.
   own), and `launch_error` (it never started). `args` says which invocation
   of the binary this was
 
+## `dowel bench`
+
+```
+dowel bench [target...] [common options] [build options] [--iterations <n>]
+```
+
+Builds the `bench` targets and measures the **wall-clock time of the whole
+process**, start to exit, reporting min and median over the requested number
+of runs ([ADR-0025](adr/0025-bench-wall-clock.md)). No benchmarking
+framework is imposed, and none is read: there is no C convention for
+measurement output, and parsing one format per framework is the
+entanglement the ADR refuses. The process-level number is the same
+yardstick for every binary.
+
+```
+bench b:spin/small ... min 1.02ms  median 1.15ms  (10 runs)
+```
+
+| Option | Values | Default | Meaning |
+|---|---|---|---|
+| `--iterations <n>` | number | 10 | runs per benchmark. min and median are computed over them |
+
+- `[bench.<name>.cases]` registers several measurements of one binary,
+  distinguished by arguments — the same shape as test cases
+  ([12-build-reference.md](12-build-reference.md)), minus `should_fail`. A
+  positional argument names a target (`b:spin`) or a case (`b:spin/small`)
+- Runs are always sequential. Measurement assumes a quiet machine; two
+  benchmarks in parallel are each other's noise, so there is deliberately
+  no `--bench-jobs`
+- **Speed has no verdict.** `dowel bench` fails only when a run could not
+  be completed — nonzero exit, signal, a case's `timeout`, launch failure —
+  and then reports no numbers at all: statistics over a partial series read
+  as a finished measurement. Thresholds and regression gates are downstream
+  policy, applied to the JSON
+- `--message-format=json` emits one `bench-result` line per measurement,
+  with `target` / `case` / `label` fields as in `test-result` and times as
+  **integer microseconds** (`min_us` / `median_us` / `max_us`) — rendering
+  fractional milliseconds is the reader's formatting decision
+- min approximates what the code does when the machine does not interfere;
+  median, what a user sees. The mean follows outliers and is not reported
+- Cross execution measures the runner too (qemu's translation, ssh's round
+  trip): honest as "how long does this take here", meaningless as hardware
+  time
+
 ## `dowel debug`
 
 ```

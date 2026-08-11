@@ -48,7 +48,7 @@ fails type checking with a suggestion.
 | `lib` | static library | `lib<name>.a` | implemented |
 | `bin` | executable | `bin/<name>` | implemented |
 | `test` | test executable; run by `dowel test`, exit status 0 = pass | `bin/<name>` | implemented |
-| `bench` | benchmark target | — | reserved, not implemented |
+| `bench` | benchmark executable; measured by `dowel bench` ([ADR-0025](adr/0025-bench-wall-clock.md)) | `bin/<name>` | implemented |
 | `template` | non-recursive reuse unit | — | reserved, not implemented |
 | `toolchain` | toolchain description | — | reserved, not implemented |
 | `runner` | execution wrapper; the name is a **target triple**, not a target name | none | implemented |
@@ -193,6 +193,11 @@ of this.
 A `test` target runs its binary once and is judged by exit status. Declaring
 cases registers **several invocations of that same binary**, each reported
 and selected on its own ([ADR-0022](adr/0022-test-cases.md)).
+
+`[bench.<name>.cases]` takes the same shape and keys, with one exception:
+`should_fail` is refused there — a benchmark is measured, not judged, so
+there is no verdict to invert ([ADR-0025](adr/0025-bench-wall-clock.md)).
+A `harness` is not accepted on a bench either.
 
 ```toml
 [test.suite]
