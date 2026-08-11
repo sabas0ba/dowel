@@ -1451,6 +1451,161 @@ fn a_pinned_git_dependency_is_fetched_and_reused_offline() {
     assert_eq!(run_artifact(&bin), "n=5\n");
 }
 
+/// 書庫の依存（[ADR-0029](../../../docs/adr/0029-tarball-dependencies.md)）。
+///
+/// 上流は木の中に作って `file://` で指す。ネットワークに出ずに、取得・検証・
+/// 展開の経路をそのまま通せる。
+fn tarball_remote(p: &Project) -> (String, String) {
+    p.write(
+        "upstream/mylib-1.0/dowel.toml",
+        "[package]\nname    = \"mylib\"\nversion = \"1.0.0\"\n",
+    );
+    p.write(
+        "upstream/mylib-1.0/dowel.build",
+        "[lib.mylib]\nsources = glob(\"src/*.c\")\n\n[lib.mylib.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("upstream/mylib-1.0/include/mylib.h", "int mylib_answer(void);\n");
+    p.write(
+        "upstream/mylib-1.0/src/mylib.c",
+        "#include \"mylib.h\"\nint mylib_answer(void) { return 42; }\n",
+    );
+
+    let out = std::process::Command::new("tar")
+        .args(["czf", "mylib-1.0.tar.gz", "mylib-1.0"])
+        .current_dir(p.path("upstream"))
+        .output()
+        .expect("cannot run tar");
+    assert!(out.status.success(), "tar failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    let archive = p.path("upstream/mylib-1.0.tar.gz");
+    let hash = dowel_support::sha256::hex_of_file(&archive).expect("cannot hash the archive");
+    (format!("file://{}", archive.display()), hash)
+}
+
+fn write_tarball_manifest(p: &Project, url: &str, sha256: &str) {
+    p.write(
+        "app/dowel.toml",
+        &format!(
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname   = \"mylib\"\nurl    = \"{url}\"\nsha256 = \"{sha256}\"\n"
+        ),
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"mylib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"mylib.h\"\nint main(void) { printf(\"n=%d\\n\", mylib_answer()); return 0; }\n",
+    );
+}
+
+#[test]
+fn an_archive_dependency_is_fetched_verified_and_reused_offline() {
+    let p = Project::new("tarball-dep");
+    let (url, hash) = tarball_remote(&p);
+    write_tarball_manifest(&p, &url, &hash);
+
+    p.run("app", &["build"]).success();
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "n=42\n");
+
+    // 置き場は git の checkout と同じ形。指紋の先頭12桁で分け、完了印を持つ。
+    let dir = p.path("app/.dowel/deps").join(format!("mylib-{}", &hash[..12]));
+    assert!(dir.join(".dowel-rev").exists(), "missing {}", dir.display());
+    // 書庫が包んでいた1階層は剥がれている。
+    assert!(dir.join("dowel.toml").exists(), "the wrapping directory was not stripped");
+
+    // 上流を消しても再ビルドできる。内容で固定されているため、2回目以降は
+    // 取りに行かない。
+    std::fs::remove_dir_all(p.path("upstream")).unwrap();
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"mylib.h\"\nint main(void) { printf(\"m=%d\\n\", mylib_answer()); return 0; }\n",
+    );
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&bin), "m=42\n");
+}
+
+#[test]
+fn an_archive_whose_contents_changed_is_refused() {
+    // URL は名前であって固定ではない。同じ名前の裏で中身が差し替わることは
+    // 実際に起きる（ADR-0029）。
+    let p = Project::new("tarball-dep-swapped");
+    let (url, hash) = tarball_remote(&p);
+    write_tarball_manifest(&p, &url, &hash);
+
+    // 上流を書き換えて詰め直す。宣言の指紋はそのまま。
+    p.write(
+        "upstream/mylib-1.0/src/mylib.c",
+        "#include \"mylib.h\"\nint mylib_answer(void) { return 7; }\n",
+    );
+    let out = std::process::Command::new("tar")
+        .args(["czf", "mylib-1.0.tar.gz", "mylib-1.0"])
+        .current_dir(p.path("upstream"))
+        .output()
+        .expect("cannot run tar");
+    assert!(out.status.success());
+
+    let r = p.run("app", &["build"]);
+    r.failure();
+    r.stderr_contains("unfetchable-dependency");
+    r.stderr_contains("does not match its declared hash");
+    // 期待と実際の両方を出す。片方だけでは何を貼り直せばよいか読めない。
+    r.stderr_contains(&hash);
+    // 検証は展開の前。中身は置かれていない。
+    let dir = p.path("app/.dowel/deps").join(format!("mylib-{}", &hash[..12]));
+    assert!(!dir.exists(), "the archive was unpacked despite the mismatch");
+}
+
+#[test]
+fn an_archive_without_a_hash_is_refused() {
+    // `rev` の無い git 依存と同じ扱い。URL だけでは固定にならない。
+    let p = Project::new("tarball-dep-unpinned");
+    let (url, _) = tarball_remote(&p);
+    p.write(
+        "app/dowel.toml",
+        &format!(
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname = \"mylib\"\nurl  = \"{url}\"\n"
+        ),
+    );
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("unpinned-dependency");
+    r.stderr_contains("pinned by its contents");
+
+    // 指紋の形が違う場合も同じく断る。
+    p.write(
+        "app/dowel.toml",
+        &format!(
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname   = \"mylib\"\nurl    = \"{url}\"\nsha256 = \"deadbeef\"\n"
+        ),
+    );
+    let short = p.run("app", &["check"]);
+    short.failure();
+    short.stderr_contains("is not a sha256 digest");
+    short.stderr_contains("64 hexadecimal digits");
+}
+
+#[test]
+fn an_archive_and_another_source_together_are_refused() {
+    // 出所を2つ名乗る項目は、片方が読まれない（issue #79 と同じ規則）。
+    let p = Project::new("tarball-dep-conflict");
+    let (url, hash) = tarball_remote(&p);
+    p.write(
+        "app/dowel.toml",
+        &format!(
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n[[dependencies]]\nname   = \"mylib\"\nurl    = \"{url}\"\nsha256 = \"{hash}\"\npath   = \"../upstream/mylib-1.0\"\n"
+        ),
+    );
+    p.write("app/dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("conflicting-dependency-source");
+}
+
 /// 実在する上流でも、そこに無い rev は取得の診断で拒まれる。
 #[test]
 fn an_unknown_rev_is_refused_with_a_diagnostic() {

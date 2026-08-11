@@ -125,6 +125,11 @@ git  = "https://github.com/example/bar"
 rev  = "9f3c0a1e2b7d4856c0f1a93e5d2b8c4770ae6135"
 
 [[dependencies]]
+name   = "mylib"
+url    = "https://example.org/mylib-1.0.tar.gz"
+sha256 = "b3d6cd8f6460100d3e67a2acc5bbe8ba6bb2c3a65a86e61ff8f353061fc1fe96"
+
+[[dependencies]]
 name     = "zlib"
 version  = "1.3"        # resolved via the system pkg-config
 optional = true
@@ -140,13 +145,15 @@ it with `dep("name")` in `dowel.build` ([12-build-reference.md](12-build-referen
 | `path` | string | a directory containing another dowel package, relative to this `dowel.toml`. The path must exist and contain a manifest (`missing-manifest` otherwise) |
 | `git` | string | a git URL (anything `git` itself accepts, including local paths). Requires `rev`. Fetched once into `.dowel/deps/<name>-<rev12>/`; later runs never touch the network. A failing fetch is `unfetchable-dependency` |
 | `rev` | string | required with `git`: a **full 40-digit commit sha**. Branches, tags, and abbreviated shas are refused with `unpinned-dependency` — a name-only reference does not count as pinned. Because the rev pins the content exactly, git dependencies need no lock file |
+| `url` | string | an archive to download and unpack ([ADR-0029](adr/0029-tarball-dependencies.md)). Requires `sha256`. Fetched once into `.dowel/deps/<name>-<hash12>/`; later runs never touch the network. Fetching runs `curl` (or `wget`) and `tar`, which must be on PATH; a failing fetch is `unfetchable-dependency`. If the archive contains exactly one top-level directory it is stripped, the usual `name-version/` wrapper |
+| `sha256` | string | required with `url`: **64 hexadecimal digits**, the digest of the archive itself (not of the unpacked tree). Anything else is `unpinned-dependency`, exactly as an unpinned `rev` is — a URL is a name, and the bytes behind a name can change. The archive is verified **before** it is unpacked, and a mismatch reports both the expected and the received digest |
 | `version` | string | a system package, resolved through **pkg-config** ([ADR-0015](adr/0015-version-deps-pkgconfig.md)). `name` is the pkg-config module name; the version is a **minimum** (`--atleast-version`). `--cflags` / `--libs` become the dependency's public flags and link flags. Absent module, too-low version, or missing pkg-config: `unsatisfied-dependency`. Resolutions are recorded in `dowel.lock` (below) |
 | `optional` | bool | default `false`. An optional dependency participates only when a feature flag with the same name is enabled. When inactive, neither the edge nor the node exists — the package is not even loaded |
 | `when` | inline table | reserved for conditional dependencies (`when = { os = "windows" }`). Parsed, but **not yet honored** — the dependency is treated as unconditional |
 
 A dependency has **exactly one** source. An entry with none of `path` /
-`git` / `version` is `incomplete-dependency`; an entry with two or more is
-`conflicting-dependency-source`, naming each one (issue #79). Accepting two
+`git` / `url` / `version` is `incomplete-dependency`; an entry with two or
+more is `conflicting-dependency-source`, naming each one (issue #79). Accepting two
 would mean one of the declarations is never read, and the manifest would not
 say which — the source of a library is switched during development (`path`
 while it is being edited, `git` or `version` once it is published), and

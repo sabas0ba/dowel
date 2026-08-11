@@ -7,6 +7,7 @@
 pub mod diag;
 pub mod json;
 pub mod log;
+pub mod sha256;
 pub mod source;
 pub mod span;
 

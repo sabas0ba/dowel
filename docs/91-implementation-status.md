@@ -31,7 +31,7 @@ afterward. The insertion point is confined to
 
 | Crate | Responsibility |
 |---|---|
-| `dowel-support` | spans, source maps, diagnostics, structured logging, JSON output |
+| `dowel-support` | spans, source maps, diagnostics, structured logging, JSON output, SHA-256 |
 | `dowel-syntax` | lexing, lossless CST, error-tolerant parser |
 | `dowel-query` | memoization, dependency tracking, early cutoff, durability layers, cancellation |
 | `dowel-store` | the on-disk store (append-only value log, fixed-length index, single writer) and the per-user probe-fact database |
@@ -231,6 +231,19 @@ changes, only the speed.
   checkout is placed atomically with a completion marker, and later runs
   never touch the network. Because the rev pins the content exactly, no
   lock file is involved
+- Archive dependencies name a `url` and a `sha256`
+  ([ADR-0029](adr/0029-tarball-dependencies.md)), which is how most C is
+  actually distributed. The hash is required for the same reason `rev` is: a
+  URL is a name, and the bytes behind a name change. Fetching and unpacking
+  are delegated (`curl` or `wget`, then `tar`) but **verification is not** —
+  the tool that computes SHA-256 differs per system, and a pin that can only
+  be checked where a particular tool exists is a weaker promise than a pin,
+  so it is implemented in-tree (`dowel_support::sha256`, pinned by the
+  published test vectors). The archive is verified before unpacking, since
+  unpacking lets the archive decide where bytes land. Layout follows the git
+  checkout: `.dowel/deps/<name>-<hash12>/` with a completion marker written
+  last. One top-level directory is stripped by looking rather than by
+  declaring a `strip_components`
 - `version` dependencies resolve through the system pkg-config
   ([ADR-0015](adr/0015-version-deps-pkgconfig.md)): the constraint is a
   minimum (`--atleast-version`), and `--cflags` / `--libs` become the
@@ -717,16 +730,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (613 tests):
+Current breakdown (620 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 327 |
+| `unit-*` | per-crate unit tests | 330 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 202 |
+| `e2e` | compile real C and C++, run it, check the output | 206 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
