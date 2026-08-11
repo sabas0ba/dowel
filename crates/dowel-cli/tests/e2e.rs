@@ -4008,6 +4008,242 @@ fn the_target_vocabulary_is_in_the_schema_dump() {
     r.stdout_contains("\"name\": \"host.os\"");
 }
 
+/// MSVC の様式（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)、
+/// issue #113）。
+///
+/// MSVC が無い機械では「組めるか」は問えないが、「宣言できるか」は問える——
+/// argv を記録するだけの偽の `cl` を置き、組み上がる命令の形を読む。
+/// 報告と同じ見方である。
+fn msvc_project(name: &str) -> Project {
+    let p = Project::new(name);
+    // 何もせず終わるだけの道具。実在検査を通すために要る。
+    for tool in ["cl", "lib", "link"] {
+        p.write_script(&format!("fake/{tool}"), "#!/bin/sh\nexit 0\n");
+    }
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n\n[toolchain.x86_64-pc-windows-msvc]\nc   = \"{d}/cl\"\ncxx = \"{d}/cl\"\nar  = \"{d}/lib\"\nlink = \"{d}/link\"\n",
+            d = p.path("fake").display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n[lib.core.public]\nincludes = [dir(\"include\")]\ndefines  = { CORE = 1 }\n\n[bin.app]\nsources = [file(\"src/main.c\")]\n\n[bin.app.private]\ndeps = [target(\"core\")]\n",
+    );
+    p.write("include/h.h", "int core(void);\n");
+    p.write("src/core.c", "int core(void) { return 0; }\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p
+}
+
+#[test]
+fn an_msvc_toolchain_can_be_declared_not_just_named() {
+    // 名前だけ宣言できても、綴りが Unix 固定なら cl が解釈できない命令が
+    // 組み上がる（issue #113）。
+    let p = msvc_project("msvc-style");
+    let r =
+        p.run(".", &["graph", "--kind=action", "--format=json", "--target=x86_64-pc-windows-msvc"]);
+    r.success();
+    let out = &r.stdout;
+    // 翻訳。`/I` `/D` `/c` `/Fo:` であり、`-I` `-o` ではない。
+    assert!(out.contains("\"/DCORE=1\""), "{r}");
+    assert!(out.contains("/Fo:"), "{r}");
+    assert!(out.contains("\"/c\""), "{r}");
+    assert!(out.contains("\"/Od\""), "{r}");
+    // 書庫は `lib /OUT:core.lib`。`rcs` でも `libcore.a` でもない。
+    assert!(out.contains("/OUT:"), "{r}");
+    assert!(out.contains("core.lib"), "{r}");
+    assert!(!out.contains("libcore.a"), "{r}");
+    // オブジェクトは `.obj`。
+    assert!(out.contains(".c.obj"), "{r}");
+    // 実行ファイルは `.exe`（ADR-0026 の導出がここでも効く）。
+    assert!(out.contains("app.exe"), "{r}");
+    // GNU の綴りは1つも混ざらない。
+    for gnu in ["\"-I", "\"-D", "\"-c\"", "\"-o\"", "\"-g\"", "\"rcs\""] {
+        assert!(!out.contains(gnu), "the GNU spelling `{gnu}` survived\n{r}");
+    }
+}
+
+#[test]
+fn the_dependency_flag_that_means_something_else_is_never_emitted() {
+    // `-MD` は MSVC で「動的 CRT をリンクする」を意味する。依存の書き出しを
+    // 頼んだつもりの旗が ABI を選ぶ旗になる——overview が「No single ABI」の
+    // 例として挙げているまさにその旗である（issue #113）。
+    let p = msvc_project("msvc-md");
+    let r =
+        p.run(".", &["graph", "--kind=action", "--format=json", "--target=x86_64-pc-windows-msvc"]);
+    r.success();
+    assert!(!r.stdout.contains("\"-MD\""), "`-MD` reached an MSVC command line\n{r}");
+    assert!(
+        !r.stdout.contains("\"/MD\""),
+        "`/MD` was emitted as if it were a dependency flag\n{r}"
+    );
+    assert!(!r.stdout.contains("\"-MF\""), "{r}");
+    // 依存は別の機構で取る。
+    r.stdout_contains("\"/showIncludes\"");
+    r.stdout_contains("\"deps\": \"show-includes\"");
+}
+
+#[test]
+fn the_style_follows_the_triple_and_a_declaration_overrides_it() {
+    // 三つ組が様式を決める（ADR-0026 と同じ判断）。`style` はその上書き。
+    let p = msvc_project("msvc-style-decl");
+    let graph = ["graph", "--kind=action", "--format=json"];
+
+    // 導出。MinGW の三つ組は GNU、`-msvc` の三つ組は MSVC。宣言は無い。
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n\n[toolchain.x86_64-pc-windows-gnu]\nc = \"cc\"\nar = \"ar\"\n\n[toolchain.x86_64-pc-windows-msvc]\nc   = \"{d}/cl\"\ncxx = \"{d}/cl\"\nar  = \"{d}/lib\"\nlink = \"{d}/link\"\n",
+            d = p.path("fake").display()
+        ),
+    );
+    let mingw = p.run(".", &[&graph[..], &["--target=x86_64-pc-windows-gnu"]].concat());
+    mingw.success();
+    mingw.stdout_contains("\"-c\"");
+    mingw.stdout_contains("libcore.a");
+    // `.exe` は様式ではなく OS が決めるので、GNU の側にも付く。
+    mingw.stdout_contains("app.exe");
+
+    let msvc = p.run(".", &[&graph[..], &["--target=x86_64-pc-windows-msvc"]].concat());
+    msvc.success();
+    msvc.stdout_contains("/Fo:");
+    msvc.stdout_contains("core.lib");
+    assert!(!msvc.stdout.contains("\"-c\""), "the triple did not select the MSVC style\n{msvc}");
+
+    // 宣言は導出に勝つ。導出と**逆向き**に書く——同じ向きだと、導出が
+    // 壊れていても宣言が効いているように見える。
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n\n[toolchain.x86_64-pc-windows-gnu]\nstyle = \"msvc\"\nc   = \"{d}/cl\"\ncxx = \"{d}/cl\"\nar  = \"{d}/lib\"\nlink = \"{d}/link\"\n",
+            d = p.path("fake").display()
+        ),
+    );
+    let overridden = p.run(".", &[&graph[..], &["--target=x86_64-pc-windows-gnu"]].concat());
+    overridden.success();
+    overridden.stdout_contains("/Fo:");
+    overridden.stdout_contains("core.lib");
+    assert!(
+        !overridden.stdout.contains("\"-c\""),
+        "the declaration did not override the derivation\n{overridden}"
+    );
+}
+
+#[test]
+fn an_unknown_style_is_refused_with_the_ones_that_exist() {
+    let p = msvc_project("msvc-style-typo");
+    p.write(
+        "dowel.toml",
+        "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n\n[toolchain]\nstyle = \"msvcc\"\n",
+    );
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("invalid-value");
+    r.stderr_contains("the styles are: gnu, msvc");
+    r.stderr_contains("did you mean `msvc`?");
+}
+
+#[test]
+fn the_flags_a_user_writes_are_not_translated() {
+    // 綴りを翻訳しようとすると、旗の対応表を持つことになる。それは
+    // 「コンパイラを知っている」ことに他ならない（ADR-0027）。
+    let p = msvc_project("msvc-user-flags");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n[bin.app.private]\nflags = [\"/W4\", \"/permissive-\"]\nlink_flags = [\"ws2_32.lib\"]\n",
+    );
+    let r =
+        p.run(".", &["graph", "--kind=action", "--format=json", "--target=x86_64-pc-windows-msvc"]);
+    r.success();
+    r.stdout_contains("\"/W4\"");
+    r.stdout_contains("\"/permissive-\"");
+    r.stdout_contains("\"ws2_32.lib\"");
+}
+
+#[test]
+fn show_includes_output_becomes_the_dependency_record() {
+    // MSVC はヘッダ依存の記録を書かない。標準出力に並べるだけなので、
+    // 畳むのは実行した側の仕事になる（ADR-0027）。畳めていなければ、
+    // ヘッダを触っても再翻訳されない。
+    let p = Project::new("msvc-showincludes");
+    // `/showIncludes` を出しつつ実際に翻訳する偽の `cl`。GNU の綴りへ
+    // 読み替えて `cc` に渡す——検査したいのは依存の記録の経路である。
+    p.write_script(
+        "fake/cl",
+        r#"#!/bin/sh
+args=""; out=""; src=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        /nologo|/showIncludes|/Z7|/Od|/O2) ;;
+        /c) args="$args -c" ;;
+        /Fo:*) out="${1#/Fo:}" ;;
+        /I*) args="$args -I${1#/I}" ;;
+        /D*) args="$args -D${1#/D}" ;;
+        *) src="$1" ;;
+    esac
+    shift
+done
+# ヘッダの依存を、cl と同じ形で並べる。
+for h in $(sed -n 's/^#include "\(.*\)"/\1/p' "$src"); do
+    d=$(dirname "$src")
+    echo "Note: including file: $d/$h"
+done
+# shellcheck disable=SC2086
+exec cc $args "$src" -o "$out"
+"#,
+    );
+    // リンクも綴りが違う。`/OUT:` を読み替えるだけの偽の `link`。
+    p.write_script(
+        "fake/link",
+        r#"#!/bin/sh
+args=""; out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        /nologo) ;;
+        /OUT:*) out="${1#/OUT:}" ;;
+        *) args="$args $1" ;;
+    esac
+    shift
+done
+# shellcheck disable=SC2086
+exec cc $args -o "$out"
+"#,
+    );
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n\n[toolchain.x86_64-pc-windows-msvc]\nc = \"{d}/cl\"\nlink = \"{d}/link\"\n",
+            d = p.path("fake").display()
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/h.h", "#define V 0\n");
+    p.write("src/main.c", "#include \"h.h\"\nint main(void) { return V; }\n");
+
+    let args =
+        &["build", "--target=x86_64-pc-windows-msvc", "--backend=direct", "--log-level=debug"];
+    p.run(".", args).success();
+    // 記録が `.d` に畳まれている。読む側は様式を知らずに済む。
+    let dir = build_dir(&p.path("."), "x86_64-pc-windows-msvc-debug");
+    let dep = dir.join("obj/rep/app/src_main.c.obj.d");
+    let text = std::fs::read_to_string(&dep).expect("no dependency record was written");
+    assert!(text.contains("h.h"), "the record does not name the header: {text}");
+
+    // 2度目は何もしない。
+    let second = p.run(".", args);
+    second.success();
+    second.stderr_contains("ran 0 steps");
+
+    // ヘッダを触ると翻訳し直す——記録が効いている証拠である。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    p.write("src/h.h", "#define V 0 /* touched */\n");
+    let third = p.run(".", args);
+    third.success();
+    assert!(!third.stderr.contains("ran 0 steps"), "a header change was missed\n{third}");
+}
+
 /// `dowel bench`（ADR-0025）。
 ///
 /// 測るのはプロセス全体の壁時計であり、枠組みは課さない。dowel が失敗と

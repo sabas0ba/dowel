@@ -173,6 +173,7 @@ fn path(p: &Path) -> Result<String, Failure> {
 mod tests {
     use super::*;
     use crate::backend::Step;
+    use crate::toolstyle::Deps;
 
     fn step(kind: ActionKind, out: &str, inputs: &[&str]) -> Step {
         Step {
@@ -194,6 +195,7 @@ mod tests {
             build_dir: PathBuf::from("/b"),
             steps,
             artifacts: vec![],
+            deps: Deps::Depfile,
             default_outputs: vec![PathBuf::from("/b/app")],
         }
     }

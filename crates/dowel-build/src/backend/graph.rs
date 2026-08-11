@@ -12,6 +12,7 @@
 use crate::action::ActionKind;
 use crate::backend::{Backend, BuildGraph, Step};
 use crate::exec::Failure;
+use crate::toolstyle::Deps;
 use dowel_support::json::{self, Json, JsonWriter};
 use dowel_support::log_debug;
 use std::path::PathBuf;
@@ -58,6 +59,15 @@ pub fn render(g: &BuildGraph) -> String {
     w.field_str("format", FORMAT);
     w.field_u64("version", VERSION);
     w.field_str("build_dir", &g.build_dir.display().to_string());
+    // ヘッダ依存の取り方。読む側の道具も、`.d` を読むのか標準出力を拾うのかを
+    // 知らなければ最新性を判定できない（ADR-0027）。
+    w.field_str(
+        "deps",
+        match g.deps {
+            Deps::Depfile => "depfile",
+            Deps::ShowIncludes => "show-includes",
+        },
+    );
     w.key("steps").begin_array();
     for s in &g.steps {
         w.begin_object();
@@ -140,11 +150,19 @@ pub fn parse(text: &str) -> Result<BuildGraph, String> {
         artifacts.push((str_field(a, "target")?.to_string(), PathBuf::from(str_field(a, "path")?)));
     }
 
+    // 欄が無い文書は、この欄より前の版が書いたものである。`.d` を読む形が
+    // 当時の唯一の機構だった。
+    let deps = match doc.get("deps").and_then(|v| v.as_str()) {
+        Some("show-includes") => Deps::ShowIncludes,
+        Some("depfile") | None => Deps::Depfile,
+        Some(other) => return Err(format!("`deps` is `{other}`, which this build does not know")),
+    };
     Ok(BuildGraph {
         build_dir,
         steps,
         artifacts,
         default_outputs: strings(&doc, "default_outputs")?.into_iter().map(PathBuf::from).collect(),
+        deps,
     })
 }
 
@@ -201,6 +219,7 @@ mod tests {
                 },
             ],
             artifacts: vec![("app:app".into(), PathBuf::from("/b/app"))],
+            deps: Deps::Depfile,
             default_outputs: vec![PathBuf::from("/b/app")],
         }
     }
@@ -222,7 +241,8 @@ mod tests {
     #[test]
     fn a_step_without_a_depfile_has_no_depfile_field() {
         let text = render(&sample());
-        assert_eq!(text.matches("\"depfile\"").count(), 1, "{text}");
+        // 鍵として数える。`deps` の値も同じ綴りを持つ。
+        assert_eq!(text.matches("\"depfile\":").count(), 1, "{text}");
     }
 
     #[test]

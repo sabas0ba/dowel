@@ -285,7 +285,7 @@ fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
         sess.configure(&mut cfg);
         let host = dowel_eval::config::default_triple();
         if let Some(decl) = root.toolchain_for(&cfg.target, &host) {
-            for (name, _) in dowel_eval::config::TOOLS {
+            for (name, _, _) in dowel_eval::config::TOOLS {
                 if let Some(t) = decl.tool(name) {
                     cfg.set_tool(name, t.command.clone());
                 }

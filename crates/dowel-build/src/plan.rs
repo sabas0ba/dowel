@@ -5,8 +5,9 @@
 
 use crate::action::{Action, ActionId, ActionKind};
 use crate::glob;
+use crate::toolstyle;
 use dowel_eval::schema::TableKind;
-use dowel_eval::{Config, Data, Opt, PathBase, Value};
+use dowel_eval::{Config, Data, PathBase, Value};
 use dowel_model::graph::Graph;
 use dowel_model::interface;
 use dowel_model::{Session, TargetId};
@@ -34,6 +35,8 @@ pub struct Plan {
     pub compile_commands: Vec<CompileCommand>,
     /// 要求されたターゲット
     pub requested: Vec<TargetId>,
+    /// ヘッダ依存の取り方（ADR-0027）。様式が決める
+    pub deps: crate::toolstyle::Deps,
 }
 
 impl Plan {
@@ -122,7 +125,7 @@ pub fn plan(
     // 宣言は、このビルドに対する要求ではない。
     for p in &sess.packages {
         let Some(decl) = p.toolchain_for(&cfg.target, &host) else { continue };
-        for (name, _) in dowel_eval::config::TOOLS {
+        for (name, _, _) in dowel_eval::config::TOOLS {
             let Some(t) = decl.tool(name) else { continue };
             let used = cfg.tool(name);
             if t.command != used {
@@ -160,6 +163,7 @@ pub fn plan(
         derived: BTreeMap::new(),
         compile_commands: Vec::new(),
         requested: requested.to_vec(),
+        deps: toolstyle::deps(cfg),
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
@@ -267,27 +271,25 @@ pub fn plan(
             // 揃った driver（`tc.cxx`）を使う必要がある
             let (compiler, tool) =
                 if is_cxx(src) { (cfg.tool("cxx"), "CXX") } else { (cfg.tool("c"), "CC") };
-            let obj = object_path(&build_dir, &pkg.name, &target.name, &pkg.root, src);
-            let depfile = obj.with_extension("o.d");
+            let obj = object_path(&build_dir, &pkg.name, &target.name, &pkg.root, src, cfg);
+            // 依存の記録は必ず1つの `.d` に落ちる。MSVC はコンパイラに
+            // 書かせず、実行する側が `/showIncludes` の出力を畳んで書く
+            // （ADR-0027）——読む側の機構を様式ごとに増やさないためである。
+            let depfile = obj.with_extension(format!("{}.d", toolstyle::object_extension(cfg)));
             let mut args: Vec<String> = Vec::new();
-            args.extend(default_compile_flags(cfg));
+            args.extend(toolstyle::default_compile_flags(cfg));
             args.extend(flags.iter().cloned());
             // 言語別のフラグは共通の `flags` の後。後勝ちの慣習により、
             // 言語別の指定が共通の指定を上書きできる向きにする
             args.extend(if is_cxx(src) { &cxx_flags } else { &c_flags }.iter().cloned());
             for inc in &includes {
-                args.push(format!("-I{}", inc.display()));
+                args.push(toolstyle::include(cfg, inc));
             }
             for (k, v) in &defines {
-                args.push(if v.is_empty() { format!("-D{k}") } else { format!("-D{k}={v}") });
+                args.push(toolstyle::define(cfg, k, v));
             }
-            args.push("-MD".into());
-            args.push("-MF".into());
-            args.push(depfile.display().to_string());
-            args.push("-c".into());
-            args.push(src.display().to_string());
-            args.push("-o".into());
-            args.push(obj.display().to_string());
+            // 入出力と依存の綴りは様式が決める（ADR-0027）。
+            args.extend(toolstyle::compile_io(cfg, src, &obj, &depfile));
 
             let id = ActionId(plan.actions.len());
             plan.actions.push(Action {
@@ -325,9 +327,9 @@ pub fn plan(
                     ar_toolchain_checked = true;
                     require_tool(&mut diags, cfg, root_toolchain, "ar", "archiver");
                 }
-                let out = build_dir.join("lib").join(format!("lib{}.a", target.name));
-                let mut args = vec!["rcs".to_string(), out.display().to_string()];
-                args.extend(objects.iter().map(|o| o.display().to_string()));
+                let out = build_dir.join("lib").join(toolstyle::archive_name(cfg, &target.name));
+                let objs: Vec<String> = objects.iter().map(|o| o.display().to_string()).collect();
+                let args = toolstyle::archive(cfg, &out, &objs);
                 let id = ActionId(plan.actions.len());
                 plan.actions.push(Action {
                     id,
@@ -354,7 +356,9 @@ pub fn plan(
                     .link_closure(tid)
                     .into_iter()
                     .any(|t| has_cxx.get(&t).copied().unwrap_or(false));
-                let linker = if link_needs_cxx { cfg.tool("cxx") } else { cfg.tool("c") };
+                // GNU では driver がリンクを兼ね、MSVC では `link.exe` が別物
+                // である（ADR-0027）。
+                let linker = cfg.linker(link_needs_cxx).to_string();
                 // リンク順は依存元が先。静的ライブラリの解決順の要請による。
                 let libs: Vec<PathBuf> = graph
                     .link_closure(tid)
@@ -362,12 +366,10 @@ pub fn plan(
                     .filter(|t| *t != tid)
                     .filter_map(|t| plan.artifacts.get(&t).cloned())
                     .collect();
-                let mut args: Vec<String> =
+                let mut inputs_args: Vec<String> =
                     objects.iter().map(|o| o.display().to_string()).collect();
-                args.extend(libs.iter().map(|l| l.display().to_string()));
-                args.extend(link_flags.iter().cloned());
-                args.push("-o".into());
-                args.push(out.display().to_string());
+                inputs_args.extend(libs.iter().map(|l| l.display().to_string()));
+                let args = toolstyle::link(cfg, &inputs_args, &link_flags, &out);
 
                 let mut inputs = objects.clone();
                 inputs.extend(libs.iter().cloned());
@@ -478,13 +480,6 @@ fn count(plan: &Plan, kind: ActionKind) -> usize {
 
 /// 構成から来る既定のフラグ。マニフェストの `flags` より前に置き、
 /// 記述側が後から上書きできるようにする。
-fn default_compile_flags(cfg: &Config) -> Vec<String> {
-    match cfg.opt {
-        Opt::Debug => vec!["-g".into(), "-O0".into()],
-        Opt::Release => vec!["-O2".into(), "-DNDEBUG".into()],
-    }
-}
-
 /// C++ として扱われる拡張子。
 ///
 /// `cc` も `c++` も driver であり拡張子で言語を判別するが、選択の結果は
@@ -520,7 +515,7 @@ fn require_tool(
         None => {
             d = d.note(format!(
                 "no `[toolchain] {name}` is declared, so the default `{}` is used",
-                dowel_eval::config::default_tool(name)
+                dowel_eval::config::default_tool(name, cfg.style)
             ))
         }
     }
@@ -785,11 +780,19 @@ fn flatten(value: &Value) -> Vec<Value> {
     }
 }
 
-fn object_path(build_dir: &Path, pkg: &str, target: &str, pkg_root: &Path, src: &Path) -> PathBuf {
+fn object_path(
+    build_dir: &Path,
+    pkg: &str,
+    target: &str,
+    pkg_root: &Path,
+    src: &Path,
+    cfg: &Config,
+) -> PathBuf {
     let rel = src.strip_prefix(pkg_root).unwrap_or(src);
     // パッケージ外のソースでも衝突しないよう、区切りを潰した名前にする。
     let flat = rel.to_string_lossy().replace(['/', '\\', ':'], "_");
-    build_dir.join("obj").join(pkg).join(target).join(format!("{flat}.o"))
+    let ext = toolstyle::object_extension(cfg);
+    build_dir.join("obj").join(pkg).join(target).join(format!("{flat}.{ext}"))
 }
 
 fn rel_display(base: &Path, p: &Path) -> String {
