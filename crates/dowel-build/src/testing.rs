@@ -631,12 +631,30 @@ fn list_cases(job: &Job, harness: &Harness) -> Result<Vec<String>, String> {
             None => "the listing was terminated by a signal".into(),
         });
     }
-    Ok(stdout
+    let names: Vec<String> = stdout
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| l.to_string())
-        .collect())
+        .collect();
+
+    // 列挙が返した名前も、マニフェストに書いた名前と同じ文法に従う
+    // （issue #108）。行の中身は解釈しない（ADR-0023）が、**受け入れる名前の
+    // 文法は入口によらず1つ**である——さもないと、マニフェストで拒んだ
+    // `a/b` がこちらから入り、目標がどこで終わるか読めないラベルになる。
+    //
+    // 拒み方はマニフェストと同じにできない。利用者がその場で直せる文字列では
+    // ないので、列挙の失敗（非零終了・時間切れ・0件）と同じく、その目標の
+    // 失敗として報告する。
+    if let Some(bad) = names.iter().find(|n| dowel_model::case_name_problem(n).is_some()) {
+        let why = dowel_model::case_name_problem(bad).expect("just found to be a problem");
+        return Err(format!(
+            "the harness listed `{bad}`, which cannot be a case name: {why}\n\
+             the label would be `{}/{bad}`; have the harness print names without it",
+            job.label()
+        ));
+    }
+    Ok(names)
 }
 
 /// 与えられたテストターゲットを起動する。

@@ -271,48 +271,35 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         }
 
         Command::Debug { target } => {
-            // 組んでからデバッガを起こす。組めていない成果物に向けても
-            // 読めるものが無い。
-            let tid = sess.find_target(target)?;
+            // 位置引数は目標でも事例のラベルでもよい（issue #110）。
+            // デバッガを開きたいのは失敗のときだけではない——通っているが
+            // 遅い事例、これから書く事例、別の構成で落ちた事例。
+            // `--debug-failed` は「前回落ちたものを開く」という別の選択であり、
+            // どちらも要る。
+            let (target_ref, case) = match target.split_once('/') {
+                Some((t, c)) => (t, Some(c)),
+                None => (target.as_str(), None),
+            };
+            let tid = sess.find_target(target_ref)?;
             let backend = building_backend(opts, "dowel debug")?;
             let requested = vec![tid];
             let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
             };
-            let session = match dowel_build::debug::prepare(&sess, &p, &cfg, tid) {
-                Ok(s) => s,
-                Err(d) => {
-                    sess.diagnostics.push(d);
-                    report(&sess, opts);
-                    return Ok(ExitCode::FAILURE);
-                }
+            // 事例を名指ししたなら、その宣言（args / env / cwd、ハーネスなら
+            // `run` と名前）を運ぶ。数え上げは `dowel test` と同じ経路である。
+            let launcher = testing::Launcher::for_config(&sess, &cfg).0;
+            let job = match case {
+                None => None,
+                Some(name) => match find_case(&sess, &p, &cfg, &launcher, tid, name) {
+                    Ok(job) => Some(job),
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        return Ok(ExitCode::FAILURE);
+                    }
+                },
             };
-            if opts.dap {
-                // 構成は成果物なので stdout。進行は stderr のまま。
-                println!("{}", dowel_build::debug::dap(&session));
-                return Ok(ExitCode::SUCCESS);
-            }
-            // デバッガは対話するものである。実在しなければ、起動して
-            // 「見つからない」と言われるより先に述べる。
-            if !dowel_build::exec::program_exists(&session.debugger) {
-                sess.diagnostics.push(
-                    Diagnostic::error(
-                        "missing-toolchain",
-                        format!("the debugger `{}` is not on PATH", session.debugger),
-                    )
-                    .note("declare it with `debug = \"...\"` in `[toolchain]` or `[toolchain.<triple>]`")
-                    .note("`--dap` writes the launch configuration without starting anything"),
-                );
-                report(&sess, opts);
-                return Ok(ExitCode::FAILURE);
-            }
-            match dowel_build::debug::run(&session) {
-                Ok(()) => Ok(ExitCode::SUCCESS),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    Ok(ExitCode::FAILURE)
-                }
-            }
+            Ok(open_debugger(&mut sess, &p, &cfg, opts, tid, job.as_ref(), &launcher))
         }
 
         Command::Bench { targets } => {
@@ -880,7 +867,60 @@ fn debug_failed_case(
             return ExitCode::FAILURE;
         }
     };
-    let mut launch = match dowel_build::debug::prepare(sess, p, cfg, job.target) {
+    open_debugger(sess, p, cfg, opts, job.target, Some(job), launcher)
+}
+
+/// 名指しされた事例の仕事を1つ取り出す（issue #110）。
+///
+/// 数え上げは `dowel test` と同じ経路を通る。ハーネスを宣言した目標では
+/// 実行ファイルに尋ねることになるので、外部プロセスが1つ走る。
+fn find_case(
+    sess: &Session,
+    p: &build_plan::Plan,
+    cfg: &Config,
+    launcher: &testing::Launcher,
+    tid: dowel_model::TargetId,
+    name: &str,
+) -> Result<testing::Job, String> {
+    use dowel_eval::schema::TableKind;
+    let kind = sess.target(tid).kind;
+    if !matches!(kind, TableKind::Test | TableKind::Bench) {
+        return Err(format!(
+            "`{}` is a {} target; only `test` and `bench` targets have cases",
+            sess.label(tid),
+            kind.name()
+        ));
+    }
+    let wanted = format!("{}/{name}", sess.label(tid));
+    let (jobs, failures) = testing::discover(testing::plan_jobs(sess, p, launcher, &[tid], cfg));
+    // 列挙できなかった目標は、事例が無いのではなく尋ねられなかったのである。
+    if let Some(f) = failures.first() {
+        return Err(f.failure_reason().unwrap_or_else(|| "the cases could not be listed".into()));
+    }
+    if let Some(job) = jobs.iter().find(|j| j.label() == wanted) {
+        return Ok(job.clone());
+    }
+    let known: Vec<String> = jobs.iter().map(|j| j.label()).collect();
+    let mut msg = format!("no case named `{wanted}`");
+    if !known.is_empty() {
+        msg.push_str(&format!("\nnote: this target has: {}", known.join(", ")));
+    }
+    Err(msg)
+}
+
+/// 構成を組み立ててデバッガを開く。`dowel debug` と `--debug-failed` の
+/// 共通の出口である——2つの入口が別々の構成を作ると、同じラベルを指しても
+/// 開くものが違いうる。
+fn open_debugger(
+    sess: &mut Session,
+    p: &build_plan::Plan,
+    cfg: &Config,
+    opts: &Options,
+    tid: dowel_model::TargetId,
+    job: Option<&testing::Job>,
+    launcher: &testing::Launcher,
+) -> ExitCode {
+    let mut launch = match dowel_build::debug::prepare(sess, p, cfg, tid) {
         Ok(s) => s,
         Err(d) => {
             sess.diagnostics.push(d);
@@ -888,23 +928,27 @@ fn debug_failed_case(
             return ExitCode::FAILURE;
         }
     };
-    // 事例の宣言を引き継ぐ。`job.args` の先頭はランナー由来の分なので、
-    // 事例そのものの引数だけを残す——デバッグの経路ではランナーは
-    // スタブとして別に組まれる。
-    let runner_args = match &job.binary {
-        Some(b) => launcher.command(b).1.len(),
-        None => 0,
-    };
-    launch.args = job.args.iter().skip(runner_args).cloned().collect();
-    launch.env = job.env.clone();
-    launch.cwd = job.cwd.clone();
-    eprintln!("debugging {}", job.label());
+    if let Some(job) = job {
+        // 事例の宣言を引き継ぐ。`job.args` の先頭はランナー由来の分なので、
+        // 事例そのものの引数だけを残す——デバッグの経路ではランナーは
+        // スタブとして別に組まれる。
+        let runner_args = match &job.binary {
+            Some(b) => launcher.command(b).1.len(),
+            None => 0,
+        };
+        launch.args = job.args.iter().skip(runner_args).cloned().collect();
+        launch.env = job.env.clone();
+        launch.cwd = job.cwd.clone();
+        eprintln!("debugging {}", job.label());
+    }
 
     if opts.dap {
         // 構成は成果物なので stdout。進行は stderr のまま。
         println!("{}", dowel_build::debug::dap(&launch));
         return ExitCode::SUCCESS;
     }
+    // デバッガは対話するものである。実在しなければ、起動して
+    // 「見つからない」と言われるより先に述べる。
     if !dowel_build::exec::program_exists(&launch.debugger) {
         sess.diagnostics.push(
             Diagnostic::error(

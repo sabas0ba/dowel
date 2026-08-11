@@ -3522,6 +3522,12 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && strcmp(argv[1], "--empty") == 0) { return 0; }
     if (argc > 1 && strcmp(argv[1], "--broken") == 0) { return 2; }
+    /* ラベルの文法を壊す名前を返す枠組み。既存のフレームワークの出力には
+       空白も `/` も普通に現れる。 */
+    if (argc > 1 && strcmp(argv[1], "--list-odd") == 0) {
+        printf("alpha\na/b\n");
+        return 0;
+    }
     return 0;
 }
 "#,
@@ -3723,6 +3729,64 @@ fn a_declared_stub_reaches_the_launch_configuration() {
 }
 
 #[test]
+fn the_stub_arguments_do_not_break_a_runner_that_ends_with_the_artifact_flag() {
+    // `args` の末尾が「成果物を取るフラグ」である runner——ADR-0008 が勧める
+    // 形そのもの——に、スタブの引数を後ろから挿すと、フラグがそれを成果物
+    // として食う（issue #107）。qemu-user の `-g` は位置に依存しないので、
+    // これは qemu-system で初めて現れる。
+    let p = debug_project(
+        "debug-kernel-flag",
+        "\n[toolchain.thumbv7em-none-eabihf]\nc = \"cc\"\n",
+        "\n[runner.thumbv7em-none-eabihf]\ncommand       = \"qemu-system-arm\"\nargs          = [\"-M\", \"mps2-an386\", \"-nographic\", \"-kernel\"]\ndebug_args    = [\"-gdb\", \"tcp::13579\", \"-S\"]\ndebug_connect = \"localhost:13579\"\n",
+    );
+    let r = p.run(".", &["debug", "app", "--target=thumbv7em-none-eabihf", "--dap"]);
+    r.success();
+    let args = &r.stdout[r.stdout.find("debugServerArgs").expect("the stub args are missing")..];
+    let args = &args[..args.find(']').expect("the stub args never end")];
+    // `-kernel` の次は成果物でなければならない。隣接の対を割ってはいけない。
+    let kernel = args.find("\"-kernel\"").expect("`-kernel` is not among the stub args");
+    let artifact = args.find("bin/app\"").expect("the artifact is not among the stub args");
+    assert!(kernel < artifact, "the artifact came before `-kernel`\n{r}");
+    let between = &args[kernel..artifact];
+    assert!(
+        !between.contains("-gdb") && !between.contains("-S"),
+        "the stub arguments were inserted between `-kernel` and the artifact\n{r}"
+    );
+    // スタブの引数は runner の引数より前に来る。
+    let gdb = args.find("\"-gdb\"").expect("`-gdb` is not among the stub args");
+    assert!(gdb < kernel, "the stub arguments came after the runner's own\n{r}");
+}
+
+#[test]
+fn a_half_declared_stub_is_told_which_half_is_missing() {
+    // 「両方無い」と「片方だけ」を同じ文言にしない。半分書いた利用者に
+    // 「宣言が無い」と言うと、書いてある側を見返させることになる（issue #109）。
+    let no_address = debug_project(
+        "debug-half-args",
+        "\n[toolchain.aarch64-unknown-linux-gnu]\nc = \"cc\"\n",
+        "\n[runner.aarch64-unknown-linux-gnu]\ncommand    = \"qemu-aarch64\"\ndebug_args = [\"-g\", \"12345\"]\n",
+    );
+    let r = no_address.run(".", &["debug", "app", "--target=aarch64-unknown-linux-gnu"]);
+    r.failure();
+    r.stderr_contains("missing-debug-stub");
+    r.stderr_contains("has no attach address");
+    r.stderr_contains("the host side is declared");
+    r.stderr_contains("debug_connect");
+    assert!(!r.stderr.contains("declares no stub"), "a half-declared stub was called empty\n{r}");
+
+    let no_host = debug_project(
+        "debug-half-connect",
+        "\n[toolchain.aarch64-unknown-linux-gnu]\nc = \"cc\"\n",
+        "\n[runner.aarch64-unknown-linux-gnu]\ncommand       = \"qemu-aarch64\"\ndebug_connect = \"localhost:12345\"\n",
+    );
+    let r = no_host.run(".", &["debug", "app", "--target=aarch64-unknown-linux-gnu"]);
+    r.failure();
+    r.stderr_contains("nothing hosts the program");
+    r.stderr_contains("the address to attach to is declared");
+    r.stderr_contains("debug_args");
+}
+
+#[test]
 fn a_debugger_that_is_not_installed_is_reported_before_starting() {
     let p = debug_project("debug-missing", "\n[toolchain]\ndebug = \"no-such-debugger\"\n", "");
     let r = p.run(".", &["debug", "app"]);
@@ -3841,6 +3905,72 @@ fn a_tree_without_bench_targets_says_so_and_succeeds() {
     let wrong = p.run(".", &["bench", "app"]);
     wrong.failure();
     wrong.stderr_contains("not a bench");
+}
+
+#[test]
+fn a_discovered_name_that_breaks_the_label_grammar_is_not_silently_accepted() {
+    // マニフェストに書いた名前は #97 で検証されるようになった。同じ名前が
+    // 列挙から来ると素通りしていた——規則が片方の入口にしか無い形である
+    // （issue #108）。列挙が返す名前は書き手が選べないので、むしろこちらの
+    // ほうが壊れた名前の来る確率は高い。
+    let p = harness_project("harness-odd-names", "list = [\"--list-odd\"]\nrun = [\"--run\"]\n");
+    let r = p.run(".", &["test"]);
+    r.failure();
+    r.stderr_contains("`a/b`");
+    r.stderr_contains("cannot be a case name");
+    r.stderr_contains("`/` separates the target from the case");
+    // 列挙できなかった目標の失敗として出る。0件成功にはしない。
+    r.stderr_contains("suite:suite ... FAILED");
+    // 壊れたラベルで走らせない。
+    assert!(!r.stderr.contains("suite:suite/a/b ... "), "the broken label still ran\n{r}");
+}
+
+/// `dowel debug <target>/<case>`（issue #110）。
+#[test]
+fn a_case_that_has_not_failed_can_be_opened_under_the_debugger() {
+    // デバッガを開きたいのは失敗のときだけではない——通っているが遅い事例、
+    // これから書く事例、別の構成で落ちた事例。記録を経由する道しか無いと、
+    // 「わざと落として記録を作る」ことになる。
+    let p = case_project(
+        "debug-case-passing",
+        "plain = { args = [\"env\"], env = { SUITE_MODE = \"strict\" }, cwd = dir(\"tests\") }\n",
+    );
+    // 一度も走らせていない（＝失敗の記録が無い）状態で開ける。
+    let r = p.run(".", &["debug", "suite:suite/plain", "--dap"]);
+    r.success();
+    r.stderr_contains("debugging suite:suite/plain");
+    r.stdout_contains("\"env\"");
+    r.stdout_contains("\"name\": \"SUITE_MODE\"");
+    r.stdout_contains("\"value\": \"strict\"");
+    r.stdout_contains("tests\"");
+}
+
+#[test]
+fn a_harness_case_can_be_opened_under_the_debugger_too() {
+    // ハーネスが発見した事例も、`run` と名前を付けて開く。
+    let p = harness_project("debug-case-harness", "list = [\"--list\"]\nrun = [\"--run\"]\n");
+    let r = p.run(".", &["debug", "suite:suite/divides", "--dap"]);
+    r.success();
+    r.stderr_contains("debugging suite:suite/divides");
+    r.stdout_contains("\"--run\"");
+    r.stdout_contains("\"divides\"");
+}
+
+#[test]
+fn naming_a_case_that_does_not_exist_says_which_ones_do() {
+    let p = case_project("debug-case-unknown", "one = { args = [\"ok\"] }\n");
+    let r = p.run(".", &["debug", "suite:suite/nosuch"]);
+    r.failure();
+    r.stderr_contains("no case named `suite:suite/nosuch`");
+    r.stderr_contains("suite:suite/one");
+}
+
+#[test]
+fn a_target_without_cases_says_so_when_one_is_named() {
+    let p = debug_project("debug-case-on-bin", "", "");
+    let r = p.run(".", &["debug", "app/nosuch"]);
+    r.failure();
+    r.stderr_contains("only `test` and `bench` targets have cases");
 }
 
 /// `dowel test --debug-failed`（docs/30-devexp.md 2.3）。

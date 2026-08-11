@@ -108,28 +108,21 @@ pub fn prepare(
     let debug_args = prop("debug_args").map(|v| strings(&v)).unwrap_or_default();
     let connect = prop("debug_connect").and_then(|v| v.as_str().map(|s| s.to_string()));
     let (Some(connect), false) = (connect, debug_args.is_empty()) else {
-        let mut d = Diagnostic::error(
-            "missing-debug-stub",
-            format!("no debug stub is declared for `{}`", cfg.target),
-        )
-        .note("debugging another machine's artifact needs something to host it and an address to attach to")
-        .note("declare both in `[runner.<triple>]`: `debug_args = [\"-g\", \"1234\"]` and `debug_connect = \"localhost:1234\"`")
-        .note("they are written separately because dowel does not parse the runner's flags (ADR-0024)");
-        if let Some(r) = runner {
-            d = d.at(r.site.file, r.site.span, "this runner declares no stub");
-        }
-        return Err(d);
+        return Err(half_declared_stub(cfg, runner, &debug_args, prop("debug_connect")));
     };
 
-    // ランナーの起動列に、スタブの引数を足す。成果物の位置は
-    // `Launcher` と同じ規則で決まる。
+    // ランナーの起動列に、スタブの引数を**前**から足す。
+    //
+    // 後ろに足せない。ランナーの `args` は末尾が「成果物を取るフラグ」で
+    // あってよく（`-kernel`、ADR-0008 が勧める形）、その直後に別の
+    // オプションを挿すと、フラグがそれを成果物として食う（issue #107）。
+    // 前に置いて意味が変わる道具は、qemu-user の `-g` にも
+    // qemu-system の `-gdb` にも無い——オプションの順序は、隣接の対を
+    // 崩さない限り自由である。
     let launcher = crate::testing::Launcher::for_config(sess, cfg).0;
-    let (stub_program, mut stub_args) = launcher.command(&program);
-    // 成果物は末尾にある。スタブの引数はその**前**に置く——qemu も gdbserver も
-    // 自分の引数を先に取り、プログラムを最後に取る。
-    let artifact = stub_args.pop();
-    stub_args.extend(debug_args);
-    stub_args.extend(artifact);
+    let (stub_program, launch_args) = launcher.command(&program);
+    let mut stub_args = debug_args;
+    stub_args.extend(launch_args);
     Ok(Launch {
         program,
         cwd,
@@ -138,6 +131,68 @@ pub fn prepare(
         env: Vec::new(),
         stub: Some(Stub { program: stub_program, args: stub_args, connect }),
     })
+}
+
+/// スタブの宣言が揃っていないときの診断（issue #109）。
+///
+/// 「両方無い」と「片方だけ」を同じ文言にしない。半分書いた利用者に
+/// 「宣言が無い」と言うと、書いてある側を見返させることになる——直すべき
+/// 行は、**欠けている側**である。
+fn half_declared_stub(
+    cfg: &Config,
+    runner: Option<&dowel_model::Runner>,
+    debug_args: &[String],
+    connect: Option<dowel_eval::Value>,
+) -> Diagnostic {
+    let target = &cfg.target;
+    // 在る側の鍵を指す。表の見出しを指しても、どの行を直すのかは読めない。
+    let site_of =
+        |name: &str| runner.and_then(|r| r.prop(name)).and_then(|v| v.prov.nearest_site());
+    let mut d = match (debug_args.is_empty(), connect.is_some()) {
+        // ホスト側の起動列はあるが、繋ぎ先が無い。
+        (false, false) => {
+            let mut d = Diagnostic::error(
+                "missing-debug-stub",
+                format!("the debug stub for `{target}` has no attach address"),
+            );
+            if let Some(s) = site_of("debug_args") {
+                d = d.at(s.file, s.span, "the host side is declared");
+            }
+            d.note("dowel does not parse the runner's flags, so the address cannot be read out of `debug_args` (ADR-0024)")
+                .note("add `debug_connect = \"localhost:<port>\"` next to it, naming the port those arguments open")
+        }
+        // 繋ぎ先はあるが、そこで待つものを誰も立てない。
+        (true, true) => {
+            let mut d = Diagnostic::error(
+                "missing-debug-stub",
+                format!("nothing hosts the program for `{target}`"),
+            );
+            if let Some(s) = site_of("debug_connect") {
+                d = d.at(s.file, s.span, "the address to attach to is declared");
+            }
+            d.note("an address alone does not start a stub; the debugger would wait for something that never listens")
+                .note("add `debug_args = [...]`, the arguments that make this runner host the program behind a stub")
+        }
+        // どちらも無い。
+        _ => {
+            let mut d = Diagnostic::error(
+                "missing-debug-stub",
+                format!("no debug stub is declared for `{target}`"),
+            )
+            .note("debugging another machine's artifact needs something to host it and an address to attach to")
+            .note("declare both in `[runner.<triple>]`: `debug_args = [\"-g\", \"1234\"]` and `debug_connect = \"localhost:1234\"`")
+            .note("they are written separately because dowel does not parse the runner's flags (ADR-0024)");
+            if let Some(r) = runner {
+                d = d.at(r.site.file, r.site.span, "this runner declares no stub");
+            }
+            d
+        }
+    };
+    // 位置が1つも付かなかった場合（ランナー自体が無い）は、せめて表を指す。
+    if runner.is_none() {
+        d = d.note(format!("no `[runner.{target}]` is declared at all"));
+    }
+    d
 }
 
 fn strings(v: &dowel_eval::Value) -> Vec<String> {
