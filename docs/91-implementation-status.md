@@ -212,6 +212,16 @@ changes, only the speed.
   entirely: the LSP starts no external processes
 - Diagnostics for unknown properties and type mismatches against the schema
   (with suggestions)
+- A target's name is unique within its package across kinds: `[lib.foo]`
+  beside `[bin.foo]` is `duplicate-target`, naming both sites (issue #114).
+  The name keys three separate things — `target("...")`, the
+  `<package>:<target>` label, and `obj/<package>/<target>/` — so two of a
+  name meant a `public` block reaching nobody, a graph whose steps could
+  not be told apart, an ambiguity whose own diagnostic suggested a spelling
+  that was still ambiguous, and, once both compiled the same source, two
+  rules writing one object path (which surfaced in ninja's words, not
+  dowel's). Qualifying all three by kind would buy only the coexistence of
+  `libfoo.a` and `foo`
 - The `interface(T)` / `compile_env(T)` split: `private` dependencies affect
   one's own compilation but do not propagate to dependents
 - Feature flags make dependency-graph edges appear and disappear. Features
@@ -642,7 +652,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (576 tests):
+Current breakdown (578 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -651,10 +661,10 @@ Current breakdown (576 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 184 |
+| `e2e` | compile real C and C++, run it, check the output | 186 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (65 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution, index consistency, and reference completeness | 6 |

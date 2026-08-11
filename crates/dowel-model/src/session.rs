@@ -822,6 +822,17 @@ impl TargetSink<'_> {
         let pkg = self.pkg;
         // `[lib.foo]` と `[lib.foo.public]` は別テーブルだが同じターゲットを指す。
         let mut index: BTreeMap<(String, String), TargetId> = BTreeMap::new();
+        // 同じパッケージの中でターゲット名は一意である（issue #114）。
+        // 名前が何に使われているかを見ると、一意でなければ成り立たない:
+        // `target("foo")` の解決、`<パッケージ>:<ターゲット>` のラベル、
+        // `obj/<パッケージ>/<ターゲット>/` の経路。同名を許すと、この3つ全てを
+        // 種別で修飾する必要があり、得られるもの（`libfoo.a` と `foo` の同居）
+        // に対して面が広すぎる。
+        let mut declared: BTreeMap<String, (schema::TableKind, Site)> = BTreeMap::new();
+        // 一度拒んだ組。`[bin.foo]` と `[bin.foo.private]` は別の表だが1つの
+        // 誤りであり、表の数だけ診断を出すと本体が埋もれる。
+        let mut refused: std::collections::BTreeSet<(&str, String)> =
+            std::collections::BTreeSet::new();
 
         for table in &doc.tables {
             if table.path.is_empty() {
@@ -932,6 +943,42 @@ impl TargetSink<'_> {
                     continue;
                 }
             };
+
+            // 種別違いの同名は、2つ目を拒む。1つ目は正しく組まれる——
+            // どちらも単独では正しい宣言なので、両方を落とす理由が無い。
+            match declared.get(&name) {
+                Some(&(other, first)) if other != kind => {
+                    if !refused.insert((kind.name(), name.clone())) {
+                        continue;
+                    }
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "duplicate-target",
+                            format!("`{name}` is already a {} target in this package", other.name()),
+                        )
+                        .at(
+                            doc.file,
+                            table.site.span,
+                            format!("`{}` cannot reuse the name", kind.name()),
+                        )
+                        .with_label(dowel_support::Label::secondary(
+                            first.file,
+                            first.span,
+                            "declared here first",
+                        ))
+                        .note("a target's name has to be unique in its package: `target(\"...\")`, the `<package>:<target>` label, and the object directory all key on it")
+                        .note(format!(
+                            "rename one, for example `[{}.{name}-{}]`",
+                            kind.name(),
+                            kind.name()
+                        )),
+                    );
+                    continue;
+                }
+                _ => {
+                    declared.entry(name.clone()).or_insert((kind, table.site));
+                }
+            }
 
             let tid = *index.entry(key).or_insert_with(|| {
                 let tid = TargetId(self.targets.len());

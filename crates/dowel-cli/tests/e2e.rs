@@ -3805,6 +3805,50 @@ fn debug_takes_exactly_one_target() {
     r.stderr_contains("one target");
 }
 
+#[test]
+fn two_targets_in_one_package_may_not_share_a_name() {
+    // ライブラリ `wt` とその CLI `wt` は自然な書き方だが、名前は
+    // `target("...")`・`<パッケージ>:<ターゲット>` のラベル・`obj/` の経路の
+    // 3か所すべてが鍵にしている（issue #114）。
+    let p = Project::new("dup-target");
+    p.write("dowel.toml", "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.foo]\nsources = [file(\"src/foo.c\")]\n\n[lib.foo.public]\nincludes = [dir(\"include\")]\n\n[bin.foo]\nsources = [file(\"src/main.c\")]\n\n[bin.foo.private]\ndeps = [target(\"foo\")]\n",
+    );
+    p.write("include/h.h", "int foo(void);\n");
+    p.write("src/foo.c", "#include \"h.h\"\nint foo(void) { return 0; }\n");
+    p.write("src/main.c", "#include \"h.h\"\nint main(void) { return foo(); }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("duplicate-target");
+    r.stderr_contains("`foo` is already a lib target");
+    r.stderr_contains("declared here first");
+    // 1つの誤りに1つの診断。ブロックの表ごとには出さない。
+    assert_eq!(r.stderr.matches("duplicate-target").count(), 1, "the diagnostic repeated\n{r}");
+}
+
+#[test]
+fn splitting_the_name_makes_the_same_tree_build() {
+    // 対照。差はターゲット名だけであり、名前を割れば `public` は届き、
+    // 共有されたソースも別々の `obj/` へ落ちる。
+    let p = Project::new("dup-target-split");
+    p.write("dowel.toml", "[package]\nname    = \"rep\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.foolib]\nsources = [file(\"src/shared.c\")]\n\n[lib.foolib.public]\nincludes = [dir(\"include\")]\n\n[bin.foo]\nsources = [file(\"src/shared.c\"), file(\"src/main.c\")]\n\n[bin.foo.private]\ndeps = [target(\"foolib\")]\n",
+    );
+    p.write("include/h.h", "int shared(void);\n");
+    p.write("src/shared.c", "#include \"h.h\"\nint shared(void) { return 0; }\n");
+    p.write("src/main.c", "#include \"h.h\"\nint main(void) { return shared(); }\n");
+    let r = p.run(".", &["build", "foo", "foolib"]);
+    r.success();
+    // 同じソースを両方が持っても、経路は種別ではなく名前で分かれている。
+    let dir = build_dir(&p.path("."), "debug");
+    assert!(dir.join("lib/libfoolib.a").exists(), "the archive is missing\n{r}");
+    assert!(dir.join("bin/foo").exists(), "the executable is missing\n{r}");
+}
+
 /// `dowel bench`（ADR-0025）。
 ///
 /// 測るのはプロセス全体の壁時計であり、枠組みは課さない。dowel が失敗と

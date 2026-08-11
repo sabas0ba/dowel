@@ -224,6 +224,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "duplicate-target",
+        why: "a `lib` and a `bin` in one package cannot share a name",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[lib.app]\nsources = glob(\"src/*.c\")\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unknown-property",
         why: "`sourcess` is not a property",
         files: &[("app/dowel.build", "[bin.app]\nsourcess = glob(\"src/*.c\")\n")],
