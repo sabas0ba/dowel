@@ -1,4 +1,4 @@
-# ADR-0037: The store is collected by compaction when asked, never automatically, and has no size cap
+# ADR-0037: Growth is reported by default, collected on request, and the budget follows the graph
 
 **Status**: Accepted
 
@@ -6,61 +6,90 @@ Closes the GC part of [Q4](../99-open-questions.md).
 
 ## Context
 
-The value log is append-only, which is what keeps the store from breaking
-when a process dies mid-write. The cost is that overwriting a key leaves
-the old bytes in place: a project rebuilt a thousand times carries a
-thousand versions of every manifest's evaluation, and only the newest of
-each is reachable from the index.
+Two things grow, and only one of them was being looked at.
 
-`dowel cache gc` existed, and collected only *old format versions* —
-whole directories left behind when `FORMAT` moved. Within the current
-format it freed nothing, so the file that actually grows was the one
-nothing collected.
+**The value log** is append-only, which is what keeps the store from
+breaking when a process dies mid-write. The cost is that overwriting a key
+leaves the old bytes in place. `dowel cache gc` existed and collected only
+*old format versions* — whole directories left behind when `FORMAT` moved —
+so within the current format it freed nothing.
+
+**The build directories** are per configuration: `.dowel/build/<cfg-id>/`,
+one per (triple, configuration) pair. Switching between debug and release,
+or building for a second triple, leaves the previous one behind with its
+objects and binaries in it. This is the larger number by an order of
+magnitude, and nothing collected it at all.
 
 [20-architecture.md](../20-architecture.md) section 5 sketched "collects by
-generation count or size cap". Neither survives contact with what the store
-is: there are no generations inside a format version, and a size cap
-requires deciding *which* entries to drop.
+generation count or size cap". Neither is right as stated: there are no
+generations inside a format version, and a fixed size cap is either too
+early for a small tree or too late for a large one.
+
+The first draft of this decision said growth costs only disk space, "the
+cheapest resource in the list", and left collection entirely manual. That
+understates it. Repeatedly switching configurations and rebuilding is
+ordinary work, not misuse, and the result accumulates in a way the user has
+no reason to expect. Worse, the only way to *notice* was to run `cache
+info` — which nobody does unprompted.
 
 ## Decision
 
-**`gc` compacts: it copies the reachable records into a fresh value log
-and replaces the old one.** Reachability is exactly what the index says —
-one record per key, each naming an offset and a length. Everything else is
-dead, and dead is the normal state of most of the file.
+**Growth is reported by default.** When a run ends and the store is over
+budget, one line says so and how to collect it. Being told is the part
+that was missing; a user who never looks has no way to learn that looking
+would help.
 
-**Compaction happens only when asked.** No threshold, no ratio, no
-compaction on write. A build that silently pauses to rewrite a large file
-is a build that violates the startup budget
-([20-architecture.md](../20-architecture.md) section 5.4) in a way its user
-cannot predict, and the cost of *not* compacting is disk space — the
-cheapest resource in the list.
+**The budget follows the graph: it is the live bytes themselves.** Over
+budget means the dead bytes exceed the live ones. A tree's live size is
+what that tree needs, so the threshold scales with the project instead of
+being a number that fits one repository. An empty store is never over
+budget — twice zero is zero, and the first write would otherwise trip it.
 
-**There is no size cap, and this is a decision rather than an omission.**
-A cap means evicting live entries, which means ranking them, which means
-recording when each was last used — a write on every read, to manage a
-resource that is not scarce. The store is a cache: dropping it costs
-recomputation and nothing else. A user who finds it too large can run `gc`,
-or delete `.dowel/cache/` outright, and both are safe.
+**`DOWEL_CACHE` chooses what happens:**
 
-**`cache info` reports the dead bytes**, so the number that motivates `gc`
-is visible before running it. Reporting it is cheap: the index already
-carries every live extent, so dead is the file's length minus their sum.
+| value | behavior |
+|---|---|
+| `notify` (default) | report when over budget; collect nothing |
+| `gc` | report and compact in place |
+| `off` | say nothing |
 
-**Collecting old format versions stays.** That is the other half of `gc`
-and answers Q4's migration question: a format change moves `FORMAT`, the
-new version starts empty in its own directory, and the old directory is
-removed the next time `gc` runs. Nothing tries to read or convert an older
+The default reports rather than collects because compaction rewrites a
+file, and a build that pauses to do so spends time its user did not ask
+for ([20-architecture.md](../20-architecture.md) section 5.4). `gc` exists
+for those who would rather have it handled, and `off` for those who have
+decided.
+
+**`gc` compacts the store**: the reachable records — one per key, each
+naming an offset and a length in the index — are copied into a fresh value
+log. Everything else is dead, and dead is the normal state of most of the
+file.
+
+**`gc --older-than=<days>` removes build directories not written in that
+long.** This is the date-based half, and it applies where date makes sense:
+a configuration nobody has built in a month is a configuration nobody is
+using, and its contents regenerate. The age is *last written*, not
+created, so a configuration built daily for a year is never a candidate.
+
+Nothing removes build directories without being asked for a number.
+"Everything but the current one" would delete the release tree of someone
+who alternates between two configurations every day.
+
+**Per-record ages are not recorded.** Evicting individual entries by age
+would mean writing on every read to maintain a last-used time, to manage a
+resource the whole-store budget already covers. The store's granularity
+for age is the store.
+
+**`cache info` reports both**: the store's dead bytes, and every build
+directory with its size and age. The numbers that motivate collection are
+visible before collecting.
+
+**Collecting old format versions stays.** That answers Q4's migration
+question: a format change moves `FORMAT`, the new version starts empty in
+its own directory, and `gc` removes the old one. Nothing converts an older
 format — misreading an old layout is worse than recomputing.
 
 ## Consequences
 
-- The store still only grows during normal use. That is intended: the file
-  is under `.dowel/cache/`, is gitignored, and losing it costs nothing but
-  time.
-- Compaction holds the writer lock, so it cannot run against a concurrent
-  build; a process that cannot take the lock reports it rather than
-  waiting. The same rule already governs writing.
 - **Compaction rewrites offsets, so the index and the value log have to
   change together — and `rename` is atomic per file, not across two.** An
   index that survives while the log beneath it is replaced points at the
@@ -76,9 +105,12 @@ format — misreading an old layout is worse than recomputing.
 
   A crash at any point leaves an empty or stale-but-shorter store, never a
   wrong one. Being a cache is what makes this affordable: the worst case
-  costs a round of recomputation, and the invariant
-  ([20-architecture.md](../20-architecture.md) section 5.3) holds without
-  a transaction across two files.
-- Not addressed: sharing a store between projects, or a global cache
-  keyed by content. Both change what the store *is*; this decides only
-  how the one that exists is collected.
+  costs a round of recomputation.
+- Compaction takes the writer lock, so it does not run against a
+  concurrent build; it reports that rather than waiting. Under
+  `DOWEL_CACHE=gc` a failed lock is silent — the next run collects.
+- The notice is on stderr, where progress goes, and is suppressed for
+  `cache info` and `cache gc` themselves.
+- Not addressed: sharing a store between projects, or a global cache keyed
+  by content. Both change what the store *is*; this decides only how the
+  ones that exist are collected.

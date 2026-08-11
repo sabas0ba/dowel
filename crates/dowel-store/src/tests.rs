@@ -295,3 +295,35 @@ fn compacting_an_empty_store_is_not_an_error() {
     assert_eq!(Store::compact(&root).unwrap(), Some(0));
     assert!(Store::open(&root).is_empty());
 }
+
+#[test]
+fn the_budget_is_the_live_size_itself() {
+    // 予算は木の規模に追随する（ADR-0037）。固定の閾値は、小さな木には
+    // 早すぎ、大きな木には遅すぎる。
+    let root = scratch("budget");
+    // 空は超過としない。0 の倍は 0 であり、書き始めた瞬間に超過になる。
+    assert!(!Store::open(&root).over_budget());
+
+    {
+        let s = Store::open(&root);
+        let mut w = s.writer().unwrap().unwrap();
+        w.put(1, 0, 0, &[b'x'; 100]).unwrap();
+        w.commit().unwrap();
+    }
+    assert!(!Store::open(&root).over_budget(), "one write is not over budget");
+
+    // 同じ鍵を上書きするほど死んだ領域が増える。生きた量を超えたら超過。
+    for round in 1..3u64 {
+        let s = Store::open(&root);
+        let mut w = s.writer().unwrap().unwrap();
+        w.put(1, round, 0, &[b'x'; 100]).unwrap();
+        w.commit().unwrap();
+    }
+    let s = Store::open(&root);
+    assert_eq!(s.dead_bytes(), 200, "two overwrites leave two dead copies");
+    assert!(s.over_budget(), "200 dead against 100 live is over budget");
+
+    // 圧縮すれば戻る。
+    Store::compact(&root).unwrap().unwrap();
+    assert!(!Store::open(&root).over_budget());
+}

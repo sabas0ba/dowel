@@ -76,10 +76,11 @@ the required granularity.
   value log ([20-architecture.md](20-architecture.md) section 5)
 - What goes into the fingerprint — the value's bytes; a matching
   fingerprint means the file is neither lexed, parsed, nor evaluated
-- GC policy — [ADR-0037](adr/0037-store-gc.md): compaction when asked,
-  never automatically, and no size cap. A cap would mean evicting live
-  entries, which means ranking them, which means a write on every read to
-  manage a resource that is not scarce
+- GC policy — [ADR-0037](adr/0037-store-gc.md): growth is reported by
+  default and collected on request, with the budget following the graph
+  (over budget = dead bytes exceed live ones). `DOWEL_CACHE` picks
+  notify / gc / off, and `gc --older-than=<days>` collects build
+  directories by age
 - Migration across version changes — a format change moves `FORMAT`, the
   new version starts empty in its own directory, and `gc` removes the old
   one. Nothing converts an older format: misreading an old layout is worse

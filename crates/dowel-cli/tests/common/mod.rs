@@ -61,7 +61,10 @@ impl Project {
         cmd.args(args)
             .current_dir(&cwd)
             // ログ水準を環境から漏らさない。テストの出力を安定させる。
-            .env_remove("DOWEL_LOG");
+            .env_remove("DOWEL_LOG")
+            // キャッシュの通知も同じ理由で遮る。既定の振る舞いを見る検査は
+            // 自分で与える。
+            .env_remove("DOWEL_CACHE");
         for (k, v) in envs {
             cmd.env(k, v);
         }

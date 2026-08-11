@@ -556,29 +556,57 @@ The output is also intended as context for LLM agents
 
 ```
 dowel cache info
-dowel cache gc
+dowel cache gc [--older-than=<days>]
 ```
 
 | Subcommand | Meaning |
 |---|---|
-| `info` | report the size, record count, and dead bytes of the on-disk store, and the same for the probe-fact database |
-| `gc` | remove stores and fact databases left by older formats, then compact the current store |
+| `info` | report the store's size, record count, and dead bytes; every build directory with its size and age; and the probe-fact database |
+| `gc` | remove stores and fact databases left by older formats, then compact the current store. `--older-than=<days>` also removes build directories not written in that long |
 
 Neither reads the manifests: cleanup must work even when a manifest is
 broken. The store's contents and guarantees are described under "The store"
 below.
 
-The value log is append-only, so overwriting a key leaves the old bytes in
-place. `info` reports them as `dead`, and `gc` compacts — copying the
-reachable records into a fresh log ([ADR-0037](adr/0037-store-gc.md)).
+Two things grow ([ADR-0037](adr/0037-store-gc.md)). The value log is
+append-only, so overwriting a key leaves the old bytes in place; `info`
+reports them as `dead`. The **build directories** are per configuration —
+one per (triple, configuration) pair — and switching between debug and
+release leaves the previous one behind with its objects in it. That is the
+larger number.
 
-Compaction runs **only when asked**: never on write, and with no size cap.
-A build that silently pauses to rewrite a large file spends time its user
-cannot predict, and the alternative cost is disk space. A cap would mean
-evicting live entries, which means ranking them, which means recording when
-each was used — a write on every read to manage a resource that is not
-scarce. The store is a cache: `gc`, or deleting `.dowel/cache/` outright,
-are both safe and cost only recomputation.
+**Growth is reported by default.** When a run ends and the store is over
+budget, one line says so and how to collect it:
+
+```
+note: the store holds 8402 bytes no longer reachable; `dowel cache gc` frees them
+note: set DOWEL_CACHE=gc to collect it automatically, or =off to stop saying this
+```
+
+The budget is the live bytes themselves: over budget means the dead exceed
+the live. A tree's live size is what that tree needs, so the threshold
+scales with the project rather than being a number that fits one
+repository.
+
+| `DOWEL_CACHE` | Behavior |
+|---|---|
+| `notify` (default) | report when over budget; collect nothing |
+| `gc` | report and compact in place |
+| `off` | say nothing |
+
+The default reports rather than collects because compaction rewrites a
+file, and a build that pauses to do so spends time its user did not ask
+for.
+
+`gc --older-than=<days>` removes build directories not **written** in that
+long — a configuration nobody has built in a month is one nobody is using,
+and its contents regenerate. Without a number, `gc` does not touch them:
+"everything but the current one" would delete the release tree of someone
+who alternates between two configurations daily.
+
+Per-record ages are not recorded. Evicting individual entries by age would
+mean writing on every read to maintain a last-used time, to manage what the
+whole-store budget already covers.
 
 `gc` takes the writer lock, so it does not run against a concurrent build;
 it says so rather than waiting.

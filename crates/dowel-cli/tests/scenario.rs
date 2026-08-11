@@ -540,3 +540,116 @@ fn compaction_frees_the_dead_bytes_and_the_store_still_restores() {
     let (wrote, restored, _) = run_and_count(&p, "app");
     assert_eq!((wrote, restored), (0, 4), "the store stopped restoring after compaction");
 }
+
+/// `cache info` の1行から数を読む。
+fn info_number(p: &Project, key: &str) -> u64 {
+    let out = p.run("app", &["cache", "info"]);
+    out.success();
+    let line = out
+        .stdout
+        .lines()
+        .find(|l| l.starts_with(key))
+        .unwrap_or_else(|| panic!("no `{key}` line:\n{}", out.stdout));
+    line.split_whitespace().nth(1).unwrap().parse().unwrap()
+}
+
+/// マニフェストを書き換えては読み、死んだ領域を溜める。
+///
+/// 判定の境目（死んだ量 > 生きた量）から離れる回数を回す。境目ちょうどに
+/// 乗せると、生きた量の僅かな違いで結果が変わる検査になる。
+fn accumulate_dead(p: &Project) {
+    for i in 0..12 {
+        let text = std::fs::read_to_string(p.path("app/dowel.build")).unwrap();
+        p.write("app/dowel.build", &format!("# round {i}\n{text}"));
+        p.run("app", &["check"]).success();
+    }
+}
+
+#[test]
+fn growth_is_reported_when_it_passes_the_budget() {
+    // 気付く手段が `cache info` を自分で叩くことしかないと、黙って肥大化
+    // する（ADR-0037）。予算は生きている量そのもので、木の規模に追随する。
+    let p = project("scenario-cache-notice");
+    let quiet = p.run("app", &["check"]);
+    quiet.success();
+    assert!(!quiet.stderr.contains("no longer reachable"), "a fresh store should be quiet");
+
+    accumulate_dead(&p);
+    let r = p.run("app", &["check"]);
+    r.success();
+    assert!(r.stderr.contains("no longer reachable"), "stderr:\n{}", r.stderr);
+    assert!(r.stderr.contains("dowel cache gc"), "the notice should say how to collect");
+}
+
+#[test]
+fn the_cache_mode_chooses_between_notifying_collecting_and_silence() {
+    let p = project("scenario-cache-mode");
+    accumulate_dead(&p);
+
+    // off は何も言わない。
+    let r = p.run_env("app", &["check"], &[("DOWEL_CACHE", "off")]);
+    r.success();
+    assert!(!r.stderr.contains("no longer reachable"), "stderr:\n{}", r.stderr);
+
+    // gc はその場で片付ける。
+    let r = p.run_env("app", &["check"], &[("DOWEL_CACHE", "gc")]);
+    r.success();
+    assert!(r.stderr.contains("compacted the store"), "stderr:\n{}", r.stderr);
+    assert_eq!(info_number(&p, "dead"), 0);
+
+    // 片付いた後は、既定でも黙る。
+    let r = p.run("app", &["check"]);
+    r.success();
+    assert!(!r.stderr.contains("no longer reachable"), "stderr:\n{}", r.stderr);
+}
+
+#[test]
+fn build_directories_are_listed_and_collected_by_age() {
+    // 実際に嵩むのは構成ごとのビルドディレクトリである（ADR-0037）。
+    // 構成を切り替えるたびに1つ増え、使わなくなっても残る。
+    let p = project("scenario-build-dirs");
+    p.run("app", &["build"]).success();
+    p.run("app", &["build", "--config=release"]).success();
+
+    let out = p.run("app", &["cache", "info"]);
+    out.success();
+    assert!(out.stdout.contains("debug"), "stdout:\n{}", out.stdout);
+    assert!(out.stdout.contains("release"), "stdout:\n{}", out.stdout);
+    assert!(info_number(&p, "builds") > 0);
+
+    // 日数を渡さなければ、ビルドディレクトリには触らない。
+    p.run("app", &["cache", "gc"]).success();
+    let dirs = |p: &Project| -> usize {
+        std::fs::read_dir(p.path("app").join(".dowel/build")).unwrap().count()
+    };
+    assert_eq!(dirs(&p), 2, "gc without a number should not remove build directories");
+
+    // 触られていない方を古く見せる。「最後に書かれてから」で判定する。
+    let old = p.path("app").join(".dowel/build");
+    let release = std::fs::read_dir(&old)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().unwrap().to_string_lossy().contains("release"))
+        .expect("the release directory exists");
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 86_400);
+    filetime_set(&release, long_ago);
+
+    let r = p.run("app", &["cache", "gc", "--older-than=30"]);
+    r.success();
+    assert!(r.stderr.contains("removed 1 build directory"), "stderr:\n{}", r.stderr);
+    assert_eq!(dirs(&p), 1);
+}
+
+/// ディレクトリの更新時刻を過去にする。`touch -d` へ委譲する——
+/// 時刻の設定は std に無く、この検査のためだけに依存を増やさない。
+fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
+    let secs = when.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let out = std::process::Command::new("touch")
+        .arg("-d")
+        .arg(format!("@{secs}"))
+        .arg(path)
+        .output()
+        .expect("cannot start touch");
+    assert!(out.status.success(), "touch failed: {}", String::from_utf8_lossy(&out.stderr));
+}

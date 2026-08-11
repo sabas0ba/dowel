@@ -83,7 +83,70 @@ impl Plan {
 
 /// ビルドディレクトリ。構成ごとに分ける。
 pub fn build_dir(root: &Path, cfg: &Config) -> PathBuf {
-    root.join(".dowel").join("build").join(cfg.id())
+    build_root(root).join(cfg.id())
+}
+
+/// 構成ごとのディレクトリを収める場所。
+pub fn build_root(root: &Path) -> PathBuf {
+    root.join(".dowel").join("build")
+}
+
+/// 1つの構成のビルドディレクトリと、その大きさ・最後に触られた時刻。
+pub struct BuildDir {
+    pub path: PathBuf,
+    pub id: String,
+    pub bytes: u64,
+    /// 最後に書かれてからの日数。読めなければ 0
+    pub age_days: u64,
+}
+
+/// 在るビルドディレクトリを数え上げる（[ADR-0037](../../../docs/adr/0037-store-gc.md)）。
+///
+/// 構成と三つ組を切り替えるたびに1つ増え、使わなくなっても残る。実際に
+/// 嵩むのはここであり、ストアの値ログより桁が大きい——オブジェクトと
+/// 実行ファイルが入る。
+pub fn build_dirs(root: &Path) -> Vec<BuildDir> {
+    let base = build_root(root);
+    let Ok(entries) = std::fs::read_dir(&base) else { return Vec::new() };
+    let now = std::time::SystemTime::now();
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let path = e.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let age_days = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|d| d.as_secs() / 86_400)
+            .unwrap_or(0);
+        out.push(BuildDir {
+            id: e.file_name().to_string_lossy().into_owned(),
+            bytes: dir_bytes(&path),
+            age_days,
+            path,
+        });
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// 木の下のファイルの合計。シンボリックリンクは辿らない。
+fn dir_bytes(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            match e.file_type() {
+                Ok(t) if t.is_dir() => stack.push(e.path()),
+                Ok(t) if t.is_file() => total += e.metadata().map(|m| m.len()).unwrap_or(0),
+                _ => {}
+            }
+        }
+    }
+    total
 }
 
 /// 実行ファイルの綴り。対象の OS が決める（issue #112）。
