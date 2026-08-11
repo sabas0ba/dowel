@@ -86,8 +86,30 @@ set.
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
 | `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C and C++ may mix in one target; the language — and so the compiler — is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`, everything else compiles as C) |
+| `targets` | `List<Str>` | `append` | triples this target is built for. Empty means every triple. Same spelling as `[package] targets`, narrower reach |
 | `linkage` | `Str` | `replace` | how a `lib` is linked: `static` (the default) or `shared`. Ignored by other kinds |
 | `exports` | `List<Str>` | `append` | the symbols a shared library exports. Required when `linkage = "shared"` |
+
+#### Restricting a target to some triples
+
+`targets` names the triples a single target is built for. `[package]
+targets` covers the whole package, which a library supporting several
+triples cannot use — it needs "built for all four, tested on the three
+that have an OS":
+
+```
+[test.vectors]
+sources = [file("tests/vectors.c")]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+```
+
+A target outside its triples **does not appear** in that triple's plan; it
+is not an error there, it is out of scope. Naming it explicitly is still
+refused with `unsupported-target`, because a named target is a request and
+a build that quietly produces nothing reads as success (issue #126).
+
+Building or testing without naming targets reaches only this tree's
+package. A dependency's own tests are not built by its consumers.
 
 #### Shared libraries
 

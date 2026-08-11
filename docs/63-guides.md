@@ -193,6 +193,44 @@ ssh board.local /tmp/dowel/unit_test
   is refused with a diagnostic beforehand (rather than surfacing as an
   `Exec format error` reported as a test failure)
 
+### A library that supports several triples
+
+**Each consumer declares its own toolchain.** A dependency's
+`[toolchain.<triple>]` is read — a mismatch is reported — but it does not
+apply to the build: the toolchain is a property of the build, not of a
+package ([ADR-0031](adr/0031-toolchain-is-the-builds.md)). The tool's
+*name* comes from what is installed on the machine doing the build
+(`aarch64-linux-gnu-gcc` on Debian, something else inside a vendor SDK),
+which is not knowledge the library has. When a dependency does declare one
+for the requested triple, `missing-toolchain` reads out its value so the
+line can be copied rather than looked up.
+
+What a library *can* declare is which triples it supports, and it can do so
+per target, not only per package:
+
+```
+# dowel.build of the library
+[lib.core]
+sources = glob("src/*.c")        # built for every triple
+
+[test.vectors]
+sources = [file("tests/vectors.c")]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+```
+
+`targets` on a target takes the same spelling as `[package] targets` and
+differs only in reach. The algorithm is built everywhere; its host-side
+test is not built for a bare-metal triple at all — it does not appear in
+that triple's plan, rather than failing `unsupported-target` there. Naming
+it explicitly on a triple it does not support is still refused, because a
+named target is a request.
+
+Building or testing a consumer does not build the dependency's own tests:
+the default reach of an unnamed `dowel build` / `dowel test` is this tree's
+package. A dependency's tests are its author's to run — and where the
+consumer targets a triple the library's tests were never written for, they
+would otherwise fail a build whose manifest has nothing wrong with it.
+
 ## 6. Writing in an editor
 
 There are three paths; they serve different files.

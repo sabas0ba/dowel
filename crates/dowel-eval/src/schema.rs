@@ -265,6 +265,13 @@ pub fn root_props() -> Vec<PropDef> {
             domain: None,
         },
         PropDef {
+            name: "targets",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "triples this target is built for. empty means every triple (issue #126)",
+            domain: None,
+        },
+        PropDef {
             name: "linkage",
             ty: Type::Str,
             merge: Merge::Replace,

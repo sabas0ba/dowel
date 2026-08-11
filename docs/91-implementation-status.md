@@ -308,6 +308,30 @@ changes, only the speed.
   translation unit uses the C++ driver, so the C++ runtime is linked even
   when the binary itself is pure C. The C++ toolchain is only required — and
   only probed — when C++ sources are present
+- The default reach of an unnamed `dowel build` / `dowel test` / `dowel
+  bench` is **this tree's package** (issue #126). A consumer's build used to
+  build its dependencies' tests: harmless noise on a hosted triple, a
+  failure on one without an OS, since the library's tests are written for
+  a host and the consumer's manifest has nothing wrong with it. Naming a
+  dependency's target still reaches it — what changed is the default, not
+  what is reachable
+- `targets` on a target names the triples it is built for, with the same
+  spelling as `[package] targets` and a narrower reach (issue #126). A
+  library supporting four triples can now say its host-side test runs on
+  three; the package-level list could not express that, since the package
+  supports all four. A target outside its triples does not appear in that
+  triple's plan rather than failing there — but naming it explicitly is
+  `unsupported-target`, because a named target is a request and a build
+  that quietly produces nothing reads as success
+- A dependency's `[toolchain]` does not apply to the build
+  ([ADR-0031](adr/0031-toolchain-is-the-builds.md)); when one exists for
+  the requested triple, `missing-toolchain` reads out its values and says
+  why they do not apply. The error used to advise "declare one, for
+  example …" while `toolchain-mismatch` printed the actual answer two
+  lines below — dowel had found what it was looking for and still said it
+  was missing (issue #125). The position is unchanged, because a tool's
+  *name* comes from the machine doing the build, not from the library;
+  what changed is that the output states it
 - Shared libraries: `[lib.<name>] linkage = "shared"`
   ([ADR-0030](adr/0030-shared-libraries.md)) links `lib<name>.so` /
   `lib<name>.dylib` / `<name>.dll` instead of an archive.
@@ -775,7 +799,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (638 tests):
+Current breakdown (644 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -784,7 +808,7 @@ Current breakdown (638 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 211 |
+| `e2e` | compile real C and C++, run it, check the output | 217 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (67 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
