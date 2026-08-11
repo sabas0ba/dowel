@@ -196,12 +196,12 @@ ssh board.local /tmp/dowel/unit_test
 ### A library that supports several triples
 
 **Each consumer declares its own toolchain, but the tree writes the table
-once.** A dependency's `[toolchain.<triple>]` is read — a mismatch is
-reported — but it does not apply to the build: the toolchain is a property
-of the build, not of a package
+once.** A dependency's `[toolchain.<triple>]` is read, and a mismatch is
+reported, but it does not apply to the build. A toolchain is a property of
+the build, not of a package
 ([ADR-0031](adr/0031-toolchain-is-the-builds.md)). The tool's *name* comes
-from what is installed on the machine doing the build
-(`aarch64-linux-gnu-gcc` on Debian, something else inside a vendor SDK),
+from what is installed on the machine doing the build —
+`aarch64-linux-gnu-gcc` on Debian, something else inside a vendor SDK —
 which is not knowledge the library has.
 
 What removes the copying is a shared file

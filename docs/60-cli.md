@@ -107,9 +107,9 @@ Run inside a package; declares a dependency in its `dowel.toml`. Two forms:
   package root) and appends the matching `[[dependencies]]` entry with a
   `path` source
 - **`--git <url>`** — appends a git dependency instead of scaffolding
-  anything. The manifest only ever receives a **full 40-digit sha**: an
-  explicit 40-digit `--rev` is written as-is, while a name (or, with `--rev`
-  omitted, `HEAD`) is resolved **once** via `git ls-remote` and the
+  anything. The manifest only ever receives a **full 40-digit sha**. An
+  explicit 40-digit `--rev` is written as-is; a name (or `HEAD`, when
+  `--rev` is omitted) is resolved **once** via `git ls-remote`, and the
   resolved sha is what gets pinned — the same judgment as `dowelup pin`.
   `dowel check` fetches it on first use
 
@@ -243,13 +243,13 @@ the target.
   out, whatever exit status the kill produced. The kill reaches the test
   process only — a test that spawns grandchildren leaks them
 - `--debug-failed` joins the test job list with the debug launch
-  (docs/30-devexp.md section 2.3, [ADR-0024](adr/0024-debug-command.md)): the
-  failing case reopens under the toolchain's debugger with its declared
+  (docs/30-devexp.md section 2.3, [ADR-0024](adr/0024-debug-command.md)).
+  The failing case reopens under the toolchain's debugger with its declared
   `args`, `env`, and `cwd` — nothing is copied by hand. It reads the same
   record as `--failed` and narrows the same way (a positional label,
-  `--label`), and it needs the selection to come to **exactly one** case: a
-  debugger attaches to one process, and picking silently would leave the
-  user guessing which one opened. Several failures are listed with a note to
+  `--label`). The selection has to come to **exactly one** case: a debugger
+  attaches to one process, and picking silently would leave the user
+  guessing which one opened. Several failures are listed with a note to
   name one; none is a success that says so. `--dap` writes the launch
   configuration instead of starting the debugger, with the case's arguments
   and environment in it; `--no-run` is refused, since one flag says "do not
@@ -311,8 +311,8 @@ bench b:spin/small ... min 1.02ms  median 1.15ms  (10 runs)
   as a finished measurement. Thresholds and regression gates are downstream
   policy, applied to the JSON
 - `--message-format=json` emits one `bench-result` line per measurement,
-  with `target` / `case` / `label` fields as in `test-result` and times as
-  **integer microseconds** (`min_us` / `median_us` / `max_us`) — rendering
+  with `target` / `case` / `label` fields as in `test-result`. Times are
+  **integer microseconds** (`min_us` / `median_us` / `max_us`); rendering
   fractional milliseconds is the reader's formatting decision
 - min approximates what the code does when the machine does not interfere;
   median, what a user sees. The mean follows outliers and is not reported
@@ -370,8 +370,8 @@ nothing to start (`not-debuggable`).
   gdb at a foreign binary, and one that declares only **half** is told which
   half is missing rather than being called empty (issue #109)
 - `debug_args` is inserted **before** the runner's own `args`, giving
-  `<command> <debug_args...> <args...> <artifact>`. It cannot go after: a
-  runner's `args` may end with the flag that takes the artifact
+  `<command> <debug_args...> <args...> <artifact>`. It cannot go after.
+  A runner's `args` may end with the flag that takes the artifact
   (`args = [..., "-kernel"]`, the shape [ADR-0008](adr/0008-runner-transfer.md)
   asks for), and anything inserted between that flag and the artifact is
   eaten as its operand (issue #107). No debugging flag changes meaning by
@@ -460,7 +460,7 @@ is ported and produces the same compile arguments" is confirmed
 mechanically.
 
 Commands are normalized before comparison, so equivalent-but-differently-
-spelled commands match: `-D NAME` / `-DNAME` / `-DNAME=1` are the same
+spelled commands match. `-D NAME` / `-DNAME` / `-DNAME=1` are the same
 define, `-I` paths are resolved against each entry's `directory`, and the
 compiler name, `-c` / `-o`, and depfile flags (`-MD` family) are ignored.
 Configuration-level flags (optimization, debug info, `NDEBUG`) are dropped
@@ -505,10 +505,11 @@ dowel migrate import build
 ```
 
 The output is a draft, not a finished artifact
-([40-migration.md](40-migration.md) section 3): it is a snapshot of one
-configuration, conditionals are lost, and the public/private intent of
-includes and defines is unknowable from the File API — everything lands in
-`private` blocks, and sources are listed explicitly rather than globbed.
+([40-migration.md](40-migration.md) section 3). It is a snapshot of one
+configuration, so conditionals are lost, and the public/private intent of
+includes and defines is unknowable from what either system reports.
+Everything therefore lands in `private` blocks, and sources are listed
+explicitly rather than globbed.
 Each generated file opens with an **UNVERIFIED DRAFT** header that says so
 and points at the follow-up:
 

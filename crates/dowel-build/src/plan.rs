@@ -374,11 +374,9 @@ pub fn plan(
                             format!("shared library `{}` declares no exports", sess.label(tid)),
                         )
                         .at(target.site.file, target.site.span, "`linkage = \"shared\"` is declared here")
-                        .note(
-                            "add `exports = [\"...\"]`; a shared library's exported symbols are its interface, \
-                             and leaving them to the platform means the same declaration exports everything \
-                             on ELF and nothing on Windows",
-                        ),
+                        .note("a shared library's exported symbols are its interface")
+                        .note("left to the platform they differ: everything on ELF, nothing on Windows")
+                        .note("add `exports = [\"...\"]`"),
                     );
                     continue;
                 }

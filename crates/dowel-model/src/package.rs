@@ -488,7 +488,8 @@ pub fn read_toolchains(
                         "the styles are: {}",
                         dowel_eval::config::Style::ALL.join(", ")
                     ))
-                    .note("the style decides how dowel spells the arguments it assembles (`-I` vs `/I`, `-o` vs `/Fo:`), not the flags you write yourself");
+                    .note("the style spells the arguments dowel assembles: `-I` vs `/I`, `-o` vs `/Fo:`")
+                    .note("the flags you write yourself pass through untouched");
                     if let Some(name) = e.value.as_str() {
                         if let Some(c) = dowel_support::diag::closest(
                             name,
