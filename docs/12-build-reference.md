@@ -446,10 +446,16 @@ error.
 
 ### The configuration vocabulary
 
-Values can branch on the build configuration through a closed, dot-separated
-vocabulary. (The vocabulary is provisional — Q1 in
-[99-open-questions.md](99-open-questions.md) — but this is what is
-implemented; `dowel schema dump` prints the live version.)
+Values can branch on the build configuration through a closed,
+dot-separated vocabulary. **Closed means nothing extends it** — not a
+toolchain, not a package, not a flag
+([ADR-0034](adr/0034-closed-vocabulary.md)). `dowel schema dump` prints the
+live version.
+
+It holds what dowel itself knows about a build. A project's own axes —
+sanitizers, LTO modes, a vendored-vs-system choice — go in `[features]`,
+which is the second layer: dowel declares what it knows, the package
+declares the rest. An unknown key says so and names the alternative.
 
 | Key | Domain | Values |
 |---|---|---|

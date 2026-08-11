@@ -480,7 +480,9 @@ impl<'a> Evaluator<'a> {
             let mut d =
                 Diagnostic::error("unknown-namespace", format!("unknown namespace `{}`", parts[0]))
                     .at(self.file, node.span, "no such namespace")
-                    .note(format!("available namespaces: {}", known.join(", ")));
+                    .note(format!("available namespaces: {}", known.join(", ")))
+                    .note(VOCABULARY_IS_CLOSED)
+                    .note(OWN_AXES_ARE_FEATURES);
             if let Some(c) = closest(parts[0], known) {
                 d = d.suggest(
                     self.file,
@@ -514,8 +516,9 @@ impl<'a> Evaluator<'a> {
             )
             .at(self.file, node.span, "this name is not in the vocabulary")
             .note(format!("`{}` accepts: {}", ns.name(), known.join(", ")))
-            .note("the vocabulary is provisional; see Q1 in docs/99-open-questions.md");
-            if let Some(c) = closest(
+            .note(VOCABULARY_IS_CLOSED)
+            .note(OWN_AXES_ARE_FEATURES);
+            match closest(
                 &key.name,
                 known_keys(ns).iter().map(|s| {
                     // `cfg.opt` から `opt` を取り出して比較する
@@ -523,12 +526,28 @@ impl<'a> Evaluator<'a> {
                     s.rsplit('.').next().unwrap_or(s)
                 }),
             ) {
-                d = d.suggest(
-                    self.file,
-                    node.span,
-                    format!("{}.{c}", ns.name()),
-                    format!("did you mean `{c}`?"),
-                );
+                Some(c) => {
+                    d = d.suggest(
+                        self.file,
+                        node.span,
+                        format!("{}.{c}", ns.name()),
+                        format!("did you mean `{c}`?"),
+                    );
+                }
+                // 打ち間違いとして近い鍵が無いなら、綴り違いではなく
+                // 「dowel が知らない軸」である。名前を当てはめて述べる。
+                //
+                // 直しとしては出さない。直しは当てれば直るものであり、これは
+                // 「次に何をするか」である——書き換えても `[features]` に
+                // 宣言が無い限り `unknown-feature` が残る（ADR-0034）。
+                None if ns != Ns::Feature => {
+                    d = d.note(format!(
+                        "for example: declare `{}` in `[features]` of dowel.toml, \
+                         then write `feature.{}`",
+                        key.name, key.name
+                    ));
+                }
+                None => {}
             }
             self.diags.push(d);
             return None;
@@ -798,6 +817,14 @@ impl<'a> Evaluator<'a> {
 fn is_pred_node(kind: NodeKind) -> bool {
     matches!(kind, NodeKind::PredOr | NodeKind::PredAnd | NodeKind::PredNot | NodeKind::PredAtom)
 }
+
+/// 語彙が閉じていることと、その外へ出る道
+/// （[ADR-0034](../../../docs/adr/0034-closed-vocabulary.md)）。
+///
+/// 「無い」とだけ言う診断は、何を書けばよいかを述べない。dowel が知らない
+/// 軸で分岐したい人は正当な要求を持っており、その置き場所は前から在る。
+const VOCABULARY_IS_CLOSED: &str = "the configuration vocabulary is closed: it holds what dowel itself knows about a build (ADR-0034)";
+const OWN_AXES_ARE_FEATURES: &str = "to vary a build on something dowel does not know, declare it in `[features]` of dowel.toml and write `feature.<name>`";
 
 /// 要素の型を1つに統一する。統一できない場合は `Unknown` とし、
 /// 型検査は代入先のスキーマが行う。

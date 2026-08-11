@@ -4,49 +4,30 @@ In priority order. The higher an item, the more it constrains later design.
 
 ## Q1. The `cfg` namespace vocabulary
 
-**Status**: partly decided. The target's own words are settled by
-[ADR-0026](adr/0026-target-os-arch.md); predicate composition and
-extensibility are still open.
+**Status**: decided. The target's own words by
+[ADR-0026](adr/0026-target-os-arch.md), predicate composition by
+[ADR-0032](adr/0032-predicate-composition.md), and extensibility by
+[ADR-0034](adr/0034-closed-vocabulary.md).
 
 The shared foundation referenced by `when` predicates in `dowel.toml`,
 `match` / `when` in `dowel.build`, toolchain selection, and ABI labels.
 
-Working draft:
+**The vocabulary is closed** and grows only by an ADR, one key at a time,
+with a domain ([ADR-0034](adr/0034-closed-vocabulary.md)). What holds it
+closed is exhaustiveness checking, findable misspellings, and a
+configuration identity that does not depend on which toolchain was
+selected. A project's own axes go in `[features]`, which is the second
+layer: dowel declares what it knows, the package declares the rest.
 
-```
-cfg.opt        configuration (debug / release / …)
-cfg.target     target triple
-target.os      OS being built for      (ADR-0026)
-target.arch    architecture built for  (ADR-0026)
-host.os        build host OS
-host.arch      build host architecture
-feature.<name> feature flag
-tc.c           the selected C toolchain
-```
+**Which further dimensions belong in it is Q2's question.** The candidates
+— standard library, CRT kind, `_GLIBCXX_USE_CXX11_ABI`, sanitizers, LTO,
+exception model — are exactly the candidate components of the ABI label.
+Adding them before knowing which ones the label needs, and at what
+granularity, would fix the granularity by accident.
 
-Settled: the target gets words of its own, derived from the triple and
-finite, so `match` on them is exhaustiveness-checked
-([ADR-0026](adr/0026-target-os-arch.md)). Before that the target could only
-be reached as a free-form triple, and the word that *read* like the OS
-(`host.os`) meant the build host — so the obvious spelling compiled and
-selected the wrong sources (issue #115).
+### The vocabulary
 
-To decide:
-
-- Which further dimensions belong in `cfg` (these become candidate
-  components of the ABI label). `target.os` / `target.arch` are the first
-  two, and are easier to compose with than a triple string
-- ~~Predicate composition rules~~ — decided by
-  [ADR-0032](adr/0032-predicate-composition.md): `and` / `or` / `not`,
-  precedence `not` > `and` > `or`, parentheses to override
-- Whether the vocabulary is fixed or extensible by toolchains
-
-### The provisional vocabulary used by the implementation
-
-To make progress, the implementation adopts the draft above verbatim as a
-**closed vocabulary** (`crates/dowel-eval/src/config.rs`). This is a
-placeholder until Q1 is decided, not the decision itself. The live version is
-available from `dowel schema dump`.
+The live version is available from `dowel schema dump`.
 
 | Namespace | Implemented keys | Domain |
 |---|---|---|
@@ -59,11 +40,16 @@ available from `dowel schema dump`.
 | `tc` | `cxx` | identifier of the selected C++ toolchain |
 
 Predicates compose with `and` / `or` / `not`
-([ADR-0032](adr/0032-predicate-composition.md)). Exhaustiveness checking of `match`
-applies to keys with finite domains (`cfg.opt` / `host.*` / `target.*`);
-`cfg.target` has an unbounded domain and requires a `_` arm. That asymmetry
-is what ADR-0026 addressed for the target: the triple stays open, and the
-distinctions that recur have finite words beside it.
+([ADR-0032](adr/0032-predicate-composition.md)). Exhaustiveness checking of
+`match` applies to keys with finite domains (`cfg.opt` / `host.*` /
+`target.*`); `cfg.target` has an unbounded domain and requires a `_` arm.
+That asymmetry is what ADR-0026 addressed for the target: the triple stays
+open, and the distinctions that recur have finite words beside it.
+
+One domain question is left open rather than settled: whether `cfg.opt`
+should hold more than `debug` / `release` (`relwithdebinfo` and friends).
+Extending a domain is a smaller question than extending the vocabulary,
+and no one has asked for it.
 
 ## Q2. ABI label composition
 

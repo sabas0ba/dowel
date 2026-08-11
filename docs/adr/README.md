@@ -40,3 +40,4 @@ was originally written in.
 | [0031](0031-toolchain-is-the-builds.md) | The toolchain is a property of the build, not of a package; the diagnostic says so | Accepted |
 | [0032](0032-predicate-composition.md) | `when` predicates compose with `and` / `or` / `not`; `match` stays the way to choose | Accepted |
 | [0033](0033-shared-toolchain-file.md) | A build can name a toolchain file it shares; the unit of override is one tool | Accepted |
+| [0034](0034-closed-vocabulary.md) | The configuration vocabulary is closed; a project's own axes are features | Accepted |
