@@ -735,8 +735,20 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   touches the network
 - Pins contain only resolved shas. A hand-written name is not resolved; the
   error points to `dowelup pin`
-- `stable` cannot resolve until a release tag appears upstream. Prebuilt
-  binary distribution is not started (Q10)
+- `stable` cannot resolve until a release tag appears upstream
+- A release specifier takes a **published binary** from the release assets,
+  verified against the `.sha256` beside it
+  ([ADR-0036](adr/0036-prebuilt-distribution.md), closing Q10); everything
+  else builds from source, and `--from-source` forces the build. That
+  removes the Rust-toolchain requirement, which was the point. The checksum
+  catches a truncated download or a stale mirror, not a compromised
+  release — whoever can replace the tarball can replace the checksum. What
+  separates the two paths is not the hash but what they prove: a source
+  build shows the binary came from *this* commit, and nothing in a
+  published asset carries that. `install` says which path it took. Assets
+  are produced by `.github/workflows/release.yml`, whose naming is the
+  same decision written in a second place, so the e2e constructs the same
+  layout to keep them from drifting
 
 ### Migration (`dowel-build`)
 
@@ -845,12 +857,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (667 tests):
+Current breakdown (674 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 348 |
+| `unit-*` | per-crate unit tests | 351 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
@@ -859,7 +871,7 @@ Current breakdown (667 tests):
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (70 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
-| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
+| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 7 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
 | `startup` | startup-time measurement (informational; machine noise does not fail the run) | — |
 
@@ -927,7 +939,7 @@ cannot be measured with the current fixtures; the scale fixture
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
-| prebuilt acquisition for `dowelup` | Q10; today source builds only |
+
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi`. Nothing verifies that a surface declaring `abi = "c"` really is `extern "C"` — the claim is narrower and more checkable than a language label, and is what an IDL or a header scan would confirm ([ADR-0019](adr/0019-c-abi-label.md)) |
 | automatic composition of the ABI label from its components | Q2; `c_std` / `cxx_std` are now typed values the label can read ([ADR-0016](adr/0016-language-standard-property.md)), but which components make up the label, and at what granularity, is still open |
 

@@ -9,6 +9,11 @@ license.workspace = true
 repository.workspace = true
 description = "Fetches, pins, and switches versions of the dowel binary."
 
+[dependencies]
+# SHA-256 のためだけに引く（ADR-0036）。ハッシュを2箇所に持つと、
+# 2つが食い違いうる。dowel-support は std だけに依る小さなクレートである。
+dowel-support.workspace = true
+
 [[bin]]
 name = "dowelup"
 path = "src/main.rs"

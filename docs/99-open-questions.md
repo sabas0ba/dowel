@@ -106,16 +106,14 @@ done.
 
 ## Q10. Prebuilt distribution for dowelup
 
-**Status**: not started. [ADR-0013](adr/0013-self-acquisition.md) defined
-source builds only.
+**Status**: decided by [ADR-0036](adr/0036-prebuilt-distribution.md).
 
-Building from source assumes a Rust toolchain. Widening the audience requires
-distributing prebuilt binaries. To decide:
+Release assets on the upstream repository, named
+`dowel-<tag>-<triple>.tar.gz`, verified against a `.sha256` published
+beside them. Release specifiers take a published binary by default;
+everything else builds from source, and `--from-source` forces it.
 
-- Where to publish (GitHub Releases or a separate endpoint)
-- How to verify (SHA-256 comparison; whether signatures are required)
-- How binaries map back to the sha source of truth (recording and checking
-  which commit a binary was built from)
-
-Fetching itself can be delegated to `curl`, but verification has to be owned
-here.
+The checksum catches corruption, not tampering, and nothing checks that a
+published binary was built from the sha it is installed as. That is the
+substantive difference between the two paths, and it is why the source
+build stays available rather than being replaced.
