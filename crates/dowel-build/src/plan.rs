@@ -155,6 +155,30 @@ pub fn plan(
     for &t in requested {
         needed.extend(graph.link_closure(t));
     }
+    // 三つ組の外にある目標は組めない。名指しされたものも、依存として
+    // 引き込まれたものも同じく断る——黙って外すと、名指しは何も作らずに
+    // 成功し、依存は undefined reference としてリンクの段に現れる
+    // （issue #126）。既定の数え上げからは呼び出し側が先に外している。
+    for &tid in &needed {
+        if supports_target(sess, tid, cfg) {
+            continue;
+        }
+        let target = sess.target(tid);
+        let declared = collect_root_strs(sess, tid, cfg, "targets");
+        let mut d = Diagnostic::error(
+            "unsupported-target",
+            format!("`{}` is not built for `{}`", sess.label(tid), cfg.target),
+        )
+        .at(
+            target.site.file,
+            target.site.span,
+            "this target declares the triples it supports",
+        );
+        for t in &declared {
+            d = d.note(format!("declared for {t}"));
+        }
+        diags.push(d);
+    }
 
     let mut plan = Plan {
         build_dir: build_dir.clone(),
@@ -900,6 +924,17 @@ fn root_value(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Option
     let value = target.root.get(name)?;
     let cfg = cfg.for_package(&sess.package(target.package).name);
     dowel_eval::specialize(value, &cfg)
+}
+
+/// この目標が、この三つ組へ組まれるか（issue #126）。
+///
+/// 書かなければ全ての三つ組が対象である。`[package] targets` と同じ綴りで、
+/// 掛かる範囲だけが違う——パッケージ全体を絞れても、複数の三つ組を支える
+/// ライブラリはそこに書けない。支えるのは4つ、その検査が動くのは3つ、と
+/// いう形が書けるようにするのがこのプロパティである。
+pub fn supports_target(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
+    let declared = collect_root_strs(sess, tid, cfg, "targets");
+    declared.is_empty() || declared.contains(&cfg.target)
 }
 
 fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Vec<String> {

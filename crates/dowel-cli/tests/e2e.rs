@@ -5229,3 +5229,203 @@ fn a_shared_library_without_exports_is_refused() {
 
     p.run(".", &["build"]).failure().stderr_contains("missing-exports");
 }
+
+/// 依存パッケージが自分の検査を持つ木（issue #126）。
+///
+/// 本体のフィクスチャにこの形が無かった。依存を持つものは「使う側が
+/// 依存の成果物を引けること」を見るので依存側に `test` を置く理由が無く、
+/// ライブラリの検査を見るものは単独のパッケージになる。
+fn a_dependency_that_has_its_own_tests(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("mylib/dowel.toml", "[package]\nname = \"mylib\"\nversion = \"0\"\n");
+    p.write(
+        "mylib/dowel.build",
+        "[lib.mylib]\nsources = [file(\"src/mylib.c\")]\n\n\
+         [lib.mylib.public]\nincludes = [dir(\"include\")]\n\n\
+         [test.libcheck]\nsources = [file(\"tests/libcheck.c\")]\n\n\
+         [test.libcheck.private]\ndeps = [target(\"mylib\")]\n",
+    );
+    p.write("mylib/include/mylib.h", "#pragma once\nint mylib_add(int, int);\n");
+    p.write(
+        "mylib/src/mylib.c",
+        "#include \"mylib.h\"\nint mylib_add(int a, int b) { return a + b; }\n",
+    );
+    p.write(
+        "mylib/tests/libcheck.c",
+        "#include \"mylib.h\"\n#include <stdio.h>\n\
+         int main(void) { printf(\"ok\\n\"); return mylib_add(1, 1) == 2 ? 0 : 1; }\n",
+    );
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"mylib\"\npath = \"../mylib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"mylib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include \"mylib.h\"\n#include <stdio.h>\n\
+         int main(void) { printf(\"v=%d\\n\", mylib_add(20, 22)); return 0; }\n",
+    );
+    p
+}
+
+#[test]
+fn building_a_consumer_does_not_build_the_dependencys_own_tests() {
+    // 使う側の build は、依存パッケージの検査まで組んでいた。ホストの
+    // 載った三つ組では余計なだけだが、OS の無い三つ組では**落ちる**
+    // ——依存の検査はホスト用に書かれており、使う側のマニフェストには
+    // 何の誤りも無い（issue #126）。
+    let p = a_dependency_that_has_its_own_tests("consumer-skips-dep-tests");
+    p.run("app", &["build"]).success();
+
+    let bin = build_dir(&p.path("app"), "debug").join("bin");
+    assert!(bin.join("app").is_file(), "the consumer's own binary was not built");
+    assert!(
+        !bin.join("libcheck").exists(),
+        "the dependency's test was built by the consumer's build"
+    );
+    // 依存のライブラリ自体は当然要る。
+    assert_eq!(run_artifact(&bin.join("app")), "v=42\n");
+}
+
+#[test]
+fn testing_a_consumer_does_not_run_the_dependencys_own_tests() {
+    // `test` も同じ立場である。依存の検査は依存の作者が走らせるもので、
+    // 使う側の `dowel test` が走らせる理由は薄い。
+    let p = a_dependency_that_has_its_own_tests("consumer-skips-dep-test-run");
+    let r = p.run("app", &["test"]);
+    r.success();
+    assert!(!r.stderr.contains("libcheck"), "the dependency's test was run:\n{}", r.stderr);
+}
+
+#[test]
+fn a_dependencys_tests_still_run_in_its_own_package() {
+    // 既定を絞っても、ライブラリの作者が自分の検査を走らせる道は変わらない。
+    let p = a_dependency_that_has_its_own_tests("dep-tests-in-place");
+    let r = p.run("mylib", &["test"]);
+    r.success();
+    assert!(r.stderr.contains("libcheck"), "the library's own test did not run:\n{}", r.stderr);
+}
+
+#[test]
+fn a_target_can_name_the_triples_it_is_built_for() {
+    // 複数の三つ組を支えるライブラリが、自分の検査だけをホストの載った
+    // 三つ組に絞れること（issue #126）。`[package] targets` はパッケージ
+    // 全体に掛かるので、ここには使えない——支えるのは全部、検査が動くのは
+    // 一部、という形が書けなかった。
+    let p = Project::new("per-target-triples");
+    // クロスの三つ組には道具立ての宣言が要る。ここで見たいのは目標の
+    // 絞り込みだけなので、ホストの道具をそのまま名指しする。
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"per-target-triples\"\nversion = \"0\"\n\n\
+         [toolchain.thumbv7em-none-eabihf]\nc = \"cc\"\nar = \"ar\"\n",
+    );
+    p.write(
+        "dowel.build",
+        &format!(
+            "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+             [test.vectors]\n\
+             sources = [file(\"tests/vectors.c\")]\n\
+             targets = [\"{}\"]\n\n\
+             [test.vectors.private]\ndeps = [target(\"core\")]\n",
+            host_triple()
+        ),
+    );
+    p.write("src/core.c", "int core_add(int a, int b) { return a + b; }\n");
+    p.write(
+        "tests/vectors.c",
+        "#include <stdio.h>\nint core_add(int, int);\n\
+         int main(void) { printf(\"ok\\n\"); return core_add(1, 1) == 2 ? 0 : 1; }\n",
+    );
+
+    // ホストの三つ組では、従来どおり数え上げられて走る。
+    let r = p.run(".", &["test"]);
+    r.success();
+    assert!(r.stderr.contains("vectors"), "the test did not run on its own triple:\n{}", r.stderr);
+
+    // 挙げられていない三つ組では、名指ししなければ**現れない**。
+    // `unsupported-target` で落ちるのではなく、対象外として外れる。
+    let r = p.run(".", &["build", "--target=thumbv7em-none-eabihf"]);
+    r.success();
+    assert!(
+        !r.stderr.contains("vectors"),
+        "the test was built for a triple it does not name:\n{}",
+        r.stderr
+    );
+}
+
+#[test]
+fn naming_a_target_outside_its_triples_is_refused() {
+    // 既定から外すのと、名指しを黙って無視するのは別である。名指しは
+    // 要求であり、応えられないなら断る——黙って何も作らずに成功すると、
+    // 「組んだつもり」が残る。
+    let p = Project::new("per-target-triples-named");
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"per-target-triples-named\"\nversion = \"0\"\n\n\
+         [toolchain.thumbv7em-none-eabihf]\nc = \"cc\"\nar = \"ar\"\n",
+    );
+    p.write(
+        "dowel.build",
+        &format!(
+            "[bin.hosted]\nsources = [file(\"src/main.c\")]\ntargets = [\"{}\"]\n",
+            host_triple()
+        ),
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["build", "hosted", "--target=thumbv7em-none-eabihf"]);
+    r.failure();
+    r.stderr_contains("unsupported-target");
+}
+
+#[test]
+fn the_missing_toolchain_error_reads_out_what_a_dependency_declares() {
+    // 「無い」と言いながら、同じ出力の中で `toolchain-mismatch` が値を
+    // 読み上げていた。助言は一般論を出し、具体的な答は手元にある
+    // ——立場を説明していない出力だった（issue #125）。
+    let p = Project::new("dep-toolchain-note");
+    p.write(
+        "mylib/dowel.toml",
+        "[package]\nname = \"mylib\"\nversion = \"0\"\n\n\
+         [toolchain.aarch64-unknown-linux-gnu]\n\
+         c  = \"aarch64-linux-gnu-gcc\"\n\
+         ar = \"aarch64-linux-gnu-ar\"\n",
+    );
+    p.write("mylib/dowel.build", "[lib.mylib]\nsources = [file(\"src/mylib.c\")]\n");
+    p.write("mylib/src/mylib.c", "int mylib_add(int a, int b) { return a + b; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"mylib\"\npath = \"../mylib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"mylib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "int mylib_add(int, int);\nint main(void) { return mylib_add(1, 1) == 2 ? 0 : 1; }\n",
+    );
+
+    let r = p.run("app", &["build", "--target=aarch64-unknown-linux-gnu"]);
+    r.failure();
+    r.stderr_contains("missing-toolchain");
+    // 具体的な値を述べること。
+    r.stderr_contains("dependency `mylib` declares one for this triple");
+    r.stderr_contains("aarch64-linux-gnu-gcc");
+    // なぜ効かないのかを述べること。探す時間が要るのはこの一文が無いためである。
+    r.stderr_contains("property of the build, not of the package");
+    // 手元に答があるときは、一般論の助言を出さない。
+    assert!(
+        !r.stderr.contains("for example `[toolchain."),
+        "the generic advice was printed although the specific answer was at hand:\n{}",
+        r.stderr
+    );
+}

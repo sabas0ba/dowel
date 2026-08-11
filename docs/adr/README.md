@@ -37,3 +37,4 @@ was originally written in.
 | [0028](0028-probe-facts.md) | What was asked of a tool is recorded outside the project, keyed by the tool's identity | Accepted |
 | [0029](0029-tarball-dependencies.md) | An archive dependency is pinned by its contents; fetching is delegated, verification is not | Accepted |
 | [0030](0030-shared-libraries.md) | A shared library declares what it exports; the linker's form of that list is generated | Accepted |
+| [0031](0031-toolchain-is-the-builds.md) | The toolchain is a property of the build, not of a package; the diagnostic says so | Accepted |

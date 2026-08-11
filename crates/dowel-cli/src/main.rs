@@ -212,7 +212,7 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
                     OutFormat::Json => dowel_model::dump::json(&sess, &g),
                 },
                 GraphKind::Action => {
-                    let requested = default_targets(&sess, &[])?;
+                    let requested = default_targets(&sess, &cfg, &[])?;
                     let (p, pdiags) = build_plan::plan(&sess, &g, &cfg, &requested);
                     sess.diagnostics.extend(pdiags);
                     if report(&sess, opts) {
@@ -243,7 +243,7 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
         }
 
         Command::Build { targets } => {
-            let requested = default_targets(&sess, targets)?;
+            let requested = default_targets(&sess, &cfg, targets)?;
             let backend = backend::select(opts.backend.as_deref(), probe)?;
             if !backend.builds() {
                 return emit_only(&mut sess, &g, &cfg, opts, &requested, &*backend);
@@ -314,7 +314,8 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
 
         Command::Bench { targets } => {
             let backend = building_backend(opts, "dowel bench", probe)?;
-            let requested = runnable_targets(&sess, targets, dowel_eval::schema::TableKind::Bench)?;
+            let requested =
+                runnable_targets(&sess, &cfg, targets, dowel_eval::schema::TableKind::Bench)?;
             // 測るものが1つも無い木は、誤りではない。宣言が無いだけである。
             if requested.targets.is_empty() {
                 if report(&sess, opts) {
@@ -350,7 +351,7 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
 
         Command::Test { targets } => {
             let backend = building_backend(opts, "dowel test", probe)?;
-            let requested = test_targets(&sess, targets)?;
+            let requested = test_targets(&sess, &cfg, targets)?;
             let build_dir = build_plan::build_dir(
                 &sess.root_package().map(|p| p.root.clone()).unwrap_or_default(),
                 &cfg,
@@ -733,11 +734,26 @@ fn configure(
                     "missing-toolchain",
                     format!("no toolchain is declared for target `{}`", cfg.target),
                 )
-                .note("building with the host toolchain would produce artifacts for the wrong architecture under this target's name")
-                .note(format!(
-                    "declare one, for example `[toolchain.{}]` with `c = \"...\"` in dowel.toml",
-                    cfg.target
-                ));
+                .note("building with the host toolchain would produce artifacts for the wrong architecture under this target's name");
+                // 依存が同じ三つ組の宣言を持っているなら、その値を述べる
+                // （issue #125）。持っていることは `toolchain-mismatch` で
+                // 別に読み上げていた——探しているものを見つけていながら
+                // 「無い」と言い、助言には一般論を出す形になっていた。
+                let from_deps = dependency_toolchains(sess, &cfg);
+                if from_deps.is_empty() {
+                    d = d.note(format!(
+                        "declare one, for example `[toolchain.{}]` with `c = \"...\"` in dowel.toml",
+                        cfg.target
+                    ));
+                } else {
+                    for line in &from_deps {
+                        d = d.note(line.clone());
+                    }
+                    d = d.note(
+                        "a dependency's toolchain does not apply to this build: it is a property \
+                         of the build, not of the package (ADR-0031). declare it here to use it",
+                    );
+                }
                 if !declared.is_empty() {
                     d = d.note(format!("toolchains are declared for: {}", declared.join(", ")));
                 }
@@ -748,24 +764,75 @@ fn configure(
     Ok((cfg, diags))
 }
 
-/// 対象の決定。指定がなければ全ての bin と test。
+/// 依存パッケージがこの三つ組の道具立てを宣言しているか（issue #125）。
+///
+/// 採りはしない——道具立ては build 全体の性質であり、依存の性質ではない
+/// （[ADR-0031](../../../docs/adr/0031-toolchain-is-the-builds.md)）。
+/// それでも、答が手元にあることは述べる。診断が「無い」と言う一方で
+/// `toolchain-mismatch` が同じ出力の中で値を読み上げている状態は、
+/// 立場を説明していない。
+fn dependency_toolchains(sess: &Session, cfg: &Config) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in sess.packages.iter().skip(1) {
+        let Some(decl) = p.toolchain_for(&cfg.target, cfg.targets_host()) else { continue };
+        let tools: Vec<String> = dowel_eval::config::TOOLS
+            .iter()
+            .filter_map(|(name, _, _)| {
+                decl.tool(name).map(|t| format!("{name} = \"{}\"", t.command))
+            })
+            .collect();
+        if tools.is_empty() {
+            continue;
+        }
+        out.push(format!(
+            "dependency `{}` declares one for this triple ({})",
+            p.name,
+            tools.join(", ")
+        ));
+    }
+    out
+}
+
+/// 名指しの無い既定が及ぶ範囲は、**この木のパッケージ**である（issue #126）。
+///
+/// 依存パッケージの目標まで数え上げると、使う側の `build` が依存の検査を
+/// 組む。ホストの載った三つ組では余計なだけだが、OS の無い三つ組では
+/// 落ちる——依存の検査はホスト用に書かれており、使う側のマニフェストには
+/// 何の誤りも無い。依存の成果物は、依存として要求されたぶんだけ組まれる。
+///
+/// 名指しは従来どおり全体から引く。依存の目標を名前で呼べることは変えない
+/// ——変えるのは既定であって、到達できる範囲ではない。
+fn in_root_package(t: &dowel_model::Target) -> bool {
+    // 根は読み込みの先頭である（`Session::root_package`）。
+    t.package == dowel_model::PackageId(0)
+}
+
+/// 対象の決定。指定がなければ、この木の全ての bin と test。
 fn default_targets(
     sess: &Session,
+    cfg: &Config,
     requested: &[String],
 ) -> Result<Vec<dowel_model::TargetId>, String> {
     if !requested.is_empty() {
         return requested.iter().map(|s| sess.find_target(s)).collect();
     }
     use dowel_eval::schema::TableKind;
+    // 三つ組の外にある目標は、名指しの無い数え上げからは**黙って外れる**
+    // （issue #126）。名指しされたときは `unsupported-target` で断る——
+    // 既定は「この構成で作れるもの」であり、名指しは要求だからである。
+    let buildable = |t: &&dowel_model::Target| {
+        in_root_package(t) && build_plan::supports_target(sess, t.id, cfg)
+    };
     let out: Vec<_> = sess
         .targets
         .iter()
+        .filter(buildable)
         .filter(|t| matches!(t.kind, TableKind::Bin | TableKind::Test | TableKind::Bench))
         .map(|t| t.id)
         .collect();
     if out.is_empty() {
-        // ライブラリしかない場合はそれを作る。
-        return Ok(sess.targets.iter().map(|t| t.id).collect());
+        // ライブラリしかない場合はそれを作る。ここもこの木の中だけ。
+        return Ok(sess.targets.iter().filter(buildable).map(|t| t.id).collect());
     }
     Ok(out)
 }
@@ -1113,19 +1180,31 @@ struct Requested {
     cases: std::collections::BTreeSet<String>,
 }
 
-fn test_targets(sess: &Session, requested: &[String]) -> Result<Requested, String> {
-    runnable_targets(sess, requested, dowel_eval::schema::TableKind::Test)
+fn test_targets(sess: &Session, cfg: &Config, requested: &[String]) -> Result<Requested, String> {
+    runnable_targets(sess, cfg, requested, dowel_eval::schema::TableKind::Test)
 }
 
 /// `test` と `bench` に共通の、目標と事例の数え上げ。
 fn runnable_targets(
     sess: &Session,
+    cfg: &Config,
     requested: &[String],
     kind: dowel_eval::schema::TableKind,
 ) -> Result<Requested, String> {
     if requested.is_empty() {
+        // 既定はこの木の中で、この三つ組へ組めるものだけ（issue #126）。
+        // 依存の検査は依存の作者が走らせる。
         return Ok(Requested {
-            targets: sess.targets.iter().filter(|t| t.kind == kind).map(|t| t.id).collect(),
+            targets: sess
+                .targets
+                .iter()
+                .filter(|t| {
+                    t.kind == kind
+                        && in_root_package(t)
+                        && build_plan::supports_target(sess, t.id, cfg)
+                })
+                .map(|t| t.id)
+                .collect(),
             cases: std::collections::BTreeSet::new(),
         });
     }
