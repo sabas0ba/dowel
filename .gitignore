@@ -11,3 +11,8 @@
 # 本システム自身が生成するもの
 .dowel/
 compile_commands.json
+
+# GitHub Pages の頁を手元で組んだときの出力
+_site/
+.jekyll-cache/
+.sass-cache/

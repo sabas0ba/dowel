@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="dowel">
+  <title>dowel</title>
+  <!-- Two members, and the dowel that joins them: the mark is the joint itself. -->
+  <g fill="#55606b">
+    <rect x="3" y="11" width="25" height="42" rx="4"/>
+    <rect x="36" y="11" width="25" height="42" rx="4"/>
+  </g>
+  <rect x="9" y="26" width="46" height="12" rx="6" fill="#d99a3c"/>
+  <!-- Flutes, the grooves that run along a real dowel pin. -->
+  <g stroke="#a86f22" stroke-width="1.6" stroke-linecap="round" opacity=".5">
+    <path d="M15 29.5h34"/>
+    <path d="M15 34.5h34"/>
+  </g>
+</svg>

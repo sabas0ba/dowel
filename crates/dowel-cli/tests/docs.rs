@@ -4,12 +4,13 @@
 //! `diagnostics.rs` の網羅検査と同じく、放置を防ぐための機械的な検査である。
 //!
 //! 対象は機械的に判定できる項目に限る。記述内容の妥当性は検査しない。
-//! 検査項目は以下の5つ。
+//! 検査項目は以下の6つ。
 //!
 //! - 相対リンクの指す先が存在すること
 //! - コードとスクリプトが名指しする文書が存在すること
 //! - `docs/README.md` の一覧が `docs/` の中身と一致すること
 //! - `docs/adr/README.md` の表が ADR の実体と一致すること
+//! - `_data/nav.yml`（サイトの目次）が `docs/` の中身と一致すること
 //! - スキーマが受け付ける鍵が `12-build-reference.md` に書かれていること
 //!
 //! 設計は [`docs/51-testing.md`](../../../docs/51-testing.md) にある。
@@ -179,6 +180,73 @@ fn the_document_map_lists_every_document() {
     assert!(
         unlisted.is_empty(),
         "these documents are not in docs/README.md:\n  {}",
+        unlisted.join("\n  ")
+    );
+}
+
+/// サイトの目次（`_data/nav.yml`）と `docs/` の対応。
+///
+/// 目次は GitHub Pages の頁の枠にしか現れないため、外れても手元では気付けない。
+/// 文書を足して載せ忘れれば、その頁はサイト上で辿れないまま残る。
+#[test]
+fn the_site_navigation_matches_the_documents() {
+    let root = repo_root();
+    let nav =
+        std::fs::read_to_string(root.join("_data/nav.yml")).expect("_data/nav.yml is missing");
+
+    // YAML の解釈はしない。`path:` の行だけを拾えば足りる。
+    let listed: Vec<String> = nav
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("path:"))
+        .map(|p| p.trim().to_string())
+        .collect();
+    assert!(
+        listed.len() >= 15,
+        "only {} entries were found; the scan is probably broken",
+        listed.len()
+    );
+
+    // サイト上の住所から、元の Markdown を導く。
+    // `/docs/adr/` のような索引は、そのディレクトリの README を指す。
+    let source_of = |path: &str| -> String {
+        let rel = path.trim_start_matches('/');
+        if let Some(dir) = rel.strip_suffix('/') {
+            format!("{dir}/README.md")
+        } else {
+            rel.replace(".html", ".md")
+        }
+    };
+
+    let mut missing = Vec::new();
+    for path in &listed {
+        let source = source_of(path);
+        if !root.join(&source).exists() {
+            missing.push(format!("  {path} -> {source}"));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "these entries of _data/nav.yml point at documents that do not exist:\n{}",
+        missing.join("\n")
+    );
+
+    // 逆方向。目次に無い文書は、サイト上で辿る道を持たない。
+    let sources: BTreeSet<String> = listed.iter().map(|p| source_of(p)).collect();
+    let mut unlisted = Vec::new();
+    for e in std::fs::read_dir(root.join("docs")).expect("cannot read docs/").flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".md") {
+            continue;
+        }
+        if !sources.contains(&format!("docs/{name}")) {
+            unlisted.push(name);
+        }
+    }
+    unlisted.sort();
+    assert!(
+        unlisted.is_empty(),
+        "these documents are not in _data/nav.yml:\n  {}",
         unlisted.join("\n  ")
     );
 }
