@@ -5429,3 +5429,61 @@ fn the_missing_toolchain_error_reads_out_what_a_dependency_declares() {
         r.stderr
     );
 }
+
+#[test]
+fn a_composed_predicate_selects_the_same_value_under_several_conditions() {
+    // 「Linux または macOS」を二行に分けて書いていた。二行は1つの意図で
+    // あり、片方だけ直しても何も言わない——読み手は右辺が一致することに
+    // 気付いて初めて論理和と読める（ADR-0032）。
+    let p = Project::new("composed-predicate");
+    p.write("dowel.toml", "[package]\nname = \"composed-predicate\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\n\
+         defines = { ON_UNIX = 1 } when target.os == \"linux\" or target.os == \"macos\"\n\
+         flags   = [\"-DNOT_WINDOWS\"] when not target.os == \"windows\"\n\
+         # 括弧が無ければ `and` が先に畳まれ、debug 以外でも付いてしまう\n\
+         c_flags = [\"-DGROUPED\"] \
+         when (target.os == \"linux\" or target.os == \"macos\") and cfg.opt == \"debug\"\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n\
+         int main(void) {\n\
+         #ifdef ON_UNIX\n  printf(\"unix\\n\");\n#endif\n\
+         #ifdef NOT_WINDOWS\n  printf(\"notwin\\n\");\n#endif\n\
+         #ifdef GROUPED\n  printf(\"grouped\\n\");\n#endif\n\
+           return 0;\n}\n",
+    );
+
+    p.run(".", &["build"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "unix\nnotwin\ngrouped\n");
+
+    // release では、括弧の中は真のまま `and` の右が偽になる。
+    p.run(".", &["build", "--config=release"]).success();
+    let bin = build_dir(&p.path("."), "release").join("bin/app");
+    assert_eq!(run_artifact(&bin), "unix\nnotwin\n");
+}
+
+#[test]
+fn a_misspelling_inside_a_composed_predicate_is_reported_at_the_leaf() {
+    // 合成の中で綴りを誤った鍵は、簡単な述語で誤ったのと同じだけ誤って
+    // いる。葉で言う方が、指す先が誤字そのものになる（ADR-0032）。
+    let p = Project::new("composed-predicate-typo");
+    p.write("dowel.toml", "[package]\nname = \"composed-predicate-typo\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\n\
+         flags = [\"-DX\"] when target.os == \"windwos\" or cfg.opt == \"debug\"\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-pattern");
+    r.stderr_contains("windwos");
+    r.stderr_contains("did you mean `windows`");
+}

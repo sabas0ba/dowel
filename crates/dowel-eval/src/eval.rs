@@ -696,7 +696,50 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// 述語の木を組む（ADR-0032）。
+    ///
+    /// 優先順位は構文解析が畳んでおり、ここは形をなぞるだけである。
+    /// 値域の検査は葉で行う——合成の中で綴りを誤った鍵は、簡単な述語で
+    /// 誤ったのと同じだけ誤っており、葉で言う方が指す先が誤字になる。
     fn pred(&mut self, clause: &Node) -> Option<Pred> {
+        // `when` 節の直下、あるいは括弧の中の最初の子が述語の根である。
+        let root = clause.nodes().find(|c| is_pred_node(c.kind))?.clone();
+        self.pred_node(&root)
+    }
+
+    fn pred_node(&mut self, node: &Node) -> Option<Pred> {
+        match node.kind {
+            NodeKind::PredOr | NodeKind::PredAnd => {
+                let mut operands = node.nodes().filter(|c| is_pred_node(c.kind));
+                let a = operands.next()?;
+                let b = operands.next()?;
+                let (a, b) = (a.clone(), b.clone());
+                // 両側を評価してから判定する。片方で早期に戻ると、もう片方の
+                // 値域の誤りが1回のビルドで報告されない。
+                let (a, b) = (self.pred_node(&a), self.pred_node(&b));
+                let (a, b) = (a?, b?);
+                Some(if node.kind == NodeKind::PredOr {
+                    Pred::Or(Box::new(a), Box::new(b))
+                } else {
+                    Pred::And(Box::new(a), Box::new(b))
+                })
+            }
+            NodeKind::PredNot => {
+                let inner = node.nodes().find(|c| is_pred_node(c.kind))?.clone();
+                Some(Pred::Not(Box::new(self.pred_node(&inner)?)))
+            }
+            NodeKind::PredAtom => {
+                // 括弧で包んだ述語なら、中の述語がそのまま値である。
+                if let Some(inner) = node.nodes().find(|c| is_pred_node(c.kind)).cloned() {
+                    return self.pred_node(&inner);
+                }
+                self.pred_leaf(node)
+            }
+            _ => None,
+        }
+    }
+
+    fn pred_leaf(&mut self, clause: &Node) -> Option<Pred> {
         let ns = clause.child(NodeKind::NsRef)?;
         let key = self.cfg_key(ns)?;
         let rhs = clause.child(NodeKind::Literal);
@@ -750,6 +793,10 @@ impl<'a> Evaluator<'a> {
             }
         }
     }
+}
+
+fn is_pred_node(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::PredOr | NodeKind::PredAnd | NodeKind::PredNot | NodeKind::PredAtom)
 }
 
 /// 要素の型を1つに統一する。統一できない場合は `Unknown` とし、

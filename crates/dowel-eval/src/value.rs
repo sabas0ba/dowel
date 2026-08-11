@@ -185,26 +185,62 @@ impl CfgKey {
     }
 }
 
-/// `when` の述語。合成は暗黙の AND のみ（Q1 の暫定）。
+/// `when` の述語（[ADR-0032](../../../docs/adr/0032-predicate-composition.md)）。
+///
+/// 合成は `and` / `or` / `not`。優先順位は `not` > `and` > `or` で、
+/// 構文解析の段で木になっている——ここに優先順位の知識は無い。
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Pred {
     /// `when feature.zlib` — 真偽として読む
     Flag(CfgKey),
     /// `when cfg.opt == "release"`
     Eq(CfgKey, String),
+    Not(Box<Pred>),
+    And(Box<Pred>, Box<Pred>),
+    Or(Box<Pred>, Box<Pred>),
 }
 
 impl Pred {
     pub fn display(&self) -> String {
-        match self {
-            Pred::Flag(k) => k.display(),
-            Pred::Eq(k, v) => format!("{} == {:?}", k.display(), v),
+        self.render(0)
+    }
+
+    /// 括弧は必要なときだけ置く。`prec` は置かれている場所の結合の強さ
+    /// （0 = `or` の中、1 = `and` の中、2 = `not` の直下）。
+    ///
+    /// 書かれたとおりに再現するのではなく、意味から綴り直す。読み手が
+    /// 見るのは診断と `dowel why` であり、そこで要るのは「どう解釈されたか」
+    /// である。
+    fn render(&self, prec: u8) -> String {
+        let (text, own) = match self {
+            Pred::Flag(k) => (k.display(), 3),
+            Pred::Eq(k, v) => (format!("{} == {:?}", k.display(), v), 3),
+            Pred::Not(p) => (format!("not {}", p.render(2)), 2),
+            Pred::And(a, b) => (format!("{} and {}", a.render(1), b.render(1)), 1),
+            Pred::Or(a, b) => (format!("{} or {}", a.render(0), b.render(0)), 0),
+        };
+        if own < prec {
+            format!("({text})")
+        } else {
+            text
         }
     }
 
-    pub fn key(&self) -> &CfgKey {
+    /// この述語が読む構成の鍵。宣言順、重複はそのまま。
+    pub fn keys(&self) -> Vec<&CfgKey> {
+        let mut out = Vec::new();
+        self.collect_keys(&mut out);
+        out
+    }
+
+    fn collect_keys<'a>(&'a self, out: &mut Vec<&'a CfgKey>) {
         match self {
-            Pred::Flag(k) | Pred::Eq(k, _) => k,
+            Pred::Flag(k) | Pred::Eq(k, _) => out.push(k),
+            Pred::Not(p) => p.collect_keys(out),
+            Pred::And(a, b) | Pred::Or(a, b) => {
+                a.collect_keys(out);
+                b.collect_keys(out);
+            }
         }
     }
 }

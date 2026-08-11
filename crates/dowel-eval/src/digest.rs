@@ -92,6 +92,11 @@ fn pred_key(p: &Pred) -> String {
     match p {
         Pred::Flag(k) => k.display(),
         Pred::Eq(k, v) => format!("{}=={v:?}", k.display()),
+        // 括弧を書く。`a and (b or c)` と `(a and b) or c` が同じ綴りに
+        // 潰れると、片方への変更が早期打ち切りに吸われる
+        Pred::Not(p) => format!("!({})", pred_key(p)),
+        Pred::And(a, b) => format!("({}&&{})", pred_key(a), pred_key(b)),
+        Pred::Or(a, b) => format!("({}||{})", pred_key(a), pred_key(b)),
     }
 }
 

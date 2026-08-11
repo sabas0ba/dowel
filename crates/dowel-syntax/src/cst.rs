@@ -32,6 +32,14 @@ pub enum NodeKind {
     Pattern,
     /// `when feature.zlib`
     WhenClause,
+    /// `a or b`（[ADR-0032](../../../docs/adr/0032-predicate-composition.md)）
+    PredOr,
+    /// `a and b`
+    PredAnd,
+    /// `not a`
+    PredNot,
+    /// 述語の葉。`<鍵>`、`<鍵> == "値"`、または括弧で包んだ述語
+    PredAtom,
     /// `when` を後置された式。`WhenClause` と被修飾式を子に持つ
     WhenExpr,
     /// `cfg.opt`, `feature.zlib`

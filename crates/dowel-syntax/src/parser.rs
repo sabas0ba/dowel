@@ -330,6 +330,77 @@ impl<'a> Parser<'a> {
         let at = self.nth_token(0).span.start;
         self.builder.start_node(NodeKind::WhenClause, at);
         self.bump(); // `when`
+        self.pred_or();
+        self.builder.finish_node();
+    }
+
+    /// `a or b`。優先順位は `not` > `and` > `or`（ADR-0032）。
+    ///
+    /// 演算子は語であって記号ではない。周りの言語の演算子（`when` / `match`
+    /// / `glob`）が語であり、`&&` は別の言語を差し込んだように読める。
+    ///
+    /// どの段でも**改行を跨がない**。`when` 自身が跨がないのと同じ理由による
+    /// ——次の行の鍵がたまたま `or` だったときに、それを演算子として食べる。
+    fn pred_or(&mut self) {
+        self.skip_trivia();
+        let cp = self.builder.checkpoint();
+        self.pred_and();
+        while !self.newline_before_next() && self.at_keyword(0, "or") {
+            self.builder.start_node_at(cp, NodeKind::PredOr);
+            self.bump(); // `or`
+            self.pred_and();
+            self.builder.finish_node();
+        }
+    }
+
+    fn pred_and(&mut self) {
+        self.skip_trivia();
+        let cp = self.builder.checkpoint();
+        self.pred_unary();
+        while !self.newline_before_next() && self.at_keyword(0, "and") {
+            self.builder.start_node_at(cp, NodeKind::PredAnd);
+            self.bump(); // `and`
+            self.pred_unary();
+            self.builder.finish_node();
+        }
+    }
+
+    fn pred_unary(&mut self) {
+        self.skip_trivia();
+        if self.at_keyword(0, "not") {
+            let at = self.nth_token(0).span.start;
+            self.builder.start_node(NodeKind::PredNot, at);
+            self.bump(); // `not`
+            self.pred_unary();
+            self.builder.finish_node();
+            return;
+        }
+        self.pred_atom();
+    }
+
+    fn pred_atom(&mut self) {
+        self.skip_trivia();
+        let at = self.nth_token(0).span.start;
+        self.builder.start_node(NodeKind::PredAtom, at);
+        if self.nth(0) == TokenKind::LParen {
+            self.bump(); // `(`
+            self.pred_or();
+            self.skip_trivia();
+            if self.nth(0) == TokenKind::RParen {
+                self.bump();
+            } else {
+                let t = self.nth_token(0);
+                self.err_at(
+                    t.span,
+                    "expected-close",
+                    "expected `)` to close the predicate",
+                    "write `)`",
+                );
+                self.recover(&[TokenKind::Comma, TokenKind::RBracket]);
+            }
+            self.builder.finish_node();
+            return;
+        }
         self.ns_ref();
         if self.nth(0) == TokenKind::EqEq {
             self.bump();
@@ -722,6 +793,76 @@ mod tests {
         assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
         assert_eq!(parsed.root.children_of(NodeKind::KeyValue).count(), 2);
         assert!(parsed.root.child(NodeKind::WhenExpr).is_none());
+        assert_lossless(src);
+    }
+
+    #[test]
+    fn a_predicate_binds_not_tighter_than_and_tighter_than_or() {
+        // `a or b and c` は `a or (b and c)` である（ADR-0032）。
+        let src =
+            "flags = [\"-x\"] when cfg.opt == \"debug\" or target.os == \"linux\" and feature.z\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let clause = parsed
+            .root
+            .child(NodeKind::KeyValue)
+            .unwrap()
+            .child(NodeKind::WhenExpr)
+            .unwrap()
+            .child(NodeKind::WhenClause)
+            .unwrap();
+        // 根は `or`、その右側が `and`。逆に畳んでいれば根が `and` になる。
+        let or = clause.child(NodeKind::PredOr).expect("the root should be `or`");
+        assert!(or.child(NodeKind::PredAnd).is_some(), "{}", parsed.root.debug_tree(src));
+        assert_lossless(src);
+    }
+
+    #[test]
+    fn parentheses_override_the_precedence() {
+        let src = "flags = [\"-x\"] when (cfg.opt == \"debug\" or target.os == \"linux\") and feature.z\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let clause = parsed
+            .root
+            .child(NodeKind::KeyValue)
+            .unwrap()
+            .child(NodeKind::WhenExpr)
+            .unwrap()
+            .child(NodeKind::WhenClause)
+            .unwrap();
+        // 今度は根が `and`。
+        assert!(clause.child(NodeKind::PredAnd).is_some(), "{}", parsed.root.debug_tree(src));
+        assert!(clause.child(NodeKind::PredOr).is_none());
+        assert_lossless(src);
+    }
+
+    #[test]
+    fn not_binds_to_one_atom() {
+        let src = "flags = [\"-x\"] when not target.os == \"windows\" and feature.z\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        let clause = parsed
+            .root
+            .child(NodeKind::KeyValue)
+            .unwrap()
+            .child(NodeKind::WhenExpr)
+            .unwrap()
+            .child(NodeKind::WhenClause)
+            .unwrap();
+        // `(not a) and b` であり、`not (a and b)` ではない。
+        let and = clause.child(NodeKind::PredAnd).expect("the root should be `and`");
+        assert!(and.child(NodeKind::PredNot).is_some(), "{}", parsed.root.debug_tree(src));
+        assert_lossless(src);
+    }
+
+    #[test]
+    fn a_predicate_does_not_cross_a_newline_either() {
+        // `when` 自身と同じ規則。次の行の鍵がたまたま `or` のとき、
+        // それを演算子として食べてはならない。
+        let src = "flags = [\"-x\"] when feature.z\nor      = \"yes\"\n";
+        let parsed = p(src);
+        assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+        assert_eq!(parsed.root.children_of(NodeKind::KeyValue).count(), 2);
         assert_lossless(src);
     }
 
