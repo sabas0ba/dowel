@@ -58,6 +58,32 @@ README becomes that directory's index page. Documents are written with
 relative links only, so they read the same on the repository and on the site
 without a separate build step.
 
+The site carries its own theme rather than a theme gem, so what the page
+looks like is readable from this repository alone.
+
+Paths below are relative to the repository root. They are not part of the
+published site, so they are named rather than linked.
+
+| Path | Contents |
+|---|---|
+| `_layouts/` | The page frame: masthead, cover, footer |
+| `_includes/` | The sidebar, built from the list below |
+| `_data/nav.yml` | The order of documents in the sidebar |
+| `assets/` | Styles, the mark, and the script that adds the per-page contents |
+
+Two things are worth knowing before moving the site.
+
+- `baseurl` in `_config.yml` is the path the site is served under
+  (`/dowel`). GitHub Pages does not set it, and every link inside the
+  documents is resolved through it. Serving the site under a domain of its
+  own means emptying it
+- `_data/nav.yml` is the one place that repeats the document list. Its
+  entries are checked against `docs/` in both directions by
+  [`crates/dowel-cli/tests/docs.rs`](../crates/dowel-cli/tests/docs.rs)
+
+Building the site locally needs Jekyll, which is not part of the development
+environment; the published site is built by GitHub Pages.
+
 ## Numbering convention
 
 The tens digit is the subject; the ones digit distinguishes documents within
@@ -130,6 +156,7 @@ be judged mechanically.
 | Documents named from sources and scripts | A document number changed while a non-link reference remained |
 | The index above | A document was added but not listed, or removed while its entry remained |
 | The table in [adr/README.md](adr/README.md) | An ADR was added but not listed, or the reverse |
+| The site sidebar (`_data/nav.yml`) | A document was added but not listed, or an entry points at a document that is gone |
 | The crate table in [91-implementation-status.md](91-implementation-status.md) | A crate was added but not listed, or the reverse |
 
 The correctness of the prose itself is not checked. The design is described in

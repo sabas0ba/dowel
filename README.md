@@ -1,3 +1,5 @@
+<p class="readme-hero"><img src="assets/img/dowel-mark.svg" alt="" width="76" height="76"></p>
+
 # dowel
 
 A build system for C and C++. Positioned as an alternative to

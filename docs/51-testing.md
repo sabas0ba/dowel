@@ -88,6 +88,9 @@ is not validated.
 - The index in `docs/README.md` matches the contents of `docs/`
 - The table in `docs/adr/README.md` matches the ADRs on disk (both
   directions)
+- The sidebar of the published site (`_data/nav.yml`) matches `docs/` (both
+  directions). The sidebar only exists on the site, so a document left out of
+  it is unreachable there while everything looks fine in the repository
 - The crate table in `docs/91-implementation-status.md` matches `crates/`
   (both directions)
 - Every property the schema accepts has a row in the matching section of

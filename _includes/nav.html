@@ -1,0 +1,15 @@
+{%- comment -%}
+_data/nav.yml を辿るだけ。現在地は住所の完全一致で判定する。前方一致だと
+`/docs/` が配下の全頁に当たる。
+{%- endcomment -%}
+{%- for group in site.data.nav %}
+<p class="sidebar__section">{{ group.section }}</p>
+<ul class="sidebar__list">
+  {%- for item in group.items %}
+  <li>
+    <a href="{{ item.path | relative_url }}"
+       {%- if page.url == item.path %} class="is-current" aria-current="page"{% endif %}>{{ item.title }}</a>
+  </li>
+  {%- endfor %}
+</ul>
+{%- endfor %}

@@ -5,8 +5,23 @@
 # are spelled out so a local preview (jekyll serve) behaves the same way.
 title: dowel
 description: A build system for C and C++ (under development)
+tagline: >-
+  A build system for C and C++. Incremental evaluation, values that carry a
+  type and a provenance, and the developer tooling shipped as one unit.
 lang: en
-theme: jekyll-theme-primer
+repository: sabas0ba/dowel
+
+# The path the site is served under. GitHub Pages does *not* set this by
+# itself, and jekyll-relative-links resolves every link in the documents
+# through it, so leaving it empty publishes links that point one level above
+# the site (`/docs/…` instead of `/dowel/docs/…`).
+# Serving under a domain of its own means emptying this.
+baseurl: /dowel
+
+# No gem theme. The layouts, styles and assets in this repository are the
+# theme: `_layouts/`, `_includes/`, `_data/nav.yml`, `assets/`. Everything is
+# addressed relative to the current page, so the site works both at
+# `<user>.github.io/dowel/` and at the root of a domain of its own.
 
 markdown: kramdown
 kramdown:
@@ -26,9 +41,30 @@ relative_links:
 readme_index:
   enabled: true
 
+# jekyll-optional-front-matter leaves every README to jekyll-readme-index,
+# and that plugin reads `docs/README.md` as a candidate index for the site
+# root — where the repository README wins, and the document index is left
+# out of the site altogether. Naming it here hands it back to
+# jekyll-optional-front-matter, which publishes it as `docs/README.html`.
+include:
+  - docs/README.md
+  # Files the documents link to that Jekyll would otherwise drop: names
+  # starting with `_` or `.` are excluded by default.
+  - _config.yml
+  - .github/workflows/verify.yml
+
+# The leading heading becomes the page title, and the layout is what prints
+# it. Left in place it would be printed twice.
+titles_from_headings:
+  enabled: true
+  strip_title: true
+
 # Excluded from the site. Sources linked from the documents (crates/ etc.)
 # stay included.
 exclude:
   - target
   - .work
   - vendor
+  - Cargo.lock
+  - Makefile
+  - rustfmt.toml

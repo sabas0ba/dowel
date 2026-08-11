@@ -1,0 +1,62 @@
+# サイドバーの並び。docs/README.md の区分と同じ順に並べる。
+#
+# 索引（docs/README.md）は文書間のリンクで、こちらは頁の枠。二重に持つのは
+# 冗長だが、Liquid で見出しから並び順を導くと文書側の書式に縛りが増える。
+# 代わりに、この一覧が指す先の存在は crates/dowel-cli/tests/docs.rs が見る。
+#
+# `path` はサイトの根からの住所（`.md` ではなく `.html`）。`baseurl` は雛形側で
+# 足すため、ここには書かない。`docs/adr/` のように README がその索引になる
+# ディレクトリは末尾を `/` にする（`docs/` だけは事情が異なる。_config.yml の
+# `include` の項を参照）。
+
+- section: Start here
+  items:
+    - title: Overview
+      path: /docs/00-overview.html
+    - title: Getting started
+      path: /docs/62-getting-started.html
+    - title: Guides
+      path: /docs/63-guides.html
+    - title: Installing dowel
+      path: /docs/61-acquisition.html
+
+- section: Reference
+  items:
+    - title: The manifest model
+      path: /docs/10-manifest.html
+    - title: dowel.toml
+      path: /docs/11-toml-reference.html
+    - title: dowel.build
+      path: /docs/12-build-reference.html
+    - title: Semantics
+      path: /docs/13-semantics.html
+    - title: The build graph
+      path: /docs/14-build-graph.html
+    - title: Command line
+      path: /docs/60-cli.html
+    - title: Implementation status
+      path: /docs/91-implementation-status.html
+
+- section: Design
+  items:
+    - title: Architecture
+      path: /docs/20-architecture.html
+    - title: Developer experience
+      path: /docs/30-devexp.html
+    - title: Migration
+      path: /docs/40-migration.html
+    - title: Decision records
+      path: /docs/adr/
+    - title: Roadmap
+      path: /docs/90-roadmap.html
+    - title: Open questions
+      path: /docs/99-open-questions.html
+
+- section: This repository
+  items:
+    - title: Document index
+      path: /docs/README.html
+    - title: Development
+      path: /docs/50-development.html
+    - title: Testing
+      path: /docs/51-testing.html
