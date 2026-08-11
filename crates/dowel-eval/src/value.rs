@@ -136,7 +136,10 @@ impl PathValue {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Ns {
     Cfg,
+    /// 組む側の機械（[ADR-0026](../../../docs/adr/0026-target-os-arch.md)）
     Host,
+    /// 組む**相手**。値は `--target` の三つ組から導かれる
+    Target,
     Feature,
     Tc,
     /// パッケージの定数（[ADR-0020](../../../docs/adr/0020-package-constants.md)）。
@@ -150,6 +153,7 @@ impl Ns {
         match s {
             "cfg" => Some(Ns::Cfg),
             "host" => Some(Ns::Host),
+            "target" => Some(Ns::Target),
             "feature" => Some(Ns::Feature),
             "tc" => Some(Ns::Tc),
             "pkg" => Some(Ns::Pkg),
@@ -161,6 +165,7 @@ impl Ns {
         match self {
             Ns::Cfg => "cfg",
             Ns::Host => "host",
+            Ns::Target => "target",
             Ns::Feature => "feature",
             Ns::Tc => "tc",
             Ns::Pkg => "pkg",

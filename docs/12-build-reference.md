@@ -46,15 +46,22 @@ fails type checking with a suggestion.
 | kind | Meaning | Artifact | Status |
 |---|---|---|---|
 | `lib` | static library | `lib<name>.a` | implemented |
-| `bin` | executable | `bin/<name>` | implemented |
-| `test` | test executable; run by `dowel test`, exit status 0 = pass | `bin/<name>` | implemented |
-| `bench` | benchmark executable; measured by `dowel bench` ([ADR-0025](adr/0025-bench-wall-clock.md)) | `bin/<name>` | implemented |
+| `bin` | executable | `bin/<name>`, `bin/<name>.exe` on Windows | implemented |
+| `test` | test executable; run by `dowel test`, exit status 0 = pass | `bin/<name>`, `.exe` on Windows | implemented |
+| `bench` | benchmark executable; measured by `dowel bench` ([ADR-0025](adr/0025-bench-wall-clock.md)) | `bin/<name>`, `.exe` on Windows | implemented |
 | `template` | non-recursive reuse unit | — | reserved, not implemented |
 | `toolchain` | toolchain description | — | reserved, not implemented |
 | `runner` | execution wrapper; the name is a **target triple**, not a target name | none | implemented |
 
 Targets are referenced as `<name>` or `<package>:<name>` on the command
 line, and via `target("name")` / `dep("package")` in properties.
+
+The executable's spelling follows `target.os`: a Windows target produces
+`bin/<name>.exe`, because that is what the compiler driver writes. The
+spelling is decided in one place, so the runner, `artifacts`, `inspect`,
+`dowel debug`, the `built:` line, and the freshness fingerprint all read the
+same value — when they did not, the build looked fine and everything
+afterwards was handed a path that did not exist (issue #112).
 
 **A target's name is unique within its package**, across kinds: a package
 cannot hold both `[lib.foo]` and `[bin.foo]`. The second declaration is
@@ -384,12 +391,34 @@ implemented; `dowel schema dump` prints the live version.)
 |---|---|---|
 | `cfg.opt` | finite | `debug`, `release` (selected by `--config`) |
 | `cfg.target` | open | the target triple (selected by `--target`); `match` on it requires a `_` arm |
-| `host.os` | finite | `linux`, `macos`, `windows` |
+| `target.os` | finite | `linux`, `macos`, `windows`, `none` (bare metal), `other` — the OS **being built for**, read off the triple |
+| `target.arch` | finite | `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `other` — the architecture being built for |
+| `host.os` | finite | `linux`, `macos`, `windows` — the machine **doing the building** |
 | `host.arch` | finite | `x86_64`, `aarch64`, `riscv64` |
 | `feature.<name>` | boolean | feature flags declared in `[features]` of `dowel.toml`; undeclared names are diagnosed with a suggestion |
 | `tc.c` | open | identifier of the selected C toolchain |
 | `tc.cxx` | open | identifier of the selected C++ toolchain |
 | `tc.ar` | open | identifier of the selected archiver |
+
+`target.*` and `host.*` are a pair and answer different questions
+([ADR-0026](adr/0026-target-os-arch.md)). Selecting an implementation per
+operating system wants `target.os`:
+
+```toml
+sources = [file("src/text.c"), match target.os {
+    windows => file("src/plat_win.c"),
+    _       => file("src/plat_posix.c"),
+}]
+```
+
+Writing `host.os` there compiles and picks the build machine's answer, which
+is why the words are spelled apart. `host.*` is for questions about the
+machine doing the work — whether the artifact could be run here, whether a
+tool exists on it. Both domains are finite, so a `match` that covers every
+value needs no `_` and a new value breaks the manifest instead of falling
+into a default. `other` exists because `--target` takes any string: a triple
+with no word of its own has to land somewhere, and specificity beyond these
+words is what `cfg.target` is for.
 
 ### Package constants
 
