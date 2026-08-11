@@ -5627,8 +5627,7 @@ fn an_unknown_configuration_key_says_where_a_projects_own_axis_goes() {
     let r = p.run(".", &["check"]);
     r.failure();
     r.stderr_contains("unknown-cfg-key");
-    r.stderr_contains("the configuration vocabulary is closed");
-    r.stderr_contains("declare it in `[features]`");
+    r.stderr_contains("the vocabulary is closed");
     // 打ち間違いとして近い鍵が無いので、名前を当てはめて導く。
     r.stderr_contains("declare `sanitizer` in `[features]`");
     r.stderr_contains("write `feature.sanitizer`");

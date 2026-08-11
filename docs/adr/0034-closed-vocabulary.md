@@ -2,119 +2,84 @@
 
 **Status**: Accepted
 
-Closes [Q1](../99-open-questions.md). The target's own words were settled
-by [ADR-0026](0026-target-os-arch.md) and predicate composition by
-[ADR-0032](0032-predicate-composition.md); this decides the last part —
-whether the vocabulary is fixed or extensible — and hands the remaining
-"which further dimensions" question to Q2, where it belongs.
+Closes [Q1](../99-open-questions.md), whose other parts were settled by
+[ADR-0026](0026-target-os-arch.md) and
+[ADR-0032](0032-predicate-composition.md).
 
 ## Context
 
-`cfg` / `host` / `target` / `tc` are a closed set of keys with declared
-domains. The implementation adopted the draft vocabulary "provisionally",
-and the diagnostic said so:
+`cfg` / `host` / `target` / `tc` is a closed set of keys with declared
+domains. The open question was whether anything should be able to add to
+it.
+
+The diagnostic is what made the question urgent. Someone wanting to vary a
+build on a sanitizer was told:
 
 ```
 error[unknown-cfg-key]: unknown configuration key `cfg.sanitizer`
-  = note: `cfg` accepts: cfg.opt, cfg.target
   = note: the vocabulary is provisional; see Q1 in docs/99-open-questions.md
 ```
 
-The open question was whether a toolchain — or a project — should be able
-to add keys to it.
-
-The message above is what makes the question urgent rather than academic.
-Someone who wants to vary a build on a sanitizer reads it, learns that
-their spelling is not allowed, and is told to consult an open-questions
-document. **It never says what to write instead**, even though dowel has
-had the answer since features existed.
+Their spelling is refused and they are sent to an open-questions document.
+**It never says what to write instead** — though the answer, `[features]`,
+has existed all along.
 
 ## Decision
 
-**The vocabulary is closed. Nothing extends it — not a toolchain, not a
-package, not a command-line flag.**
+**The vocabulary is closed.** Nothing extends it: not a toolchain, not a
+package, not a flag. Three things depend on that:
 
-What holds it closed is what it buys:
-
-- **Exhaustiveness checking.** `match target.os { … }` is checked against
-  a finite domain known at type-check time
-  ([ADR-0026](0026-target-os-arch.md)). A vocabulary that a toolchain can
-  extend has no domain until a toolchain is selected, and selection
-  happens after evaluation — so the check would have to be dropped, for
-  every key, to admit keys nobody has yet asked for.
-- **Misspellings stay findable.** `cfg.taget` is an error with a
-  suggestion. If unknown keys might be legitimate extensions, the only
-  honest response to an unknown key is to accept it, and every typo
+- **Exhaustiveness checking.** `match target.os { … }` is checked against a
+  domain known at type-check time. An extensible vocabulary has no domain
+  until a toolchain is selected, and that happens after evaluation — so the
+  check would have to go, for every key.
+- **Findable misspellings.** If unknown keys might be legitimate
+  extensions, the only honest response is to accept them, and `cfg.taget`
   becomes a predicate that is quietly false.
-- **Configuration identity stays computable.** The build directory and the
-  stored evaluation are keyed on the configuration. Keys that appear
-  depending on which toolchain was picked make the identity depend on the
-  answer to a question asked later.
+- **Computable configuration identity.** The build directory and the stored
+  evaluation are keyed on the configuration. Keys that appear depending on
+  the toolchain make identity depend on a later answer.
 
-**A project's own axes are features, and that is a second layer, not a
-workaround.** The two layers differ in who knows the axis:
+**A project's own axes are features** — a second layer, not a workaround.
+The two differ in who knows the axis:
 
-| Layer | Who declares it | Domain | Checked how |
-|---|---|---|---|
-| `cfg` / `host` / `target` / `tc` | dowel | fixed, mostly finite | vocabulary + exhaustiveness |
-| `feature.<name>` | the package, in `[features]` | boolean | the name must be declared |
+| Layer | Declared by | Domain |
+|---|---|---|
+| `cfg` / `host` / `target` / `tc` | dowel | fixed, mostly finite |
+| `feature.<name>` | the package, in `[features]` | boolean |
 
-A sanitizer, an LTO mode, a vendored-vs-system choice — these are the
-project's axes, and `[features]` is where a project declares its axes.
-Where the axis is a choice rather than an addition, `[features]
-exclusive` states that ([ADR-0021](0021-exclusive-features.md)), which is
-how an enumerated axis is spelled without features stopping being
-additive.
+Sanitizers, LTO modes, vendored-vs-system: these are the project's axes.
+Where the axis is a choice rather than an addition, `[features] exclusive`
+says so ([ADR-0021](0021-exclusive-features.md)).
 
-**The diagnostic carries the way out.** "Provisional; see Q1" is replaced by
-the rule and the alternative:
+**The diagnostic names the alternative**, filling in the key that was
+written:
 
 ```
-error[unknown-cfg-key]: unknown configuration key `cfg.sanitizer`
-  = note: `cfg` accepts: cfg.opt, cfg.target
-  = note: the configuration vocabulary is closed: it holds what dowel itself knows about a build (ADR-0034)
-  = note: to vary a build on something dowel does not know, declare it in `[features]` of dowel.toml and write `feature.sanitizer`
+  = note: the vocabulary is closed: it holds what dowel knows about a build (ADR-0034)
+  = note: for your own axes, declare `sanitizer` in `[features]` and write `feature.sanitizer`
 ```
 
-When no vocabulary key is close enough to be a plausible typo, the note
-fills the name in: *declare `sanitizer` in `[features]`, then write
-`feature.sanitizer`*.
+It is a note, not a fix. A fix leaves the file correct; rewriting the key
+leaves `unknown-feature` behind, since the feature still has to be
+declared. dowel's own property test — *applying a suggestion introduces no
+other diagnostic* — rejected the first draft, which offered it as one.
 
-It is a note and not a **fix**, deliberately. A fix is something that,
-applied, leaves the file correct; rewriting the key to `feature.sanitizer`
-leaves `unknown-feature` behind, because the feature still has to be
-declared. dowel's own property test — "applying a suggestion introduces no
-other diagnostic" — rejects the first draft of this change, which offered
-the rewrite as a fix. The message cannot know whether the feature exists:
-`unknown-cfg-key` is raised while evaluating `dowel.build`, which does not
-read `[features]`.
-
-`unknown-namespace` carries the same note, since `platform.os` is the same
-mistake made one level up.
-
-**Which further dimensions belong in the vocabulary is Q2's question, not
-Q1's.** The candidates — C++ standard library, CRT kind,
-`_GLIBCXX_USE_CXX11_ABI`, sanitizers, LTO, exception model — are exactly
-the candidate components of the ABI label. Adding them here, before
-knowing which ones the label needs and at what granularity, would fix the
-granularity by accident. Q1 asked whether the vocabulary can grow at all;
-the answer is that it grows only by a decision recorded here, one key at a
-time, with a domain.
+**Which further dimensions belong in the vocabulary is Q2's question.** The
+candidates (standard library, CRT kind, sanitizers, LTO, exception model)
+are the candidate components of the ABI label. Adding them before knowing
+what the label needs would fix its granularity by accident.
 
 ## Consequences
 
-- The vocabulary is now a commitment rather than a placeholder. Adding a
-  key is an ADR — which is the intended weight, since each key is a
-  dimension every manifest may branch on and a candidate component of the
-  ABI label.
-- Projects needing an axis dowel does not have are not blocked, and the
-  error now says how. What they lose relative to a real key is
-  exhaustiveness checking over a value set: `exclusive` states that two
-  features conflict, not that one of them is always on.
-- `dowel schema dump` continues to be the live source for the vocabulary,
-  so a tool never needs this document's copy of the table.
-- Not decided: whether `cfg.opt` should hold more than `debug` /
-  `release`. It is a finite domain that a project might reasonably want to
-  extend (`relwithdebinfo`), and extending a *domain* is a smaller
-  question than extending the vocabulary — but it is still a decision
-  about what dowel knows, and no one has asked for it yet.
+- The vocabulary is a commitment, not a placeholder. Adding a key is an
+  ADR — the intended weight, since each key is a dimension every manifest
+  may branch on.
+- Projects needing an axis dowel lacks are not blocked, and the error says
+  how. What they lose is exhaustiveness over a value set: `exclusive` says
+  two features conflict, not that one is always on.
+- `dowel schema dump` remains the live source, so no tool needs this
+  document's copy of the table.
+- Left open: whether `cfg.opt` should hold more than `debug` / `release`.
+  Widening a *domain* is a smaller question than widening the vocabulary,
+  and no one has asked.

@@ -276,19 +276,15 @@ changes, only the speed.
   (issue #115). `other` is in both domains because `--target` takes any
   string, and a domain that cannot be closed brings back the `_` arm
 - The vocabulary is **closed** ([ADR-0034](adr/0034-closed-vocabulary.md),
-  which settles the last of Q1): nothing extends it — not a toolchain, not
-  a package, not a flag. What holds it closed is exhaustiveness checking
-  (a domain a toolchain can extend has no domain until a toolchain is
-  selected, which happens after evaluation), findable misspellings (if
-  unknown keys might be extensions, every typo becomes a quietly false
-  predicate), and a configuration identity that does not depend on a
-  question answered later. A project's own axes are `[features]`, and the
-  diagnostic now says so — it used to answer "the vocabulary is
-  provisional; see Q1", which told a reader their spelling was wrong and
-  not what to write. The pointer is a note rather than a fix: rewriting
-  `cfg.sanitizer` to `feature.sanitizer` leaves `unknown-feature` behind,
-  and the property test for suggestions rejected the first attempt to
-  offer it as one
+  settling the last of Q1): nothing extends it. Three things depend on
+  that — exhaustiveness checking, findable misspellings, and a
+  configuration identity that does not depend on which toolchain was
+  picked. A project's own axes are `[features]`, and the diagnostic now
+  says so instead of answering "the vocabulary is provisional; see Q1",
+  which told a reader their spelling was wrong but not what to write. It
+  is a note, not a fix: rewriting `cfg.sanitizer` to `feature.sanitizer`
+  leaves `unknown-feature` behind, and the property test for suggestions
+  rejected the first attempt to offer it as one
 - The executable's spelling follows `target.os`: `bin/<name>.exe` for a
   Windows target, decided in one place so the runner, `artifacts`,
   `inspect`, `dowel debug`, the `built:` line, and the freshness

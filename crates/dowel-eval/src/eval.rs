@@ -516,8 +516,7 @@ impl<'a> Evaluator<'a> {
             )
             .at(self.file, node.span, "this name is not in the vocabulary")
             .note(format!("`{}` accepts: {}", ns.name(), known.join(", ")))
-            .note(VOCABULARY_IS_CLOSED)
-            .note(OWN_AXES_ARE_FEATURES);
+            .note(VOCABULARY_IS_CLOSED);
             match closest(
                 &key.name,
                 known_keys(ns).iter().map(|s| {
@@ -542,8 +541,7 @@ impl<'a> Evaluator<'a> {
                 // 宣言が無い限り `unknown-feature` が残る（ADR-0034）。
                 None if ns != Ns::Feature => {
                     d = d.note(format!(
-                        "for example: declare `{}` in `[features]` of dowel.toml, \
-                         then write `feature.{}`",
+                        "for your own axes, declare `{}` in `[features]` and write `feature.{}`",
                         key.name, key.name
                     ));
                 }
@@ -823,8 +821,10 @@ fn is_pred_node(kind: NodeKind) -> bool {
 ///
 /// 「無い」とだけ言う診断は、何を書けばよいかを述べない。dowel が知らない
 /// 軸で分岐したい人は正当な要求を持っており、その置き場所は前から在る。
-const VOCABULARY_IS_CLOSED: &str = "the configuration vocabulary is closed: it holds what dowel itself knows about a build (ADR-0034)";
-const OWN_AXES_ARE_FEATURES: &str = "to vary a build on something dowel does not know, declare it in `[features]` of dowel.toml and write `feature.<name>`";
+const VOCABULARY_IS_CLOSED: &str =
+    "the vocabulary is closed: it holds what dowel knows about a build (ADR-0034)";
+const OWN_AXES_ARE_FEATURES: &str =
+    "for your own axes, declare them in `[features]` and write `feature.<name>`";
 
 /// 要素の型を1つに統一する。統一できない場合は `Unknown` とし、
 /// 型検査は代入先のスキーマが行う。
