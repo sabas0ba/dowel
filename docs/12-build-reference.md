@@ -309,6 +309,14 @@ labels  = ["unit"]
 - A listing that fails, times out, or prints nothing is a **failure of that
   target** — not zero tests. Being unable to enumerate is not the same as
   having nothing to run
+- A listed name has to satisfy the same grammar as one written in the
+  manifest: no `/`, no whitespace, not empty. The line's contents are still
+  not interpreted, but **the grammar of an acceptable name is one, whichever
+  entrance it came through** — otherwise a name refused in the manifest
+  enters here and produces a label nothing can split back apart (issue
+  #108). A name that breaks it is reported like any other listing failure,
+  because the user cannot edit it in place; have the harness print names
+  without those characters
 - `cases` and `harness` cannot both be declared (`conflicting-declaration`):
   both answer what the cases are
 - dowel knows no test framework, only these two argument lists. A framework
@@ -330,7 +338,7 @@ nothing, so they have their own property set — target properties like
 | `transfer` | `List<Str>` | a command that copies the artifact before launch, e.g. `["scp", "-q"]`. Source and destination are appended by the implementation — they are not written here ([ADR-0008](adr/0008-runner-transfer.md)) |
 | `remote_dir` | `Str` | directory on the target machine that receives the artifact. Specified together with `transfer` |
 | `host` | `Str` | host part of the transfer destination, forming `<host>:<path>` |
-| `debug_args` | `List<Str>` | arguments that make the runner host the program behind a debug stub, such as qemu's `-g <port>`. Placed before the artifact, where a runner expects its own arguments ([ADR-0024](adr/0024-debug-command.md)) |
+| `debug_args` | `List<Str>` | arguments that make the runner host the program behind a debug stub, such as qemu's `-g <port>` or `-gdb tcp::1234`. Inserted **before** `args`, giving `<command> <debug_args...> <args...> <artifact>` — they cannot go after, because `args` may end with the flag that takes the artifact (`-kernel`) and anything between that flag and the artifact is eaten as its operand ([ADR-0024](adr/0024-debug-command.md)) |
 | `debug_connect` | `Str` | where the debugger attaches, such as `localhost:1234`. Written separately from `debug_args` because dowel does not parse the runner's flags and can derive neither from the other. `dowel debug --target=<triple>` needs both, and refuses with `missing-debug-stub` without them |
 
 Runner values may use `match` / `when` like any other property.

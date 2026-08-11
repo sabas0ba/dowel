@@ -1804,19 +1804,29 @@ fn case_tables(v: &Value) -> Vec<&std::collections::BTreeMap<String, Value>> {
 /// 位置引数がこれを識別子として読む。`/` は目標と事例の区切りであり、空白は
 /// 消費者の区切りであり、空名は目標の綴りと1文字しか違わない。
 fn invalid_case_name(name: &str, site: Site) -> Option<Diagnostic> {
-    let what = if name.is_empty() {
-        "a case needs a name".to_string()
-    } else if name.contains('/') {
-        "`/` separates the target from the case in `<package>:<target>/<case>`".to_string()
-    } else if name.chars().any(char::is_whitespace) {
-        "whitespace splits the label for anything that reads it by words".to_string()
-    } else {
-        return None;
-    };
+    let what = case_name_problem(name)?;
     Some(
         Diagnostic::error("invalid-name", format!("`{name}` cannot be a case name"))
             .at(site.file, site.span, what)
             .note("the case's label is `<package>:<target>/<case>`, and it is what the summary, the JSON output, `--failed`, and the command line all read")
             .note("use `-` or `_` where a separator is wanted"),
     )
+}
+
+/// 事例の名前がラベルの文法を壊すか。壊すなら、その理由。
+///
+/// 名前は2つの入口から来る——マニフェストと、ハーネスの列挙（ADR-0023）。
+/// **受け入れる文法は入口によらず1つ**であり、規則をどちらか一方に持つと、
+/// もう一方から同じ壊れ方が入る（issue #108）。診断に包む側とそうでない側が
+/// あるので、判定だけをここに置く。
+pub fn case_name_problem(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        Some("a case needs a name")
+    } else if name.contains('/') {
+        Some("`/` separates the target from the case in `<package>:<target>/<case>`")
+    } else if name.chars().any(char::is_whitespace) {
+        Some("whitespace splits the label for anything that reads it by words")
+    } else {
+        None
+    }
 }

@@ -323,18 +323,31 @@ bench b:spin/small ... min 1.02ms  median 1.15ms  (10 runs)
 ## `dowel debug`
 
 ```
-dowel debug <target> [common options] [build options] [--dap]
+dowel debug <target>[/<case>] [common options] [build options] [--dap]
 ```
 
 Builds the target and starts a debugger on its artifact, with the package
 root as the working directory ([ADR-0024](adr/0024-debug-command.md)).
-Only `bin` and `test` targets can be debugged — a library has nothing to
-start (`not-debuggable`).
+Only `bin`, `test`, and `bench` targets can be debugged — a library has
+nothing to start (`not-debuggable`).
 
 | Option | Values | Default | Meaning |
 |---|---|---|---|
 | `--dap` | — | — | write a DAP launch configuration to stdout and start nothing, so an editor reproduces the same session |
 
+- The positional argument names a target (`app:unit`) or a **case**
+  (`app:unit/parse`), resolved exactly as `dowel test` resolves it. Naming a
+  case carries its declaration into the session — `args`, `env`, `cwd`, and
+  for a harness target the `run` arguments and the discovered name — so
+  nothing has to be copied by hand (issue #110). Cases are reached whether
+  or not they have ever failed: a passing case worth stepping through, one
+  about to be written, or one whose failure was recorded under a different
+  configuration are all ordinary reasons to open a debugger.
+  `dowel test --debug-failed` remains a separate selection ("open what
+  failed last time"), and both are wanted
+- Naming a case on a target that has none says so; a name that does not
+  exist lists the ones that do. A harness target is asked to list its cases
+  here too, so one extra process runs
 - The debugger is a toolchain tool: `debug` in `[toolchain]` /
   `[toolchain.<triple>]`, defaulting to `gdb`. A cross build therefore names
   its own (`debug = "riscv64-linux-gnu-gdb"`) the same way it names its
@@ -354,7 +367,16 @@ start (`not-debuggable`).
   The port appears twice because dowel does not parse the runner's flags and
   can derive neither from the other. A cross target whose runner declares
   neither is refused with `missing-debug-stub` rather than pointing a host
-  gdb at a foreign binary
+  gdb at a foreign binary, and one that declares only **half** is told which
+  half is missing rather than being called empty (issue #109)
+- `debug_args` is inserted **before** the runner's own `args`, giving
+  `<command> <debug_args...> <args...> <artifact>`. It cannot go after: a
+  runner's `args` may end with the flag that takes the artifact
+  (`args = [..., "-kernel"]`, the shape [ADR-0008](adr/0008-runner-transfer.md)
+  asks for), and anything inserted between that flag and the artifact is
+  eaten as its operand (issue #107). No debugging flag changes meaning by
+  being earlier — option order is free as long as adjacent pairs stay
+  together
 - The stub is started before the debugger and killed when it exits
 - No `substitute-path` is emitted: dowel does not pass `-ffile-prefix-map`,
   so there is no mapping to compensate for, and emitting one would be a

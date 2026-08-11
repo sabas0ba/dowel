@@ -358,18 +358,27 @@ changes, only the speed.
   If the triple differs from the host and no runner is declared, launch is
   refused with a diagnostic beforehand — afterward it would surface as
   `Exec format error`, reporting a configuration mistake as a test failure
-- `dowel debug <target>` — builds the target and starts the declared
-  debugger on its artifact, package root as the working directory
+- `dowel debug <target>[/<case>]` — builds the target and starts the
+  declared debugger on its artifact, package root as the working directory
   ([ADR-0024](adr/0024-debug-command.md)). `debug` is a toolchain tool
   (default `gdb`), so a cross build names its own the way it names its
-  compiler, and it is probed only here. Debugging another triple's artifact
-  needs a stub, and the runner **declares** it — `debug_args` hosts the
-  program, `debug_connect` says where to attach. dowel does not parse the
-  runner's flags, so neither is derivable from the other and a cross target
-  declaring neither is refused (`missing-debug-stub`) rather than pointing a
-  host gdb at a foreign binary. `--dap` writes the launch configuration to
-  stdout and starts nothing. No `substitute-path` is emitted: nothing is
-  remapped yet, so there is nothing to compensate for (docs/30-devexp.md 2.1)
+  compiler, and it is probed only here. The positional argument reaches a
+  **case** as well, resolved as `dowel test` resolves it, carrying its
+  `args` / `env` / `cwd` (and a harness's `run` plus the discovered name)
+  into the session — a debugger is wanted for passing cases too, and
+  routing every path through the failure record meant failing on purpose to
+  create one (issue #110). Debugging another triple's artifact needs a
+  stub, and the runner **declares** it — `debug_args` hosts the program,
+  `debug_connect` says where to attach. dowel does not parse the runner's
+  flags, so neither is derivable from the other; a cross target declaring
+  neither is refused (`missing-debug-stub`) rather than pointing a host gdb
+  at a foreign binary, and one declaring only half is told which half
+  (issue #109). `debug_args` goes **before** the runner's `args`, since
+  `args` may end with the flag that takes the artifact (`-kernel`) and
+  anything inserted after it is eaten as that flag's operand (issue #107).
+  `--dap` writes the launch configuration to stdout and starts nothing. No
+  `substitute-path` is emitted: nothing is remapped yet, so there is
+  nothing to compensate for (docs/30-devexp.md 2.1)
 - `dowel test --debug-failed` — reopens the failing case under the debugger
   with its declared `args`, `env`, and `cwd` (docs/30-devexp.md 2.3). The
   join it was described as: the test job becomes the debug launch, through
@@ -423,8 +432,14 @@ changes, only the speed.
     two argument lists — so a framework whose listing differs needs a
     wrapper in the project that chose it. The listing runs at test time
     through the same runner as the tests; failing, timing out, or listing
-    nothing is a failure of that target, never a silent zero. `cases` and
-    `harness` together is `conflicting-declaration`
+    nothing is a failure of that target, never a silent zero. A listed name
+    is held to the same label grammar as one written in the manifest, and a
+    name that breaks it is reported like any other listing failure: the
+    contents of the line stay uninterpreted, but the grammar of an
+    acceptable name is one whichever entrance it came through — and the
+    entrance the user cannot edit is the likelier source of a broken one
+    (issue #108). `cases` and `harness` together is
+    `conflicting-declaration`
   - `timeout` polls `try_wait`; the standard library has no wait with a
     deadline and the core takes no dependencies. The kill reaches the test
     process only, so a test that spawns grandchildren leaks them
@@ -627,7 +642,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (569 tests):
+Current breakdown (576 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -636,7 +651,7 @@ Current breakdown (569 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 177 |
+| `e2e` | compile real C and C++, run it, check the output | 184 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (65 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

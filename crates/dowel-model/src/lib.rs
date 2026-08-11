@@ -18,5 +18,5 @@ pub use graph::Graph;
 pub use package::{DepKind, Dependency, Package};
 pub use query::Key as QueryKey;
 pub use runner::Runner;
-pub use session::Session;
+pub use session::{case_name_problem, Session};
 pub use target::{ArtifactDecl, CaseDecl, HarnessDecl, PackageId, PropMap, Target, TargetId};
