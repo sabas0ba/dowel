@@ -561,12 +561,27 @@ dowel cache gc
 
 | Subcommand | Meaning |
 |---|---|
-| `info` | report the size and record count of the on-disk store, and of the probe-fact database |
-| `gc` | remove stores and fact databases left by older formats |
+| `info` | report the size, record count, and dead bytes of the on-disk store, and the same for the probe-fact database |
+| `gc` | remove stores and fact databases left by older formats, then compact the current store |
 
 Neither reads the manifests: cleanup must work even when a manifest is
 broken. The store's contents and guarantees are described under "The store"
 below.
+
+The value log is append-only, so overwriting a key leaves the old bytes in
+place. `info` reports them as `dead`, and `gc` compacts — copying the
+reachable records into a fresh log ([ADR-0037](adr/0037-store-gc.md)).
+
+Compaction runs **only when asked**: never on write, and with no size cap.
+A build that silently pauses to rewrite a large file spends time its user
+cannot predict, and the alternative cost is disk space. A cap would mean
+evicting live entries, which means ranking them, which means recording when
+each was used — a write on every read to manage a resource that is not
+scarce. The store is a cache: `gc`, or deleting `.dowel/cache/` outright,
+are both safe and cost only recomputation.
+
+`gc` takes the writer lock, so it does not run against a concurrent build;
+it says so rather than waiting.
 
 There are **two** caches, and `info` names both. The store is per-project
 (`.dowel/cache/`); the **probe facts** are per-user

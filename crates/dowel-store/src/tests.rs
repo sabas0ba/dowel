@@ -240,3 +240,58 @@ fn the_stat_key_changes_when_the_file_does() {
     assert_ne!(before, after);
     assert_eq!(after.size, 2);
 }
+
+#[test]
+fn compaction_drops_the_dead_bytes_and_keeps_every_value_readable() {
+    // 追記専用なので、鍵を上書きするたびに古いバイト列が残る。圧縮が
+    // 落とすのはそれであって、生きている値ではない（ADR-0037）。
+    //
+    // 位置が書き換わるため、ここで確かめるべきは「小さくなった」ことより
+    // **読めること**である。索引だけ新しくして値ログが古いままなら、
+    // 正しい位置で別のバイト列を指す。
+    let root = scratch("compact");
+    for round in 0..5 {
+        let s = Store::open(&root);
+        let mut w = s.writer().unwrap().unwrap();
+        w.put(1, round, 0, format!("value one, round {round}").as_bytes()).unwrap();
+        w.put(2, round, 1, format!("value two, round {round}").as_bytes()).unwrap();
+        w.commit().unwrap();
+    }
+
+    let before = Store::open(&root);
+    assert_eq!(before.len(), 2, "two keys, whatever the number of rounds");
+    assert!(before.dead_bytes() > 0, "overwriting should leave dead bytes");
+
+    let freed = Store::compact(&root).unwrap().expect("no other writer exists");
+    assert_eq!(freed, before.dead_bytes(), "compaction should free exactly the dead bytes");
+
+    let after = Store::open(&root);
+    assert_eq!(after.len(), 2);
+    assert_eq!(after.dead_bytes(), 0);
+    // 生きている値が、圧縮の後も同じ内容で読めること。
+    assert_eq!(after.value(after.get(1).unwrap()).unwrap(), b"value one, round 4");
+    assert_eq!(after.value(after.get(2).unwrap()).unwrap(), b"value two, round 4");
+    // 指紋と変わりにくさも運ばれる。判定に使うものが落ちると、
+    // 圧縮したとたんに全てが「変わった」ことになる。
+    assert_eq!(after.get(1).unwrap().fingerprint, 4);
+    assert_eq!(after.get(2).unwrap().durability, 1);
+}
+
+#[test]
+fn compaction_is_refused_while_another_process_writes() {
+    // 組んでいる最中に足元の値ログを差し替えることはしない。
+    let root = scratch("compact-locked");
+    let s = Store::open(&root);
+    let mut w = s.writer().unwrap().unwrap();
+    w.put(1, 0, 0, b"x").unwrap();
+    w.commit().unwrap();
+    // `w` を持ったまま圧縮を試みる。
+    assert!(Store::compact(&root).unwrap().is_none());
+}
+
+#[test]
+fn compacting_an_empty_store_is_not_an_error() {
+    let root = scratch("compact-empty");
+    assert_eq!(Store::compact(&root).unwrap(), Some(0));
+    assert!(Store::open(&root).is_empty());
+}

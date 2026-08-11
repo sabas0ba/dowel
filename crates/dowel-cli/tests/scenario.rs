@@ -503,3 +503,40 @@ fn removing_the_store_falls_back_to_evaluating_everything() {
     let after = p.run("app", &["graph", "--kind=action", "--format=json"]);
     assert_eq!(before.stdout, after.stdout, "the plan changed after the store was removed");
 }
+
+#[test]
+fn compaction_frees_the_dead_bytes_and_the_store_still_restores() {
+    // 追記専用ゆえ、マニフェストを直すたびに古いバイト列が残る（ADR-0037）。
+    // `cache gc` が落とすのはそれである。
+    //
+    // 大事なのは「小さくなった」ことより、**その後も復元できる**ことである。
+    // 圧縮は値の位置を書き換えるので、索引と値ログがずれれば、正しい位置で
+    // 別のバイト列を読むことになる。
+    let p = project("scenario-compact");
+    for i in 0..5 {
+        let text = std::fs::read_to_string(p.path("app/dowel.build")).unwrap();
+        p.write("app/dowel.build", &format!("# round {i}\n{text}"));
+        p.run("app", &["check"]).success();
+    }
+
+    let dead = |p: &Project| -> u64 {
+        let out = p.run("app", &["cache", "info"]);
+        out.success();
+        let line = out
+            .stdout
+            .lines()
+            .find(|l| l.starts_with("dead"))
+            .unwrap_or_else(|| panic!("no `dead` line:\n{}", out.stdout));
+        line.split_whitespace().nth(1).unwrap().parse().unwrap()
+    };
+    assert!(dead(&p) > 0, "rewriting a manifest should leave dead bytes");
+
+    let r = p.run("app", &["cache", "gc"]);
+    r.success();
+    assert!(r.stderr.contains("compacted the store"), "stderr:\n{}", r.stderr);
+    assert_eq!(dead(&p), 0);
+
+    // 圧縮の後も、触っていないマニフェストは復元される。
+    let (wrote, restored, _) = run_and_count(&p, "app");
+    assert_eq!((wrote, restored), (0, 4), "the store stopped restoring after compaction");
+}

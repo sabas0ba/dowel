@@ -106,7 +106,16 @@ bypasses the memo and redoes the merge on the spot.
   never fails
 - Input change detection compares `(mtime, size, inode, ctime)` and takes a
   content fingerprint only when they differ
-- `dowel cache info` / `dowel cache gc`
+- `dowel cache info` / `dowel cache gc`. `gc` removes directories left by
+  older format versions and **compacts the current store**
+  ([ADR-0037](adr/0037-store-gc.md)): the append-only log keeps the old
+  bytes of every overwritten key, and `info` reports them as `dead`.
+  Compaction runs only when asked — never on write, and with no size cap,
+  since a cap means evicting live entries, which means ranking them, which
+  means a write on every read to manage disk space. The index is deleted
+  **first**: offsets move, and an index that survives a replaced log points
+  at the right offsets in the wrong file. Deleting it first means a crash
+  leaves an empty or shorter store, never a wrong one
 
 ### Probe facts (`dowel-store::facts`, `dowel-build::probe`)
 
@@ -857,17 +866,17 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (674 tests):
+Current breakdown (678 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 351 |
+| `unit-*` | per-crate unit tests | 354 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
 | `e2e` | compile real C and C++, run it, check the output | 232 |
-| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
+| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 25 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (70 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |

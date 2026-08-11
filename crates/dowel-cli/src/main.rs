@@ -89,6 +89,15 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
         let facts = dowel_store::facts::Facts::gc()
             .map_err(|e| format!("cannot clean the fact database: {e}"))?;
         eprintln!("removed {removed} store(s) and {facts} fact database(s) left by older formats");
+        // 現在の形式の中では、索引が指していない領域を落とす（ADR-0037）。
+        // 追記専用なので、鍵を上書きするたびに古いバイト列が残る。
+        match dowel_store::Store::compact(&opts.directory)
+            .map_err(|e| format!("cannot compact the store: {e}"))?
+        {
+            Some(freed) => eprintln!("compacted the store, freeing {freed} bytes"),
+            // 組んでいる最中に足元を差し替えることはしない。
+            None => eprintln!("another process holds the store; not compacting"),
+        }
         return Ok(ExitCode::SUCCESS);
     }
     // 下書きの生成はマニフェストを要さない。読むのは CMake の reply である。
@@ -1304,6 +1313,8 @@ fn cache_info(root: &std::path::Path) -> Result<ExitCode, String> {
     println!("format     {}", dowel_store::FORMAT);
     println!("records    {}", store.len());
     println!("values     {values} bytes");
+    // 索引が指していない分。`cache gc` が落とせる量である（ADR-0037）。
+    println!("dead       {} bytes", store.dead_bytes());
     // 道具について確かめたことは、プロジェクトの外に置く（ADR-0028）。
     // 同じ表示に並べるのは、消えたときに探す先が2つあることを知らせるため。
     let facts = dowel_store::Facts::open();
