@@ -212,6 +212,22 @@ changes, only the speed.
   entirely: the LSP starts no external processes
 - Diagnostics for unknown properties and type mismatches against the schema
   (with suggestions)
+- The configuration vocabulary gained `target.os` / `target.arch`, derived
+  from the target triple and finite, so `match` on them is
+  exhaustiveness-checked ([ADR-0026](adr/0026-target-os-arch.md), part of
+  Q1). Before that the target could only be reached as a free-form triple,
+  and the word that *read* like the OS — `host.os` — meant the build host,
+  so the obvious spelling compiled and selected the wrong sources
+  (issue #115). `other` is in both domains because `--target` takes any
+  string, and a domain that cannot be closed brings back the `_` arm
+- The executable's spelling follows `target.os`: `bin/<name>.exe` for a
+  Windows target, decided in one place so the runner, `artifacts`,
+  `inspect`, `dowel debug`, the `built:` line, and the freshness
+  fingerprint read the same value (issue #112). While they did not, the
+  build succeeded and every later stage was handed a path that did not
+  exist — and, because "the output is missing" and "it has not been built
+  yet" are the same state, the incremental build never converged: relinking
+  every run, silently, with only the elapsed time to notice by
 - A target's name is unique within its package across kinds: `[lib.foo]`
   beside `[bin.foo]` is `duplicate-target`, naming both sites (issue #114).
   The name keys three separate things — `target("...")`, the
@@ -652,16 +668,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (578 tests):
+Current breakdown (587 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 308 |
+| `unit-*` | per-crate unit tests | 311 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 186 |
+| `e2e` | compile real C and C++, run it, check the output | 192 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

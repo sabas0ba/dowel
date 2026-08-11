@@ -4,7 +4,9 @@ In priority order. The higher an item, the more it constrains later design.
 
 ## Q1. The `cfg` namespace vocabulary
 
-**Status**: not started. The next item to pin down.
+**Status**: partly decided. The target's own words are settled by
+[ADR-0026](adr/0026-target-os-arch.md); predicate composition and
+extensibility are still open.
 
 The shared foundation referenced by `when` predicates in `dowel.toml`,
 `match` / `when` in `dowel.build`, toolchain selection, and ABI labels.
@@ -14,16 +16,26 @@ Working draft:
 ```
 cfg.opt        configuration (debug / release / …)
 cfg.target     target triple
+target.os      OS being built for      (ADR-0026)
+target.arch    architecture built for  (ADR-0026)
 host.os        build host OS
 host.arch      build host architecture
 feature.<name> feature flag
 tc.c           the selected C toolchain
 ```
 
+Settled: the target gets words of its own, derived from the triple and
+finite, so `match` on them is exhaustiveness-checked
+([ADR-0026](adr/0026-target-os-arch.md)). Before that the target could only
+be reached as a free-form triple, and the word that *read* like the OS
+(`host.os`) meant the build host — so the obvious spelling compiled and
+selected the wrong sources (issue #115).
+
 To decide:
 
-- Which dimensions belong in `cfg` (these become candidate components of the
-  ABI label)
+- Which further dimensions belong in `cfg` (these become candidate
+  components of the ABI label). `target.os` / `target.arch` are the first
+  two, and are easier to compose with than a triple string
 - Predicate composition rules (allow anything beyond implicit AND?)
 - Whether the vocabulary is fixed or extensible by toolchains
 
@@ -39,14 +51,16 @@ available from `dowel schema dump`.
 | `cfg` | `opt` | `debug` / `release` |
 | `cfg` | `target` | target triple (free-form string) |
 | `host` | `os` / `arch` | build host values |
+| `target` | `os` / `arch` | derived from the target triple; finite ([ADR-0026](adr/0026-target-os-arch.md)) |
 | `feature` | `<name>` | boolean (only names declared in `[features]` of `dowel.toml`) |
 | `tc` | `c` | identifier of the selected C toolchain |
 | `tc` | `cxx` | identifier of the selected C++ toolchain |
 
 Predicate composition is implicit AND only. Exhaustiveness checking of `match`
-applies to keys with finite domains (`cfg.opt` / `host.os` / `host.arch`);
-`cfg.target` has an unbounded domain and requires a `_` arm. This asymmetry
-will be revisited when Q1 is decided.
+applies to keys with finite domains (`cfg.opt` / `host.*` / `target.*`);
+`cfg.target` has an unbounded domain and requires a `_` arm. That asymmetry
+is what ADR-0026 addressed for the target: the triple stays open, and the
+distinctions that recur have finite words beside it.
 
 ## Q2. ABI label composition
 

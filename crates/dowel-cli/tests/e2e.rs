@@ -3849,6 +3849,165 @@ fn splitting_the_name_makes_the_same_tree_build() {
     assert!(dir.join("bin/foo").exists(), "the executable is missing\n{r}");
 }
 
+/// 対象の OS と構成（[ADR-0026](../../../docs/adr/0026-target-os-arch.md)、
+/// issue #115 / #112）。
+///
+/// 三つ組は `--target` で自由に指定できるので、ホストの `cc` を Windows の
+/// 三つ組に宣言すれば、対象の綴りの規則だけを取り出して検査できる。
+/// 出来上がるのは Linux の実行ファイルだが、dowel が名指しする道・runner に
+/// 渡る道・指紋が取る道はすべて対象の規則に従う。
+fn target_os_project(name: &str) -> Project {
+    let p = Project::new(name);
+    // ドライバが**勝手に `.exe` を付ける**ことが問題の根なので、それを
+    // 再現する偽のドライバを置く。ホストの `cc` をそのまま宣言しても
+    // 症状は出ない——出来上がるのは Linux の実行ファイルだが、綴りの規則の
+    // 検査にはそれで足りる。
+    let driver = p.write_script(
+        "mingw-ish",
+        r#"#!/bin/sh
+# リンクのときだけ、出力に `.exe` を付ける（既に付いていれば足さない）。
+out=""; link=1; args=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -c) link=0; args="$args $1" ;;
+        -o) out="$2"; shift; args="$args -o" ;;
+        *)  args="$args $1" ;;
+    esac
+    shift
+done
+if [ "$link" = 1 ] && [ -n "$out" ]; then
+    case "$out" in *.exe) ;; *) out="$out.exe" ;; esac
+fi
+# shellcheck disable=SC2086
+exec cc $args "$out"
+"#,
+    );
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"w\"\nversion = \"0.1.0\"\n\n[toolchain.x86_64-pc-windows-gnu]\nc = \"{}\"\n",
+            driver.display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        r#"
+[bin.app]
+sources = [file("src/main.c"), match target.os {
+    windows => file("src/plat_win.c"),
+    _       => file("src/plat_posix.c"),
+}]
+
+[runner.x86_64-pc-windows-gnu]
+command = "env"
+"#,
+    );
+    p.write("src/main.c", "int plat(void);\nint main(void) { return plat(); }\n");
+    p.write("src/plat_win.c", "int plat(void) { return 0; }\n");
+    p.write("src/plat_posix.c", "int plat(void) { return 3; }\n");
+    p
+}
+
+#[test]
+fn a_manifest_can_select_sources_by_the_targets_operating_system() {
+    // `host.os` は組む側を指すので、素直に書くと意図と逆に効いていた
+    // （issue #115）。`target.os` は `--target` の三つ組から導かれる。
+    let p = target_os_project("target-os-sources");
+    let cross =
+        p.run(".", &["graph", "--kind=action", "--format=json", "--target=x86_64-pc-windows-gnu"]);
+    cross.success();
+    cross.stdout_contains("plat_win.c");
+    assert!(
+        !cross.stdout.contains("plat_posix.c"),
+        "the POSIX file was chosen for windows\n{cross}"
+    );
+
+    // 対照。同じ木を手元向けに組めば POSIX 側が選ばれる。
+    let host = p.run(".", &["graph", "--kind=action", "--format=json"]);
+    host.success();
+    host.stdout_contains("plat_posix.c");
+}
+
+#[test]
+fn the_artifact_dowel_names_is_the_file_that_was_written() {
+    // Windows 対象ではドライバが `.exe` を付けて書く。dowel が名指しする道と
+    // 実在するファイルがずれると、組む段では現れず、走らせる・派生させる・
+    // 開くの全部が落ちる（issue #112）。
+    let p = target_os_project("target-os-exe");
+    let r = p.run(".", &["build", "--target=x86_64-pc-windows-gnu"]);
+    r.success();
+    let named = r
+        .stderr
+        .lines()
+        .chain(r.stdout.lines())
+        .find_map(|l| l.strip_prefix("built: "))
+        .expect("the build printed no artifact");
+    assert!(named.ends_with("bin/app.exe"), "dowel named `{named}`\n{r}");
+    assert!(std::path::Path::new(named).exists(), "`{named}` does not exist\n{r}");
+}
+
+#[test]
+fn a_second_windows_build_runs_nothing() {
+    // 宣言した出力が永久に存在しないと、「出力が無い」と「まだ作っていない」が
+    // 同じ状態に潰れ、増分が収束しない。成功したように見えるので、気づく
+    // 手がかりは所要時間だけだった（issue #112 のコメント）。
+    let p = target_os_project("target-os-incremental");
+    let args =
+        &["build", "--target=x86_64-pc-windows-gnu", "--backend=direct", "--log-level=debug"];
+    p.run(".", args).success();
+    let second = p.run(".", args);
+    second.success();
+    second.stderr_contains("ran 0 steps");
+}
+
+#[test]
+fn a_windows_target_can_be_tested_through_its_runner() {
+    // runner に渡る道も同じ規則から来る。`.exe` の無い道を渡すと、
+    // wine は `failed to open` で落ちる。
+    let p = target_os_project("target-os-runner");
+    p.write(
+        "dowel.build",
+        "[test.t]\nsources = [file(\"src/t.c\")]\n\n[runner.x86_64-pc-windows-gnu]\ncommand = \"env\"\n",
+    );
+    p.write("src/t.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["test", "--target=x86_64-pc-windows-gnu"]);
+    r.success();
+    r.stderr_contains("w:t ... ok");
+}
+
+#[test]
+fn a_derived_target_property_is_exhaustively_checked() {
+    // 有限領域であることが、三つ組を数え上げる形との差である。`_` を書かずに
+    // 済み、対象が増えたときにマニフェストが落ちて教える。
+    let p = Project::new("target-os-exhaustive");
+    p.write("dowel.toml", "[package]\nname    = \"w\"\nversion = \"0.1.0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\nflags = match target.os {\n    linux   => [\"-DL\"],\n    windows => [\"-DW\"],\n}\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("non-exhaustive-match");
+    // 何が漏れているかを名指しする。
+    r.stderr_contains("macos");
+    r.stderr_contains("none");
+    r.stderr_contains("other");
+}
+
+#[test]
+fn the_target_vocabulary_is_in_the_schema_dump() {
+    let p = Project::new("target-os-schema");
+    let r = p.run(".", &["schema", "dump"]);
+    r.success();
+    r.stdout_contains("\"name\": \"target.os\"");
+    r.stdout_contains("\"name\": \"target.arch\"");
+    // 値域が出る。`_` を書かずに済むことが読める。
+    r.stdout_contains("\"none\"");
+    // `host.*` は残る。
+    r.stdout_contains("\"name\": \"host.os\"");
+}
+
 /// `dowel bench`（ADR-0025）。
 ///
 /// 測るのはプロセス全体の壁時計であり、枠組みは課さない。dowel が失敗と

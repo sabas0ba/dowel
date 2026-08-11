@@ -32,6 +32,18 @@ impl Project {
         path
     }
 
+    /// 実行できるファイルとして書く。偽のツールチェーンを置くために使う。
+    pub fn write_script(&self, rel: &str, contents: &str) -> PathBuf {
+        let path = self.write(rel, contents);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("cannot make the script executable");
+        }
+        path
+    }
+
     pub fn path(&self, rel: &str) -> PathBuf {
         self.root.join(rel)
     }

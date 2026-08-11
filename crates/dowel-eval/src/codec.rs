@@ -194,6 +194,9 @@ impl W {
             Ns::Feature => 2,
             Ns::Tc => 3,
             Ns::Pkg => 4,
+            // 新しい名前空間は末尾に足す。既存の番号を動かすと、
+            // 保存済みの記録が別の鍵として読み出される。
+            Ns::Target => 5,
         });
         self.str(&k.name);
     }
@@ -433,6 +436,7 @@ impl R<'_> {
             2 => Ns::Feature,
             3 => Ns::Tc,
             4 => Ns::Pkg,
+            5 => Ns::Target,
             _ => return None,
         };
         Some(CfgKey { ns, name: self.str()? })

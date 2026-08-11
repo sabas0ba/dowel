@@ -175,6 +175,10 @@ impl Config {
             (Ns::Cfg, "target") => Some(CfgValue::Str(self.target.clone())),
             (Ns::Host, "os") => Some(CfgValue::Str(self.host_os.clone())),
             (Ns::Host, "arch") => Some(CfgValue::Str(self.host_arch.clone())),
+            // 対象の性質は三つ組から導く。新しい入力は要らない——`--target`
+            // で既に与えられている（ADR-0026）。
+            (Ns::Target, "os") => Some(CfgValue::Str(triple_os(&self.target).to_string())),
+            (Ns::Target, "arch") => Some(CfgValue::Str(triple_arch(&self.target).to_string())),
             (Ns::Tc, name) => self.tools.get(name).map(|t| CfgValue::Str(t.clone())),
             // 機能はパッケージに属する。`feature.x` は「このパッケージで
             // x が有効か」であり、他のパッケージの `x` では真にならない。
@@ -227,6 +231,18 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
         "arch",
         Domain::Finite(&["x86_64", "aarch64", "riscv64"]),
         "architecture of the build host",
+    ),
+    (
+        "target",
+        "os",
+        Domain::Finite(TARGET_OSES),
+        "operating system being built for, read off the target triple",
+    ),
+    (
+        "target",
+        "arch",
+        Domain::Finite(TARGET_ARCHES),
+        "architecture being built for, read off the target triple",
     ),
     ("feature", "*", Domain::Bool, "feature flag declared in [features] of dowel.toml"),
     ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
@@ -301,6 +317,62 @@ pub fn host_arch() -> &'static str {
     }
 }
 
+/// 対象の OS の値域（[ADR-0026](../../../docs/adr/0026-target-os-arch.md)）。
+///
+/// `other` を持つのは、`--target` が自由文字列だからである。任意の三つ組に
+/// 写像先が無いと有限領域にできず、有限でなければ `match` の網羅性検査が
+/// 効かない——そしてそれこそが、三つ組を数え上げる形の一番の弱点だった
+/// （issue #115）。
+pub const TARGET_OSES: &[&str] = &["linux", "macos", "windows", "none", "other"];
+
+/// 対象の構成の値域。同じ理由で `other` を持つ。
+pub const TARGET_ARCHES: &[&str] = &["x86_64", "x86", "aarch64", "arm", "riscv64", "other"];
+
+/// 三つ組から対象の OS を読む。
+///
+/// 綴りは三つ組のものではなく語彙のものにする（`darwin` ではなく `macos`）。
+/// `host.os` と同じ値を同じ名前で読めることが、対を成す語の要件である。
+///
+/// 判定は要素の走査で行う。三つ組の要素数は3とも4とも限らず
+/// （`thumbv7em-none-eabihf` は vendor を持たない）、位置で決められない。
+pub fn triple_os(triple: &str) -> &'static str {
+    let parts: Vec<&str> = triple.split('-').collect();
+    for p in &parts {
+        // `linux-gnu` も `linux-musl` も OS は linux である。ABI は別の軸。
+        if p.starts_with("linux") {
+            return "linux";
+        }
+        if p.starts_with("windows") {
+            return "windows";
+        }
+        if p.starts_with("darwin") || *p == "macos" || p.starts_with("ios") {
+            return "macos";
+        }
+    }
+    // ベアメタル。`none` を名乗る三つ組と、OS を1つも名乗らないまま
+    // `eabi` で終わる三つ組（`thumbv7m-none-eabi`）の両方がある。
+    if parts.iter().any(|p| *p == "none" || p.starts_with("eabi") || *p == "elf") {
+        return "none";
+    }
+    "other"
+}
+
+/// 三つ組から対象の構成を読む。先頭の要素が構成である。
+pub fn triple_arch(triple: &str) -> &'static str {
+    let head = triple.split('-').next().unwrap_or("");
+    match head {
+        "x86_64" | "amd64" => "x86_64",
+        "aarch64" | "arm64" => "aarch64",
+        "i386" | "i486" | "i586" | "i686" | "x86" => "x86",
+        _ if head.starts_with("riscv64") => "riscv64",
+        // 32ビットの ARM は綴りが多い（`armv7`、`thumbv7em`、`armebv7r`）。
+        // 一列に並ぶ族なので1つの語にまとめる——分けても、書き手は結局
+        // 全部を数え上げることになる。
+        _ if head.starts_with("arm") || head.starts_with("thumb") => "arm",
+        _ => "other",
+    }
+}
+
 /// ホストのターゲットトリプル。
 ///
 /// 暫定的に OS と arch から組み立てる。ツールチェーンに問い合わせて確定させるのは
@@ -317,6 +389,65 @@ pub fn default_triple() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_target_triple_yields_an_os_and_an_arch() {
+        // 綴りは語彙のもの。`host.os` と同じ値を同じ名前で読めることが、
+        // 対を成す語の要件である（issue #115）。
+        assert_eq!(triple_os("x86_64-pc-windows-gnu"), "windows");
+        assert_eq!(triple_os("x86_64-pc-windows-msvc"), "windows");
+        assert_eq!(triple_os("aarch64-unknown-linux-musl"), "linux");
+        assert_eq!(triple_os("x86_64-apple-darwin"), "macos");
+        // ベアメタルは2つの綴り方がある。
+        assert_eq!(triple_os("thumbv7em-none-eabihf"), "none");
+        assert_eq!(triple_os("riscv32imac-unknown-none-elf"), "none");
+        // 写像先の無い三つ組。`--target` は自由文字列なので必ず在る。
+        assert_eq!(triple_os("x86_64-unknown-freebsd"), "other");
+
+        assert_eq!(triple_arch("x86_64-pc-windows-gnu"), "x86_64");
+        assert_eq!(triple_arch("i686-pc-windows-gnu"), "x86");
+        assert_eq!(triple_arch("aarch64-apple-darwin"), "aarch64");
+        assert_eq!(triple_arch("riscv64gc-unknown-linux-gnu"), "riscv64");
+        // 32ビット ARM は綴りが多く、1つの語にまとめる。
+        assert_eq!(triple_arch("armv7-unknown-linux-gnueabihf"), "arm");
+        assert_eq!(triple_arch("thumbv7em-none-eabihf"), "arm");
+        assert_eq!(triple_arch("s390x-unknown-linux-gnu"), "other");
+    }
+
+    #[test]
+    fn every_derived_value_is_inside_the_declared_domain() {
+        // 有限領域だと宣言した以上、導出がその外の値を返してはならない。
+        // 返すと、網羅した `match` が実行時に落ちる腕を持つことになる。
+        let triples = [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-gnu",
+            "x86_64-apple-darwin",
+            "thumbv7em-none-eabihf",
+            "s390x-unknown-freebsd",
+            "",
+            "nonsense",
+        ];
+        for t in triples {
+            assert!(TARGET_OSES.contains(&triple_os(t)), "`{t}` gave an os outside the domain");
+            assert!(
+                TARGET_ARCHES.contains(&triple_arch(t)),
+                "`{t}` gave an arch outside the domain"
+            );
+        }
+    }
+
+    #[test]
+    fn the_target_namespace_reads_the_configured_triple() {
+        let mut cfg = Config::host_default();
+        cfg.target = "x86_64-pc-windows-gnu".into();
+        let os = cfg.lookup(&CfgKey { ns: Ns::Target, name: "os".into() });
+        assert_eq!(os, Some(CfgValue::Str("windows".into())));
+        // `host.*` は残る。組む側を見たい場面は実在する。
+        assert_eq!(
+            cfg.lookup(&CfgKey { ns: Ns::Host, name: "os".into() }),
+            Some(CfgValue::Str(host_os().to_string()))
+        );
+    }
 
     #[test]
     fn keys_outside_the_vocabulary_are_not_found() {

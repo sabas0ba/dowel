@@ -476,7 +476,7 @@ impl<'a> Evaluator<'a> {
             return None;
         }
         let Some(ns) = Ns::parse(parts[0]) else {
-            let known = ["cfg", "host", "feature", "tc", "pkg"];
+            let known = ["cfg", "host", "target", "feature", "tc", "pkg"];
             let mut d =
                 Diagnostic::error("unknown-namespace", format!("unknown namespace `{}`", parts[0]))
                     .at(self.file, node.span, "no such namespace")

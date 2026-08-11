@@ -83,6 +83,24 @@ pub fn build_dir(root: &Path, cfg: &Config) -> PathBuf {
     root.join(".dowel").join("build").join(cfg.id())
 }
 
+/// 実行ファイルの綴り。対象の OS が決める（issue #112）。
+///
+/// Windows 向けではコンパイラドライバが `.exe` を付けて書き出す。dowel が
+/// `bin/app` と名指ししても、書かれるのは `bin/app.exe` である。ずれると、
+/// 走らせる・派生させる・開くの全てが実在しない道を渡され、**組む段では
+/// 現れない**——ninja もこちらも、リンクの成功を終了状態で判断しており、
+/// 出力ファイルの実在は確かめないためである。しかも「出力が無い」と
+/// 「まだ作っていない」が同じ状態に潰れるので、増分ビルドが永久に収束しない。
+///
+/// 綴りを決める場所をここ1つにすると、runner も `artifacts` も `debug` も
+/// `built:` の印字も指紋も同じ値を読む。
+pub fn executable_name(name: &str, cfg: &Config) -> String {
+    match dowel_eval::config::triple_os(&cfg.target) {
+        "windows" => format!("{name}.exe"),
+        _ => name.to_string(),
+    }
+}
+
 pub fn plan(
     sess: &Session,
     graph: &Graph,
@@ -328,7 +346,7 @@ pub fn plan(
                 plan.artifacts.insert(tid, out);
             }
             TableKind::Bin | TableKind::Test | TableKind::Bench => {
-                let out = build_dir.join("bin").join(&target.name);
+                let out = build_dir.join("bin").join(executable_name(&target.name, cfg));
                 // リンク閉包のどこかに C++ の翻訳単位があれば、リンクは C++ の
                 // driver で行う。C の driver では C++ 標準ライブラリが付かず、
                 // 未定義参照は原因（依存先のソース）から離れた場所で報告される
