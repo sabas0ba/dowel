@@ -4,10 +4,10 @@ Every table and key the implementation reads, and what happens when it is
 missing or wrong.
 
 A top-level table that `dowel.toml` does not read is `unknown-table`. When
-its name belongs to `dowel.build`'s vocabulary the diagnostic says so —
+its name belongs to `dowel.build`'s vocabulary the diagnostic says so.
 `[runner.<triple>]` sits one table away from `[toolchain.<triple>]` and is
-easy to write into the wrong file, and the resulting `missing-runner` would
-otherwise insist a declaration is absent while the reader is looking at it
+easy to write into the wrong file; without that, `missing-runner` would
+insist a declaration is absent while the reader is looking at it
 (issue #74). `[policy]` stays accepted: it is reserved and documented as not
 yet acted on. Unknown **keys** inside `[package]` are still ignored (`edition`
 and `[toolchain] sysroot` from the design examples are reserved the same
@@ -142,11 +142,10 @@ The toolchain is selected by the target triple, the same way
 `[runner.<triple>]` is (issue #42). The plain `[toolchain]` table is the
 declaration for host builds; it never applies to another triple. Passing
 `--target=<triple>` for a triple with no `[toolchain.<triple>]` declaration
-is refused before building with `missing-toolchain` — building with the
-host compiler would silently place host artifacts under that triple's name,
-and the mistake would only surface later (a runner's
-`Invalid ELF image for this architecture`, or a debugger showing the wrong
-architecture). Likewise, a cross build whose sources contain C++ requires
+is refused before building, with `missing-toolchain`. Building with the
+host compiler would place host artifacts under that triple's name, and the
+mistake would surface much later — as a runner's `Invalid ELF image for
+this architecture`, or a debugger showing the wrong architecture. Likewise, a cross build whose sources contain C++ requires
 `cxx` in the triple's table; falling back to the host `c++` is refused.
 
 If a dependency package declares a toolchain different from the one the
@@ -195,11 +194,11 @@ it with `dep("name")` in `dowel.build` ([12-build-reference.md](12-build-referen
 
 A dependency has **exactly one** source. An entry with none of `path` /
 `git` / `url` / `version` is `incomplete-dependency`; an entry with two or
-more is `conflicting-dependency-source`, naming each one (issue #79). Accepting two
-would mean one of the declarations is never read, and the manifest would not
-say which — the source of a library is switched during development (`path`
-while it is being edited, `git` or `version` once it is published), and
-leaving the old key behind still builds for whoever has the tree.
+more is `conflicting-dependency-source`, naming each one (issue #79).
+Accepting two would leave one declaration unread, with the manifest not
+saying which. The source of a library gets switched during development —
+`path` while it is being edited, `git` or `version` once it is published —
+and leaving the old key behind still builds for whoever has the tree.
 
 ## `[features]`
 
@@ -222,10 +221,10 @@ feature name for unrelated things, and enabling one never enables the other.
 A value of the form `dep/feat` **forwards**: it enables `feat` in the
 dependency `dep` rather than becoming a feature of this package.
 `dep` must be declared in `[[dependencies]]` (`undeclared-dependency`
-otherwise) and `feat` must be declared in that dependency's `[features]`
-(`unknown-feature`, reported at the forwarding site — an unforwarded typo
-would just evaluate to false in the dependency, indistinguishable from a
-feature deliberately left off).
+otherwise), and `feat` must be declared in that dependency's `[features]`
+(`unknown-feature`). The second is reported at the forwarding site: an
+unforwarded typo would evaluate to false in the dependency, which looks
+exactly like a feature deliberately left off.
 
 - `default` is special: it is included unless `--no-default-features` is
   passed. `default` itself is never a feature name

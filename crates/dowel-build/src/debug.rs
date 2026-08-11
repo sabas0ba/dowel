@@ -157,7 +157,7 @@ fn half_declared_stub(
             if let Some(s) = site_of("debug_args") {
                 d = d.at(s.file, s.span, "the host side is declared");
             }
-            d.note("dowel does not parse the runner's flags, so the address cannot be read out of `debug_args` (ADR-0024)")
+            d.note("dowel does not parse the runner's flags, so it cannot read the address out (ADR-0024)")
                 .note("add `debug_connect = \"localhost:<port>\"` next to it, naming the port those arguments open")
         }
         // 繋ぎ先はあるが、そこで待つものを誰も立てない。
@@ -169,7 +169,7 @@ fn half_declared_stub(
             if let Some(s) = site_of("debug_connect") {
                 d = d.at(s.file, s.span, "the address to attach to is declared");
             }
-            d.note("an address alone does not start a stub; the debugger would wait for something that never listens")
+            d.note("an address alone starts no stub: the debugger would wait for nothing")
                 .note("add `debug_args = [...]`, the arguments that make this runner host the program behind a stub")
         }
         // どちらも無い。
@@ -179,7 +179,7 @@ fn half_declared_stub(
                 format!("no debug stub is declared for `{target}`"),
             )
             .note("debugging another machine's artifact needs something to host it and an address to attach to")
-            .note("declare both in `[runner.<triple>]`: `debug_args = [\"-g\", \"1234\"]` and `debug_connect = \"localhost:1234\"`")
+            .note("in `[runner.<triple>]`: `debug_args = [\"-g\", \"1234\"]`, `debug_connect = \"localhost:1234\"`")
             .note("they are written separately because dowel does not parse the runner's flags (ADR-0024)");
             if let Some(r) = runner {
                 d = d.at(r.site.file, r.site.span, "this runner declares no stub");

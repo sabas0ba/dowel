@@ -452,7 +452,8 @@ impl<'a> Parser<'a> {
                 format!("the value is nested more than {} levels deep", self.max_nesting),
             )
             .at(self.file, t.span, "the nesting reaches its limit here")
-            .note("such depth usually comes from a generated manifest; flatten the value, or raise the limit with `--max-nesting`"),
+            .note("such depth usually comes from a generated manifest")
+            .note("flatten the value, or raise the limit with `--max-nesting`"),
         );
         self.builder.start_node(NodeKind::Error, t.span.start);
         let mut open = 0usize;

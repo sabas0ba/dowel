@@ -5421,7 +5421,7 @@ fn the_missing_toolchain_error_reads_out_what_a_dependency_declares() {
     r.stderr_contains("dependency `mylib` declares one for this triple");
     r.stderr_contains("aarch64-linux-gnu-gcc");
     // なぜ効かないのかを述べること。探す時間が要るのはこの一文が無いためである。
-    r.stderr_contains("property of the build, not of the package");
+    r.stderr_contains("a property of the build, not of a package");
     // 手元に答があるときは、一般論の助言を出さない。
     assert!(
         !r.stderr.contains("for example `[toolchain."),

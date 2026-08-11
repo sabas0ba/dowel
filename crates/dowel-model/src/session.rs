@@ -1036,7 +1036,8 @@ impl TargetSink<'_> {
                             first.span,
                             "declared here first",
                         ))
-                        .note("a target's name has to be unique in its package: `target(\"...\")`, the `<package>:<target>` label, and the object directory all key on it")
+                        .note("a target's name has to be unique in its package")
+                        .note("`target(\"...\")`, the `<package>:<target>` label, and the object directory all key on it")
                         .note(format!(
                             "rename one, for example `[{}.{name}-{}]`",
                             kind.name(),
@@ -1115,7 +1116,7 @@ impl TargetSink<'_> {
                     format!("`cases` has no meaning on a `{}` target", kind.name()),
                 )
                 .at(table.site.file, table.site.span, "only `test` and `bench` targets register cases")
-                .note("a case is another invocation of the same binary; `dowel test` and `dowel bench` are what run them"),
+                .note("a case is another invocation of the same binary, run by `dowel test` or `dowel bench`"),
             );
             return;
         }
@@ -1413,7 +1414,7 @@ impl TargetSink<'_> {
                 )
                 .at(entry.site.file, entry.site.span, "no such tool")
                 .note(format!("declarable tools: {}", tools.join(", ")))
-                .note("the concrete command comes from `[toolchain]`, so write the tool's name here, not `arm-none-eabi-objcopy`");
+                .note("write the tool's name here, not the command: `[toolchain]` supplies the command");
                 if let Some(c) = closest(tool_name, tools.iter().copied()) {
                     d = d.note(format!("did you mean `{c}`?"));
                 }
@@ -1929,7 +1930,8 @@ fn invalid_case_name(name: &str, site: Site) -> Option<Diagnostic> {
     Some(
         Diagnostic::error("invalid-name", format!("`{name}` cannot be a case name"))
             .at(site.file, site.span, what)
-            .note("the case's label is `<package>:<target>/<case>`, and it is what the summary, the JSON output, `--failed`, and the command line all read")
+            .note("the case's label is `<package>:<target>/<case>`")
+            .note("the summary, the JSON output, `--failed`, and the command line all read it")
             .note("use `-` or `_` where a separator is wanted"),
     )
 }

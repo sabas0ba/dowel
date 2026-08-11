@@ -60,17 +60,17 @@ The executable's spelling follows `target.os`: a Windows target produces
 `bin/<name>.exe`, because that is what the compiler driver writes. The
 spelling is decided in one place, so the runner, `artifacts`, `inspect`,
 `dowel debug`, the `built:` line, and the freshness fingerprint all read the
-same value — when they did not, the build looked fine and everything
+same value. When they did not, the build looked fine and everything
 afterwards was handed a path that did not exist (issue #112).
 
 **A target's name is unique within its package**, across kinds: a package
 cannot hold both `[lib.foo]` and `[bin.foo]`. The second declaration is
 refused with `duplicate-target`, naming both sites. The name is what
 `target("...")` resolves, what the `<package>:<target>` label spells, and
-what the object directory is keyed on, so allowing two would mean
-qualifying all three by kind — a wide change for what it buys, since the
-artifact spellings (`libfoo.a` and `foo`) were the only thing that did not
-collide (issue #114). A library and its CLI want
+what the object directory is keyed on. Allowing two would mean qualifying
+all three by kind — a wide change for what it buys, since the artifact
+spellings (`libfoo.a` and `foo`) were the only thing that did not collide
+(issue #114). A library and its CLI want
 `[lib.foo]` with `[bin.foo-cli]`, or the `plot-core` / `plot` shape.
 
 ## 3. Target properties
@@ -177,8 +177,8 @@ it is written — every `match` arm and `when` branch included — so a
 misspelling does not wait for the configuration that selects it.
 
 **`max` is why a standard is not a flag.** The highest standard reached
-along the closure wins ([ADR-0016](adr/0016-language-standard-property.md)):
-a library requiring `c++17` used by a `c++20` binary compiles fine, and a
+along the closure wins ([ADR-0016](adr/0016-language-standard-property.md)).
+A library requiring `c++17` used by a `c++20` binary compiles fine, and a
 library requiring `c++20` raises a consumer that asked for less — which is
 what its public headers need. Written as `cxx_flags = ["-std=..."]` the two
 would simply concatenate and the last one would silently win.

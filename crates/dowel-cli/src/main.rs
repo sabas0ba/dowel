@@ -734,7 +734,7 @@ fn configure(
                     "missing-toolchain",
                     format!("no toolchain is declared for target `{}`", cfg.target),
                 )
-                .note("building with the host toolchain would produce artifacts for the wrong architecture under this target's name");
+                .note("the host toolchain would build for the wrong architecture under this target's name");
                 // 依存が同じ三つ組の宣言を持っているなら、その値を述べる
                 // （issue #125）。持っていることは `toolchain-mismatch` で
                 // 別に読み上げていた——探しているものを見つけていながら
@@ -749,10 +749,9 @@ fn configure(
                     for line in &from_deps {
                         d = d.note(line.clone());
                     }
-                    d = d.note(
-                        "a dependency's toolchain does not apply to this build: it is a property \
-                         of the build, not of the package (ADR-0031). declare it here to use it",
-                    );
+                    d = d
+                        .note("a toolchain is a property of the build, not of a package (ADR-0031)")
+                        .note("declare it here to use it");
                 }
                 if !declared.is_empty() {
                     d = d.note(format!("toolchains are declared for: {}", declared.join(", ")));

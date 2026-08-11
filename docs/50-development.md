@@ -152,6 +152,12 @@ items are listed here; anything unlisted follows dotfiles.
 - Run `make check` (formatting check + lints + tests) before submitting
 - Design decisions are recorded as ADRs in `docs/adr/`. To overturn one, mark
   it Superseded and add a new ADR
+- **One sentence says one thing.** Reasons matter and are worth writing, but
+  a reason chained onto a rule with a dash or a colon usually wants to be its
+  own sentence. Two limits keep it honest: a diagnostic note fits on a
+  terminal line (about 90 characters), and a sentence in `docs/` stays under
+  roughly 260. Both are guides for writing, not checks — where a longer
+  sentence genuinely reads better, it stays
 
 ## 6. Handing work to Claude Code
 
