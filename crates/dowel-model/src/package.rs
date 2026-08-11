@@ -37,6 +37,9 @@ pub struct Package {
     /// `[toolchain.<triple>]`。ターゲットトリプルごとの宣言。
     /// `[runner.<triple>]` と同じ形で、`--target` の切り替えに追随する（issue #42）
     pub toolchains: BTreeMap<String, ToolchainDecl>,
+    /// `[package] toolchains`。共有の記述ファイルへの相対パスと、その位置
+    /// （[ADR-0033](../../../docs/adr/0033-shared-toolchain-file.md)）
+    pub toolchains_path: Option<(String, Site)>,
 }
 
 /// 1つの `[toolchain]`（または `[toolchain.<triple>]`）テーブルの内容。
@@ -72,6 +75,32 @@ impl ToolchainDecl {
 
     pub fn set_tool(&mut self, name: &str, command: String, site: Site) {
         self.tools.insert(name.to_string(), ToolDecl { command, site });
+    }
+
+    /// 自分に無いものを `other` から補う。自分に在るものは動かさない。
+    ///
+    /// 共有の記述ファイル（[ADR-0033](../../../docs/adr/0033-shared-toolchain-file.md)）
+    /// を後から読むための向きである。補う単位は道具1つ——三つ組ごとにすると
+    /// 「この機械では C だけ別」のために表全体を写し直すことになる。
+    pub fn fill_from(&mut self, other: &ToolchainDecl) {
+        for (name, decl) in &other.tools {
+            self.tools.entry(name.clone()).or_insert_with(|| decl.clone());
+        }
+        if self.style.is_none() {
+            self.style = other.style;
+        }
+        if self.site.is_none() {
+            self.site = other.site;
+        }
+    }
+
+    /// 無印の `[toolchain]` 用。まだ何も宣言されていなければ丸ごと入れる。
+    fn fill_from_or_replace(&mut self, other: ToolchainDecl) {
+        if self.site.is_none() && self.tools.is_empty() && self.style.is_none() {
+            *self = other;
+        } else {
+            self.fill_from(&other);
+        }
     }
 }
 
@@ -203,6 +232,7 @@ pub fn from_document(
         targets_site: None,
         toolchain: ToolchainDecl::default(),
         toolchains: BTreeMap::new(),
+        toolchains_path: None,
     };
 
     match doc.table(&["package"]) {
@@ -244,6 +274,15 @@ pub fn from_document(
                     _ => type_err(diags, e.site, "package.targets", "a list of strings"),
                 }
             }
+            // 共有の toolchain 記述ファイル（ADR-0033）。読み込みは
+            // `Session` が行う——クエリ経由で読まないと、ファイルを直しても
+            // 再評価されない。
+            if let Some(e) = t.entry("toolchains") {
+                match e.value.as_str() {
+                    Some(s) => pkg.toolchains_path = Some((s.to_string(), e.site)),
+                    None => type_err(diags, e.site, "package.toolchains", "a string"),
+                }
+            }
         }
         None => diags.push(Diagnostic::error("missing-table", "missing `[package]`").at(
             manifest_file,
@@ -254,109 +293,7 @@ pub fn from_document(
 
     check_tables(doc, manifest_file, diags);
 
-    for t in doc.tables_under(&["toolchain"]) {
-        // `[toolchain]` はホスト向け、`[toolchain.<triple>]` はそのトリプル向け。
-        let (label, triple) = match t.path.len() {
-            1 => ("toolchain".to_string(), None),
-            2 => (format!("toolchain.{}", t.path[1]), Some(t.path[1].clone())),
-            _ => {
-                diags.push(
-                    Diagnostic::error(
-                        "unknown-table",
-                        format!("`[{}]` is not a toolchain declaration", t.path.join(".")),
-                    )
-                    .at(
-                        manifest_file,
-                        t.site.span,
-                        "write `[toolchain]` or `[toolchain.<triple>]`",
-                    ),
-                );
-                continue;
-            }
-        };
-        let mut decl = ToolchainDecl { site: Some(t.site), ..ToolchainDecl::default() };
-        // 受け付ける道具は表が決める。表に1行足せば、ここも `tc.<名前>` の
-        // 語彙も宣言の写しも揃って追随する。
-        for (name, _, _) in dowel_eval::config::TOOLS {
-            if let Some(e) = t.entry(name) {
-                match e.value.as_str() {
-                    Some(s) => decl.set_tool(name, s.to_string(), e.site),
-                    None => type_err(diags, e.site, &format!("{label}.{name}"), "a string"),
-                }
-            }
-        }
-        // 様式は道具ではない。名前ではなく綴り方を選ぶ宣言である（ADR-0027）。
-        if let Some(e) = t.entry(STYLE_KEY) {
-            match e.value.as_str().and_then(dowel_eval::config::Style::parse) {
-                Some(style) => decl.style = Some(style),
-                None => {
-                    let mut d = Diagnostic::error(
-                        "invalid-value",
-                        format!("`{STYLE_KEY}` has to name an argument style"),
-                    )
-                    .at(e.site.file, e.site.span, "this is not a style")
-                    .note(format!(
-                        "the styles are: {}",
-                        dowel_eval::config::Style::ALL.join(", ")
-                    ))
-                    .note("the style decides how dowel spells the arguments it assembles (`-I` vs `/I`, `-o` vs `/Fo:`), not the flags you write yourself");
-                    if let Some(name) = e.value.as_str() {
-                        if let Some(c) = dowel_support::diag::closest(
-                            name,
-                            dowel_eval::config::Style::ALL.iter().copied(),
-                        ) {
-                            d = d.note(format!("did you mean `{c}`?"));
-                        }
-                    }
-                    diags.push(d);
-                }
-            }
-        }
-        // 表に無いキーは拒む。黙って無視すると、道具の綴り間違いが既定値への
-        // 無言の後退になる——クロスの archiver を打ち間違えると、ホストの
-        // `ar` が黙って書庫を作る。#50 が防ごうとした状態が戻る（issue #59）
-        let mut known: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _, _)| *n).collect();
-        known.push(STYLE_KEY);
-        for e in &t.entries {
-            let name = e.key.join(".");
-            if known.contains(&name.as_str()) {
-                continue;
-            }
-            let mut d = Diagnostic::error("unknown-property", format!("unknown property `{name}`"))
-                .at(e.site.file, e.site.span, "this key is not part of the toolchain")
-                .note(format!("`[{label}]` accepts: {}", known.join(", ")));
-            if let (Some(c), Some(&span)) = (
-                dowel_support::diag::closest(&name, known.iter().copied()),
-                e.key_spans.first().filter(|_| e.key.len() == 1),
-            ) {
-                d = d.suggest(e.site.file, span, c, format!("did you mean `{c}`?"));
-            }
-            diags.push(d);
-        }
-        match triple {
-            Some(triple) => {
-                // トリプル向けの宣言は、そのトリプルのビルド全体を担う。
-                // `c` が無いと C のコンパイルとリンクがホストの既定へ落ち、
-                // 成果物のアーキテクチャが黙って食い違う（issue #42）。
-                if decl.tool("c").is_none() {
-                    diags.push(
-                        Diagnostic::error(
-                            "missing-field",
-                            format!("toolchain `{triple}` has no `c`"),
-                        )
-                        .at(
-                            manifest_file,
-                            t.site.span,
-                            "a target toolchain must name its C compiler",
-                        )
-                        .note("for example `c = \"aarch64-linux-gnu-gcc\"`"),
-                    );
-                }
-                pkg.toolchains.insert(triple, decl);
-            }
-            None => pkg.toolchain = decl,
-        }
-    }
+    read_toolchains(&mut pkg, doc, manifest_file, diags);
 
     if let Some(t) = doc.table(&["features"]) {
         pkg.features_site = Some(t.site);
@@ -489,6 +426,133 @@ pub fn from_document(
     }
 
     pkg
+}
+
+/// `[toolchain]` / `[toolchain.<triple>]` を読む。
+///
+/// `dowel.toml` からも共有の記述ファイルからも同じ読み方をする
+/// （[ADR-0033](../../../docs/adr/0033-shared-toolchain-file.md)）。
+///
+/// **既に在る宣言は上書きしない。** 呼ぶ順が優先順位であり、`dowel.toml`
+/// を先に読むことで、そこに書いたものが共有ファイルより勝つ。上書きの
+/// 単位は道具1つである——三つ組ごとにすると「この機械では C だけ別」の
+/// ために表全体を写し直すことになり、写しを減らす目的に反する。
+pub fn read_toolchains(
+    pkg: &mut Package,
+    doc: &Document,
+    manifest_file: FileId,
+    diags: &mut Vec<Diagnostic>,
+) {
+    for t in doc.tables_under(&["toolchain"]) {
+        // `[toolchain]` はホスト向け、`[toolchain.<triple>]` はそのトリプル向け。
+        let (label, triple) = match t.path.len() {
+            1 => ("toolchain".to_string(), None),
+            2 => (format!("toolchain.{}", t.path[1]), Some(t.path[1].clone())),
+            _ => {
+                diags.push(
+                    Diagnostic::error(
+                        "unknown-table",
+                        format!("`[{}]` is not a toolchain declaration", t.path.join(".")),
+                    )
+                    .at(
+                        manifest_file,
+                        t.site.span,
+                        "write `[toolchain]` or `[toolchain.<triple>]`",
+                    ),
+                );
+                continue;
+            }
+        };
+        let mut decl = ToolchainDecl { site: Some(t.site), ..ToolchainDecl::default() };
+        // 受け付ける道具は表が決める。表に1行足せば、ここも `tc.<名前>` の
+        // 語彙も宣言の写しも揃って追随する。
+        for (name, _, _) in dowel_eval::config::TOOLS {
+            if let Some(e) = t.entry(name) {
+                match e.value.as_str() {
+                    Some(s) => decl.set_tool(name, s.to_string(), e.site),
+                    None => type_err(diags, e.site, &format!("{label}.{name}"), "a string"),
+                }
+            }
+        }
+        // 様式は道具ではない。名前ではなく綴り方を選ぶ宣言である（ADR-0027）。
+        if let Some(e) = t.entry(STYLE_KEY) {
+            match e.value.as_str().and_then(dowel_eval::config::Style::parse) {
+                Some(style) => decl.style = Some(style),
+                None => {
+                    let mut d = Diagnostic::error(
+                        "invalid-value",
+                        format!("`{STYLE_KEY}` has to name an argument style"),
+                    )
+                    .at(e.site.file, e.site.span, "this is not a style")
+                    .note(format!(
+                        "the styles are: {}",
+                        dowel_eval::config::Style::ALL.join(", ")
+                    ))
+                    .note("the style decides how dowel spells the arguments it assembles (`-I` vs `/I`, `-o` vs `/Fo:`), not the flags you write yourself");
+                    if let Some(name) = e.value.as_str() {
+                        if let Some(c) = dowel_support::diag::closest(
+                            name,
+                            dowel_eval::config::Style::ALL.iter().copied(),
+                        ) {
+                            d = d.note(format!("did you mean `{c}`?"));
+                        }
+                    }
+                    diags.push(d);
+                }
+            }
+        }
+        // 表に無いキーは拒む。黙って無視すると、道具の綴り間違いが既定値への
+        // 無言の後退になる——クロスの archiver を打ち間違えると、ホストの
+        // `ar` が黙って書庫を作る。#50 が防ごうとした状態が戻る（issue #59）
+        let mut known: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _, _)| *n).collect();
+        known.push(STYLE_KEY);
+        for e in &t.entries {
+            let name = e.key.join(".");
+            if known.contains(&name.as_str()) {
+                continue;
+            }
+            let mut d = Diagnostic::error("unknown-property", format!("unknown property `{name}`"))
+                .at(e.site.file, e.site.span, "this key is not part of the toolchain")
+                .note(format!("`[{label}]` accepts: {}", known.join(", ")));
+            if let (Some(c), Some(&span)) = (
+                dowel_support::diag::closest(&name, known.iter().copied()),
+                e.key_spans.first().filter(|_| e.key.len() == 1),
+            ) {
+                d = d.suggest(e.site.file, span, c, format!("did you mean `{c}`?"));
+            }
+            diags.push(d);
+        }
+        match triple {
+            Some(triple) => {
+                // トリプル向けの宣言は、そのトリプルのビルド全体を担う。
+                // `c` が無いと C のコンパイルとリンクがホストの既定へ落ち、
+                // 成果物のアーキテクチャが黙って食い違う（issue #42）。
+                if decl.tool("c").is_none() {
+                    diags.push(
+                        Diagnostic::error(
+                            "missing-field",
+                            format!("toolchain `{triple}` has no `c`"),
+                        )
+                        .at(
+                            manifest_file,
+                            t.site.span,
+                            "a target toolchain must name its C compiler",
+                        )
+                        .note("for example `c = \"aarch64-linux-gnu-gcc\"`"),
+                    );
+                }
+                // 既に在るものは道具ごとに残す。共有ファイルを土台に、
+                // `dowel.toml` に書いた1つだけを差し替える形が要る。
+                match pkg.toolchains.get_mut(&triple) {
+                    Some(existing) => existing.fill_from(&decl),
+                    None => {
+                        pkg.toolchains.insert(triple, decl);
+                    }
+                }
+            }
+            None => pkg.toolchain.fill_from_or_replace(decl),
+        }
+    }
 }
 
 /// `rev` がフル 40 桁の commit sha であることを確かめる。
@@ -783,6 +847,7 @@ mod tests {
             targets_site: None,
             toolchain: ToolchainDecl::default(),
             toolchains: BTreeMap::new(),
+            toolchains_path: None,
         }
     }
 

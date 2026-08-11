@@ -232,6 +232,7 @@ impl Session {
             targets_site: None,
             toolchain: crate::package::ToolchainDecl::default(),
             toolchains: BTreeMap::new(),
+            toolchains_path: None,
         });
         let strs = |words: &[String]| {
             Value::list(
@@ -687,6 +688,7 @@ impl Session {
         let mut pkg =
             package::from_document(id, &manifest.doc, dir.to_path_buf(), manifest_file, &mut diags);
         self.diagnostics.append(&mut diags);
+        self.read_shared_toolchains(&mut pkg, dir);
 
         // 読めなかった `dowel.build` を指す位置は、それを要求している
         // `[package]` の宣言である。ファイル自体が無いためそこは指せない。
@@ -732,6 +734,52 @@ impl Session {
         self.by_root.insert(dir.to_path_buf(), id);
         self.packages.push(pkg);
         Some(id)
+    }
+
+    /// `[package] toolchains` が指す共有の記述ファイルを読む
+    /// （[ADR-0033](../../../docs/adr/0033-shared-toolchain-file.md)）。
+    ///
+    /// マニフェストと同じ道で読む。クエリ経由でなければ、記述ファイルを
+    /// 直しても再評価されず、道具を替えたのに前の道具で組み続ける。
+    ///
+    /// `dowel.toml` の宣言を読んだ**後**に呼ぶ。補う向きの併合であり、
+    /// 呼ぶ順がそのまま優先順位になる。
+    fn read_shared_toolchains(&mut self, pkg: &mut package::Package, dir: &Path) {
+        let Some((rel, site)) = pkg.toolchains_path.clone() else { return };
+        let path = dir.join(&rel);
+        let file = match self.read_source(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "unreadable-toolchains",
+                        format!("cannot read {}: {e}", path.display()),
+                    )
+                    .at(site.file, site.span, "declared here")
+                    .note("the path is relative to the `dowel.toml` that names it"),
+                );
+                return;
+            }
+        };
+        let doc = self.parse_and_eval(file, true);
+        let mut diags = Vec::new();
+        package::read_toolchains(pkg, &doc.doc, file, &mut diags);
+        // 記述ファイルは道具立てだけを持つ。他の表を黙って無視すると、
+        // `dowel.toml` のつもりで書いたものが何も起きないまま通る。
+        for t in &doc.doc.tables {
+            if t.path.first().map(String::as_str) == Some("toolchain") {
+                continue;
+            }
+            diags.push(
+                Diagnostic::error(
+                    "unknown-table",
+                    format!("`[{}]` is not read from a toolchain file", t.path.join(".")),
+                )
+                .at(file, t.site.span, "this table has no meaning here")
+                .note("a toolchain file holds `[toolchain]` and `[toolchain.<triple>]` only"),
+            );
+        }
+        self.diagnostics.extend(diags);
     }
 
     /// ファイルを解析して評価する。結果はクエリエンジンのメモに残り、

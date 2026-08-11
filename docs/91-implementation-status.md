@@ -337,6 +337,18 @@ changes, only the speed.
   triple's plan rather than failing there — but naming it explicitly is
   `unsupported-target`, because a named target is a request and a build
   that quietly produces nothing reads as success
+- `[package] toolchains` names a file of shared toolchain declarations
+  ([ADR-0033](adr/0033-shared-toolchain-file.md)), which is what removes
+  the copying cost ADR-0031 left standing: a tree with four triples and
+  three consumers wrote the same table once per (consumer, triple) pair.
+  The file holds the same `[toolchain.<triple>]` tables, read by the same
+  code, and **a local declaration wins one tool at a time** — overriding
+  per triple would mean rewriting the whole table to change one compiler,
+  which is the cost being removed. Reading is one level; a dependency's
+  `toolchains` is not read either. The file goes through the query engine
+  so it is recorded as an input: a one-shot build would survive a
+  shortcut, but the language server holds a `Session` and would keep
+  answering with the previous compiler
 - A dependency's `[toolchain]` does not apply to the build
   ([ADR-0031](adr/0031-toolchain-is-the-builds.md)); when one exists for
   the requested triple, `missing-toolchain` reads out its values and says
@@ -813,7 +825,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (653 tests):
+Current breakdown (659 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -821,11 +833,11 @@ Current breakdown (653 tests):
 | `unit-*` | per-crate unit tests | 348 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
-| `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 219 |
+| `model-incremental` | counting what a reload did not recompute | 11 |
+| `e2e` | compile real C and C++, run it, check the output | 224 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (67 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (68 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |

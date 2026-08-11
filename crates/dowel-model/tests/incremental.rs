@@ -233,3 +233,39 @@ fn fixing_a_file_clears_its_diagnostics() {
     sess.reload();
     assert!(!sess.has_errors(), "{:?}", sess.diagnostics);
 }
+
+#[test]
+fn a_shared_toolchain_file_is_an_input_like_any_other() {
+    // 共有の記述ファイルはクエリ経由で読む（ADR-0033）。読み直しで拾える
+    // ことが、それが入力として記録されている観測可能な形である——外して
+    // 読むと、常駐するセッション（エディタ）が道具の変更に追随しない。
+    let s = Scratch::new("incremental-shared-toolchain");
+    s.write("toolchains.toml", "[toolchain]\nar = \"ar\"\n");
+    s.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\ntoolchains = \"../toolchains.toml\"\n",
+    );
+    s.write("app/dowel.build", "[lib.core]\nsources = glob(\"src/*.c\")\n");
+    s.write("app/src/core.c", "int core(void) { return 1; }\n");
+
+    let mut sess = Session::load(&s.path("app"));
+    let ar = |sess: &Session| {
+        sess.root_package().and_then(|p| p.toolchain.tool("ar")).map(|t| t.command.clone())
+    };
+    assert_eq!(ar(&sess).as_deref(), Some("ar"));
+
+    // 何も触らずに読み直せば、記述ファイルも読み直されない。
+    sess.reload();
+    assert_eq!(sess.query_stats().computed, 0, "{:?}", sess.query_stats());
+
+    // 記述ファイルだけを直す。`dowel.toml` は1バイトも変わっていない。
+    s.write("toolchains.toml", "[toolchain]\nar = \"/usr/bin/ar\"\n");
+    sess.reload();
+    assert_eq!(
+        ar(&sess).as_deref(),
+        Some("/usr/bin/ar"),
+        "the shared toolchain file was not re-read"
+    );
+    // 読み直したのはその1ファイルだけ（`Parsed` と `Evaluated` の2つ）。
+    assert_eq!(sess.query_stats().computed, 2, "{:?}", sess.query_stats());
+}

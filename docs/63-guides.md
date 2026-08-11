@@ -195,15 +195,33 @@ ssh board.local /tmp/dowel/unit_test
 
 ### A library that supports several triples
 
-**Each consumer declares its own toolchain.** A dependency's
-`[toolchain.<triple>]` is read — a mismatch is reported — but it does not
-apply to the build: the toolchain is a property of the build, not of a
-package ([ADR-0031](adr/0031-toolchain-is-the-builds.md)). The tool's
-*name* comes from what is installed on the machine doing the build
+**Each consumer declares its own toolchain, but the tree writes the table
+once.** A dependency's `[toolchain.<triple>]` is read — a mismatch is
+reported — but it does not apply to the build: the toolchain is a property
+of the build, not of a package
+([ADR-0031](adr/0031-toolchain-is-the-builds.md)). The tool's *name* comes
+from what is installed on the machine doing the build
 (`aarch64-linux-gnu-gcc` on Debian, something else inside a vendor SDK),
-which is not knowledge the library has. When a dependency does declare one
-for the requested triple, `missing-toolchain` reads out its value so the
-line can be copied rather than looked up.
+which is not knowledge the library has.
+
+What removes the copying is a shared file
+([ADR-0033](adr/0033-shared-toolchain-file.md)): put the triple-to-tools
+mapping in one place and have each consumer name it.
+
+```toml
+# cli/dowel.toml, gui/dowel.toml, fw/dowel.toml — one line each
+[package]
+toolchains = "../toolchains.toml"
+```
+
+A local `[toolchain.<triple>]` beside that key overrides **one tool** and
+leaves the rest coming from the file, which is the shape a machine that
+differs in one compiler actually has. Adding a triple is then one table in
+one file, not one per consumer.
+
+When a dependency does declare a toolchain for the requested triple and
+the build has none, `missing-toolchain` reads out its value so the line
+can be copied rather than looked up.
 
 What a library *can* declare is which triples it supports, and it can do so
 per target, not only per package:
