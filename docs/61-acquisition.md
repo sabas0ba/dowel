@@ -30,11 +30,16 @@ dowelup shim ~/.local/bin                # create a link named `dowel`
 
 Every form is resolved to a commit sha at `install` / `pin` / `default` time;
 from then on the sha is the source of truth. Upstream has no release tags
-yet, so `stable` and `X.Y.Z` cannot resolve until one appears.
+yet, so `stable` and `X.Y.Z` cannot resolve until one appears. The pin holds
+the sha whichever way the binary arrived, so a project pinned to a sha gets
+the same version whether its developers took the published binary or built
+it themselves.
 
 ## Commands
 
 ```sh
+dowelup install 0.1.0              # a release: takes the published binary
+dowelup install 0.1.0 --from-source    # ... or builds it instead
 dowelup install nightly            # resolve, build, place under versions/<sha>/
 dowelup install branch:feature     # a specific upstream branch
 dowelup install 2915da5ab          # a specific commit (prefix suffices)
@@ -46,10 +51,33 @@ dowelup run branch:feature -- check    # run a specific version, bypassing selec
 dowelup uninstall branch:feature   # remove it
 ```
 
-Resolution and fetching are delegated to `git`, and building to `cargo`;
-both must be on PATH. The default upstream is
+Resolution is delegated to `git`. The default upstream is
 `https://github.com/sabas0ba/dowel`, overridable with `--upstream <url>` or
 the environment variable `DOWELUP_UPSTREAM`.
+
+## Where the binary comes from
+
+A release specifier (`stable`, `X.Y.Z`, `tag:`) takes a **published
+binary** from the release assets, verified against the `.sha256` published
+beside it ([ADR-0036](adr/0036-prebuilt-distribution.md)). Everything else
+— `nightly`, `branch:`, a bare sha — has no asset to take, and builds from
+source with `cargo`. `--from-source` forces the build in every case.
+`install` says which path it took.
+
+The two differ in what they let you conclude:
+
+| | trusts | proves |
+|---|---|---|
+| source build | the git history, pinned by sha | the binary was built from *this* commit |
+| published binary | the release publisher, over HTTPS | the bytes match what the publisher listed |
+
+The checksum catches a truncated download, a proxy that mangles bytes, or
+a stale mirror. It does not catch a compromised release: whoever can
+replace the tarball can replace the checksum next to it. Nothing checks
+that a published binary was built from the sha it is installed as — if
+that matters, use `--from-source`, which needs `cargo` on PATH.
+
+Fetching is delegated to `curl` (or `wget`), unpacking to `tar`.
 
 The output split matches dowel itself ([60-cli.md](60-cli.md)): stdout
 carries artifacts (resolved shas, listings, paths), stderr carries progress

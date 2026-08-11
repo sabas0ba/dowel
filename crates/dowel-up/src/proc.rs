@@ -73,3 +73,45 @@ pub fn cargo_build(checkout: &Path, locked: bool) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// 取得。`curl` を試し、無ければ `wget`（ADR-0036）。
+///
+/// 自前で HTTP を話さないのは、ソースの取得を git に委ねたのと同じ判断で
+/// ある（ADR-0013）。確立した道具の責務は奪わない。
+pub fn download(url: &str, to: &Path) -> Result<(), String> {
+    let out = to.to_string_lossy().into_owned();
+    let attempts: [(&str, Vec<&str>); 2] = [
+        // `--fail` が無いと、404 の本文を書庫として保存してしまう。
+        ("curl", vec!["--fail", "--silent", "--show-error", "--location", url, "--output", &out]),
+        ("wget", vec!["--quiet", url, "-O", &out]),
+    ];
+    let mut last = String::new();
+    for (program, args) in attempts {
+        match Command::new(program).args(&args).stdin(Stdio::null()).output() {
+            // 道具が無いだけなら次を試す。落とすのは最後の1つが失敗したとき。
+            Err(e) => last = format!("cannot run {program}: {e}"),
+            Ok(o) if o.status.success() => return Ok(()),
+            Ok(o) => {
+                let _ = std::fs::remove_file(to);
+                last = format!("{program} failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+            }
+        }
+    }
+    Err(last)
+}
+
+/// 書庫を開く。`tar` へ委譲する。
+pub fn untar(archive: &Path, into: &Path) -> Result<(), String> {
+    let out = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(into)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("cannot start tar: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("tar failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(())
+}

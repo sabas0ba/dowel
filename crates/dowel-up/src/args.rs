@@ -46,6 +46,11 @@ Options:
         --upstream <url>     Fetch dowel from here (default: the
                              DOWELUP_UPSTREAM variable, then
                              https://github.com/sabas0ba/dowel)
+        --from-source        Build from source instead of taking a
+                             published binary. Release specifiers use a
+                             release asset by default, verified against
+                             its sha256; only the source build shows
+                             which commit the binary came from
     -h, --help               Show this help
     -V, --version            Show the version
 
@@ -73,6 +78,8 @@ pub struct Options {
     pub command: Command,
     pub directory: PathBuf,
     pub upstream: Option<String>,
+    /// 事前ビルドを使わず、ソースから組む（ADR-0036）
+    pub from_source: bool,
 }
 
 pub enum Parsed {
@@ -84,6 +91,7 @@ pub enum Parsed {
 pub fn parse(argv: Vec<String>) -> Result<Parsed, String> {
     let mut directory = PathBuf::from(".");
     let mut upstream: Option<String> = None;
+    let mut from_source = false;
     let mut positional: Vec<String> = Vec::new();
     let mut tail: Vec<String> = Vec::new();
     let mut i = 0;
@@ -100,6 +108,7 @@ pub fn parse(argv: Vec<String>) -> Result<Parsed, String> {
                 i += 1;
                 upstream = Some(need(&argv, i, a)?.to_string());
             }
+            "--from-source" => from_source = true,
             _ => {
                 if let Some(v) = a.strip_prefix("--directory=") {
                     directory = PathBuf::from(v);
@@ -125,7 +134,7 @@ pub fn parse(argv: Vec<String>) -> Result<Parsed, String> {
         i += 1;
     }
     let command = command(positional, tail)?;
-    Ok(Parsed::Run(Box::new(Options { command, directory, upstream })))
+    Ok(Parsed::Run(Box::new(Options { command, directory, upstream, from_source })))
 }
 
 fn need<'a>(argv: &'a [String], i: usize, flag: &str) -> Result<&'a str, String> {

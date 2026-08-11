@@ -10,6 +10,7 @@
 
 mod acquire;
 mod args;
+mod prebuilt;
 mod proc;
 mod spec;
 mod store;
@@ -68,13 +69,13 @@ fn run(opts: Options) -> Result<ExitCode, String> {
     match opts.command {
         Command::Install { spec } => {
             let url = acquire::upstream(opts.upstream.as_deref());
-            let got = acquire::install(&home, &url, &spec)?;
+            let got = acquire::install(&home, &url, &spec, opts.from_source)?;
             report(&got);
             println!("{}", got.sha);
         }
         Command::Default { spec } => {
             let url = acquire::upstream(opts.upstream.as_deref());
-            let got = acquire::install(&home, &url, &spec)?;
+            let got = acquire::install(&home, &url, &spec, opts.from_source)?;
             report(&got);
             store::write_selection(&home.default_file(), &got.sha, &spec.to_string())?;
             eprintln!("the default is now {} (from {spec})", got.sha);
@@ -82,7 +83,7 @@ fn run(opts: Options) -> Result<ExitCode, String> {
         }
         Command::Pin { spec } => {
             let url = acquire::upstream(opts.upstream.as_deref());
-            let got = acquire::install(&home, &url, &spec)?;
+            let got = acquire::install(&home, &url, &spec, opts.from_source)?;
             report(&got);
             let file = opts.directory.join(store::PIN_FILE);
             store::write_selection(&file, &got.sha, &spec.to_string())?;

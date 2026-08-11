@@ -85,3 +85,6 @@ dependencies = [
 [[package]]
 name = "dowel-up"
 version = "0.1.0"
+dependencies = [
+ "dowel-support",
+]
