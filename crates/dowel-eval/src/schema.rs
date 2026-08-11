@@ -106,6 +106,7 @@ impl TableKind {
                 | TableKind::Test
                 | TableKind::Bench
                 | TableKind::Runner
+                | TableKind::Template
         )
     }
 
@@ -262,6 +263,13 @@ pub fn root_props() -> Vec<PropDef> {
             ty: list(Type::Path),
             merge: Merge::Append,
             doc: "sources to compile. does not propagate",
+            domain: None,
+        },
+        PropDef {
+            name: "use",
+            ty: list(Type::Unknown),
+            merge: Merge::Append,
+            doc: "templates to expand into this target's blocks (ADR-0035)",
             domain: None,
         },
         PropDef {
@@ -615,6 +623,11 @@ pub const FUNCTIONS: &[(&str, &str, &str)] = &[
     ("file", "(Str) -> Path", "a file relative to the package root"),
     ("dep", "(Str) -> DepRef", "a reference to a dependency declared in dowel.toml"),
     ("target", "(Str) -> TargetRef", "a reference to a target in the same package"),
+    (
+        "template",
+        "(Str) -> TemplateRef",
+        "a reference to a `[template.<name>]` in the same file (ADR-0035)",
+    ),
 ];
 
 pub fn lookup(block: Block, name: &str) -> Option<PropDef> {

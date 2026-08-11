@@ -350,12 +350,14 @@ impl<'a> Evaluator<'a> {
         let prov = Prov::at(Origin::Call(name.to_string()), site);
         let args: Vec<Value> = node.nodes().map(|n| self.expr(n)).collect();
 
-        const FUNCTIONS: &[&str] = &["glob", "dir", "file", "dep", "target"];
-        if !FUNCTIONS.contains(&name) {
+        // 名前は表から引く。ここに写しを持つと、関数を足したときに
+        // `schema dump` とエディタのホバーだけが知っている状態になる。
+        let functions: Vec<&str> = crate::schema::FUNCTIONS.iter().map(|(n, _, _)| *n).collect();
+        if !functions.contains(&name) {
             let mut d = Diagnostic::error("unknown-function", format!("unknown function `{name}`"))
                 .at(self.file, node.span, "no function has this name")
-                .note(format!("available functions: {}", FUNCTIONS.join(", ")));
-            if let Some(c) = closest(name, FUNCTIONS.iter().copied()) {
+                .note(format!("available functions: {}", functions.join(", ")));
+            if let Some(c) = closest(name, functions.iter().copied()) {
                 if let Some(t) = name_tok {
                     d = d.suggest(self.file, t.span, c, format!("did you mean `{c}`?"));
                 }
@@ -396,6 +398,7 @@ impl<'a> Evaluator<'a> {
             },
             "dep" => Value { ty: Type::DepRef, data: Data::Dep(arg), prov },
             "target" => Value { ty: Type::TargetRef, data: Data::Target(arg), prov },
+            "template" => Value { ty: Type::TemplateRef, data: Data::Template(arg), prov },
             _ => unreachable!("unknown functions are rejected above"),
         }
     }

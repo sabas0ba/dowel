@@ -5679,3 +5679,122 @@ fn a_misspelled_key_still_gets_the_near_one() {
     r.stderr_contains("did you mean `target`?");
     assert!(!r.stderr.contains("feature.taget"), "{}", r.stderr);
 }
+
+#[test]
+fn a_template_shares_a_private_setting_without_publishing_it() {
+    // これがテンプレートの存在理由である（ADR-0035）。ソースの無い lib に
+    // 依存する書き方でも設定は配れるが、配れるのは `public` だけで、
+    // それは「共有する」ではなく「公開する」——依存側の全員に届く。
+    let p = Project::new("template-private");
+    p.write("dowel.toml", "[package]\nname = \"template-private\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[template.tool]\n\n\
+         [template.tool.private]\ndefines = { PRIVATE_ONLY = 1 }\n\n\
+         [lib.core]\nsources = [file(\"src/core.c\")]\nuse = [template(\"tool\")]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"core\")]\n",
+    );
+    // テンプレートを使った側には届く。
+    p.write(
+        "src/core.c",
+        "#ifndef PRIVATE_ONLY\n#error the template's private did not reach the target\n#endif\n\
+         int core_value(void) { return 42; }\n",
+    );
+    // その依存側には届かない。`public` に置いたのでは、こうならない。
+    p.write(
+        "src/main.c",
+        "#ifdef PRIVATE_ONLY\n#error the private setting leaked to the dependent\n#endif\n\
+         #include <stdio.h>\nint core_value(void);\n\
+         int main(void) { printf(\"v=%d\\n\", core_value()); return 0; }\n",
+    );
+
+    p.run(".", &["build"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "v=42\n");
+}
+
+#[test]
+fn a_template_expands_ahead_of_the_targets_own_lines() {
+    // 展開は「テンプレートの行が先に書かれていた」のと同じである。
+    // 併合の代数に特例を作らないので、`append` の順序も普段どおり。
+    let p = Project::new("template-order");
+    p.write("dowel.toml", "[package]\nname = \"template-order\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[template.warn]\n\n\
+         [template.warn.private]\nflags = [\"-DFROM_TEMPLATE\"]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\nuse = [template(\"warn\")]\n\n\
+         [bin.app.private]\nflags = [\"-DFROM_TARGET\"]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#if !defined(FROM_TEMPLATE) || !defined(FROM_TARGET)\n#error both should reach\n#endif\n\
+         int main(void) { return 0; }\n",
+    );
+
+    p.run(".", &["build"]).success();
+    let text =
+        std::fs::read_to_string(build_dir(&p.path("."), "debug").join("compile_commands.json"))
+            .expect("no compile_commands.json");
+    let t = text.find("-DFROM_TEMPLATE").expect("the template flag is missing");
+    let o = text.find("-DFROM_TARGET").expect("the target flag is missing");
+    assert!(t < o, "the template's flag should come first");
+}
+
+#[test]
+fn a_template_holds_settings_only() {
+    // root のプロパティは「そのターゲットが何であるか」を決める。共有すると
+    // 何を作っているのかが読み取れなくなる。`use` を書けないことが、
+    // テンプレートが再帰しないことでもある。
+    let p = Project::new("template-settings-only");
+    p.write("dowel.toml", "[package]\nname = \"template-settings-only\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[template.tool]\nsources = [file(\"src/main.c\")]\nuse = [template(\"other\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("a template has no `sources`");
+    r.stderr_contains("a template has no `use`");
+    r.stderr_contains("templates hold settings only");
+}
+
+#[test]
+fn a_template_is_not_something_to_build() {
+    let p = Project::new("template-not-a-target");
+    p.write("dowel.toml", "[package]\nname = \"template-not-a-target\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[template.tool]\n\n[template.tool.private]\nflags = [\"-DX\"]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\nuse = [template(\"tool\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    // 名指しは断る。
+    let r = p.run(".", &["build", "tool"]);
+    r.failure();
+    r.stderr_contains("not-a-target");
+    // 名指ししなければ、テンプレートは数えられず app だけが組まれる。
+    p.run(".", &["build"]).success();
+    assert!(build_dir(&p.path("."), "debug").join("bin/app").is_file());
+}
+
+#[test]
+fn an_unknown_template_names_the_declared_ones() {
+    let p = Project::new("template-unknown");
+    p.write("dowel.toml", "[package]\nname = \"template-unknown\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[template.tool]\n\n[template.tool.private]\nflags = [\"-DX\"]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\nuse = [template(\"tol\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-template");
+    r.stderr_contains("did you mean `tool`?");
+}

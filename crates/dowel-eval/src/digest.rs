@@ -59,6 +59,7 @@ fn write_data<H: Hasher>(h: &mut H, d: &Data) {
         Data::Glob(g) => (4u8, g).hash(h),
         Data::Dep(n) => (5u8, n).hash(h),
         Data::Target(n) => (6u8, n).hash(h),
+        Data::Template(n) => (13u8, n).hash(h),
         Data::List(items) => {
             (7u8, items.len()).hash(h);
             for item in items {

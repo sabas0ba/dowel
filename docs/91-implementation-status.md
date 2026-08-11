@@ -367,6 +367,17 @@ changes, only the speed.
   was missing (issue #125). The position is unchanged, because a tool's
   *name* comes from the machine doing the build, not from the library;
   what changed is that the output states it
+- `[template.<name>]` holds shared settings that targets take with
+  `use = [template("...")]` ([ADR-0035](adr/0035-template-kind.md)). A
+  library with no sources already shared settings through a dependency, but
+  only `public` propagates, so sharing meant publishing — warning flags
+  pushed onto everything downstream. A template **expands into the block it
+  came from**: its `private` becomes the user's `private`. Expansion places
+  the template's values ahead of the target's own and merges normally, so
+  no special case enters the merge algebra and `dowel why` still names the
+  template's line. A template holds settings only (root properties are
+  refused, which is also why templates do not use templates), produces no
+  artifact, and is `not-a-target` when named on the command line
 - Shared libraries: `[lib.<name>] linkage = "shared"`
   ([ADR-0030](adr/0030-shared-libraries.md)) links `lib<name>.so` /
   `lib<name>.dylib` / `<name>.dll` instead of an archive.
@@ -834,7 +845,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (662 tests):
+Current breakdown (667 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -843,10 +854,10 @@ Current breakdown (662 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 227 |
+| `e2e` | compile real C and C++, run it, check the output | 232 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (68 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (70 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
@@ -912,7 +923,7 @@ cannot be measured with the current fixtures; the scale fixture
 |---|---|
 | mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
-| the `template` / `toolchain` kinds | Phase 4 |
+| the `toolchain` kind | Phase 4 |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |

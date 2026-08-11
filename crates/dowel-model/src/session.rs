@@ -845,6 +845,45 @@ impl Session {
     }
 }
 
+/// `use` の値から、参照されたテンプレートの名前と位置を取り出す。
+fn template_names(value: &Value) -> Vec<(String, Site)> {
+    let mut out = Vec::new();
+    collect_templates(value, &mut out);
+    out
+}
+
+fn collect_templates(value: &Value, out: &mut Vec<(String, Site)>) {
+    match &value.data {
+        Data::List(items) => items.iter().for_each(|v| collect_templates(v, out)),
+        Data::Template(name) => {
+            if let Some(site) = value.prov.nearest_site() {
+                out.push((name.clone(), site));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// テンプレート由来の値を、既に在る値の**前**に置いて併合する（ADR-0035）。
+fn prepend_props(into: &mut PropMap, from: &[PropMap], diags: &mut Vec<Diagnostic>) {
+    let defs = schema::block_props();
+    for def in defs {
+        let mut reached: Vec<Value> = Vec::new();
+        for m in from {
+            if let Some(v) = m.get(def.name) {
+                reached.push(v.clone());
+            }
+        }
+        if reached.is_empty() {
+            continue;
+        }
+        if let Some(own) = into.get(def.name) {
+            reached.push(own.clone());
+        }
+        into.insert(def.name.to_string(), schema::merge_values(&def, &reached, diags));
+    }
+}
+
 /// `dowel.build` のテーブル列をターゲットとランナーへ組み上げる先。
 ///
 /// [`Session`] の読み込みと、開いている1ファイルだけを見る検査
@@ -1095,10 +1134,90 @@ impl TargetSink<'_> {
             }
         }
 
+        self.expand_templates(pkg);
+
         for t in self.targets.iter() {
             if t.package == pkg {
                 log_trace!("declared target {}.{}", t.kind.name(), t.name);
             }
+        }
+    }
+
+    /// `use = [template("...")]` を展開する（ADR-0035）。
+    ///
+    /// テンプレートの `public` は使う側の `public` へ、`private` は `private`
+    /// へ入る。ここが「ソースの無い lib に依存する」書き方との違いであり、
+    /// 種別が在る理由そのものである——lib では `public` しか伝播せず、
+    /// 共有することと公開することが分けられない。
+    ///
+    /// 展開はテンプレートの値を**先に**置いて併合する。テンプレートの行が
+    /// 使う側に先に書かれていた場合と同じであり、`append` の順序も
+    /// `replace` の後勝ちも普段どおりに効く。併合の代数に特例を作らないので、
+    /// `dowel why` は展開後も来歴を辿れる。
+    fn expand_templates(&mut self, pkg: PackageId) {
+        let templates: BTreeMap<String, (PropMap, PropMap, Site)> = self
+            .targets
+            .iter()
+            .filter(|t| t.package == pkg && t.kind == TableKind::Template)
+            .map(|t| (t.name.clone(), (t.public.clone(), t.private.clone(), t.site)))
+            .collect();
+
+        let ids: Vec<TargetId> = self
+            .targets
+            .iter()
+            .filter(|t| t.package == pkg && t.kind != TableKind::Template)
+            .map(|t| t.id)
+            .collect();
+
+        for tid in ids {
+            let uses = match self.targets[tid.0].root.get("use") {
+                Some(v) => template_names(v),
+                None => continue,
+            };
+            let mut public_from: Vec<PropMap> = Vec::new();
+            let mut private_from: Vec<PropMap> = Vec::new();
+            for (name, site) in uses {
+                match templates.get(&name) {
+                    Some((public, private, _)) => {
+                        public_from.push(public.clone());
+                        private_from.push(private.clone());
+                    }
+                    None => {
+                        let known: Vec<&str> = templates.keys().map(|s| s.as_str()).collect();
+                        let mut d = Diagnostic::error(
+                            "unknown-template",
+                            format!("no template named `{name}`"),
+                        )
+                        .at(
+                            site.file,
+                            site.span,
+                            "this template is not declared",
+                        );
+                        if known.is_empty() {
+                            d = d.note("declare it as `[template.<name>]` in this file");
+                        } else {
+                            d = d.note(format!("declared templates: {}", known.join(", ")));
+                            if let Some(c) = closest(&name, known.iter().copied()) {
+                                d = d.suggest(
+                                    site.file,
+                                    site.span,
+                                    format!("template({c:?})"),
+                                    format!("did you mean `{c}`?"),
+                                );
+                            }
+                        }
+                        self.diagnostics.push(d);
+                    }
+                }
+            }
+            if public_from.is_empty() && private_from.is_empty() {
+                continue;
+            }
+            let mut diags = Vec::new();
+            let target = &mut self.targets[tid.0];
+            prepend_props(&mut target.public, &public_from, &mut diags);
+            prepend_props(&mut target.private, &private_from, &mut diags);
+            self.diagnostics.append(&mut diags);
         }
     }
 
@@ -1586,7 +1705,15 @@ impl TargetSink<'_> {
                     format!("`{}` is not implemented yet", kind.name()),
                 )
                 .at(file, table.site.span, "recognized as a kind but not yet processed")
-                .note("implemented kinds are lib, bin and test"),
+                .note(format!(
+                    "implemented kinds: {}",
+                    TableKind::ALL
+                        .iter()
+                        .filter(|k| k.is_implemented())
+                        .map(|k| k.name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
             );
             return None;
         }
@@ -1614,6 +1741,22 @@ impl TargetSink<'_> {
             },
             _ => (block, key.join("."), None),
         };
+
+        // テンプレートは設定だけを持つ（ADR-0035）。root のプロパティは
+        // 「そのターゲットが何であるか」を決めるもので、共有すると何を
+        // 作っているのかが読み取れなくなる。
+        if self.targets[tid.0].kind == TableKind::Template && block == Block::Root {
+            self.diagnostics.push(
+                Diagnostic::error("unknown-property", format!("a template has no `{name}`"))
+                    .at(site.file, site.span, "templates hold settings only")
+                    .note("write it in the target that uses this template")
+                    .note(format!(
+                        "`[template.<name>.public]` and `.private` accept: {}",
+                        schema::prop_names(Block::Public).join(", ")
+                    )),
+            );
+            return;
+        }
 
         let Some(def) = schema::lookup(block, &name) else {
             let known = schema::prop_names(block);

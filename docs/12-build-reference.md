@@ -49,7 +49,7 @@ fails type checking with a suggestion.
 | `bin` | executable | `bin/<name>`, `bin/<name>.exe` on Windows | implemented |
 | `test` | test executable; run by `dowel test`, exit status 0 = pass | `bin/<name>`, `.exe` on Windows | implemented |
 | `bench` | benchmark executable; measured by `dowel bench` ([ADR-0025](adr/0025-bench-wall-clock.md)) | `bin/<name>`, `.exe` on Windows | implemented |
-| `template` | non-recursive reuse unit | — | reserved, not implemented |
+| `template` | shared settings, expanded into the targets that `use` it ([ADR-0035](adr/0035-template-kind.md)) | none | implemented |
 | `toolchain` | toolchain description | — | reserved, not implemented |
 | `runner` | execution wrapper; the name is a **target triple**, not a target name | none | implemented |
 
@@ -86,9 +86,48 @@ set.
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
 | `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C and C++ may mix in one target; the language — and so the compiler — is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`, everything else compiles as C) |
+| `use` | `List<TemplateRef>` | `append` | templates to expand into this target's blocks ([ADR-0035](adr/0035-template-kind.md)) |
 | `targets` | `List<Str>` | `append` | triples this target is built for. Empty means every triple. Same spelling as `[package] targets`, narrower reach |
 | `linkage` | `Str` | `replace` | how a `lib` is linked: `static` (the default) or `shared`. Ignored by other kinds |
 | `exports` | `List<Str>` | `append` | the symbols a shared library exports. Required when `linkage = "shared"` |
+
+#### Sharing settings between targets
+
+`[template.<name>]` holds `public` and `private` blocks; a target takes one
+with `use` ([ADR-0035](adr/0035-template-kind.md)):
+
+```
+[template.tool]
+
+[template.tool.public]
+includes = [dir("include")]
+
+[template.tool.private]
+flags = ["-Wall", "-Wextra", "-Werror"]
+deps  = [target("core")]
+
+[bin.probe]
+sources = [file("src/probe.c")]
+use     = [template("tool")]
+```
+
+A template **expands into the block it came from**: its `private` becomes
+the target's `private`, its `public` becomes the target's `public`. That is
+what a library with no sources cannot do — `public` is the only block that
+propagates, so sharing a setting through a dependency means publishing it
+to everything downstream.
+
+Expansion places the template's values ahead of the target's own and then
+merges normally, so `append` keeps that order and `replace` lets the target
+win. `dowel why` names the template's line.
+
+- A template holds settings only. `sources`, `targets`, `linkage`,
+  `exports`, and `use` itself are refused — the root block says *what a
+  target is*, and a template is not a target
+- Templates do not use templates: reading is one level
+- A template produces no artifact and is not in the graph. Naming one on
+  the command line is `not-a-target`
+- `use` naming an undeclared template is `unknown-template`
 
 #### Restricting a target to some triples
 
