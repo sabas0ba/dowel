@@ -308,6 +308,36 @@ changes, only the speed.
   translation unit uses the C++ driver, so the C++ runtime is linked even
   when the binary itself is pure C. The C++ toolchain is only required — and
   only probed — when C++ sources are present
+- Shared libraries: `[lib.<name>] linkage = "shared"`
+  ([ADR-0030](adr/0030-shared-libraries.md)) links `lib<name>.so` /
+  `lib<name>.dylib` / `<name>.dll` instead of an archive.
+  - It **must** declare `exports`, and there is no default. The exported
+    surface is the one thing the platforms disagree about — everything
+    non-`static` on ELF and Mach-O, nothing at all on Windows — so adopting
+    either behavior would let the same manifest describe two different
+    interfaces. Omitting the list is `missing-exports`
+  - From that one list dowel generates the linker's own form: an ELF
+    version script, a Mach-O symbol list (with the platform's `_` prefix),
+    or a `.def` for PE. The form follows the **object format**, not the
+    argument style, because mingw spells arguments the GNU way while
+    producing PE. The generated file is an input of the link, so changing
+    `exports` relinks
+  - `-fvisibility=hidden` is deliberately *not* added. A symbol hidden at
+    compile time cannot be restored by the version script's `global:` list,
+    so the pair exports nothing at all — measured rather than reasoned
+    about. The script alone does the job
+  - Every target in a shared library's link closure is compiled `-fPIC`,
+    not just the one that declares the linkage: a static library linked
+    into a position-independent output must be position-independent too
+  - Dependents get a run-time search path into the build tree's `lib/` and
+    the library gets a soname (or a macOS install name), which is what
+    makes the search path effective — without it the executable records
+    the path it linked against. Windows has no rpath, so `dowel test` and
+    `dowel bench` prepend that directory to the child's `PATH` instead,
+    after the declared `env` is applied so a case that sets `env` does not
+    lose it
+  - Symbol versioning and installation are not implemented, and nothing
+    verifies that a name in `exports` exists
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language
 - The language standard is typed: `c_std` / `cxx_std` take a value from a
@@ -745,19 +775,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (630 tests):
+Current breakdown (638 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 336 |
+| `unit-*` | per-crate unit tests | 341 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 208 |
+| `e2e` | compile real C and C++, run it, check the output | 211 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (67 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 3 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |

@@ -550,6 +550,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "missing-exports",
+        why: "a shared library does not say what it exports (ADR-0030)",
+        files: &[(
+            "app/dowel.build",
+            "[lib.core]\nsources = [file(\"src/main.c\")]\nlinkage = \"shared\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "empty-glob",
         why: "the pattern matches no file",
         files: &[("app/dowel.build", "[bin.app]\nsources = glob(\"nowhere/*.c\")\n")],
@@ -1001,6 +1010,10 @@ const UNCOVERED: &[(&str, &str)] = &[
     (
         "dependency-cycle",
         "covered by the model integration tests, which can build the cycle directly",
+    ),
+    (
+        "unwritable-build-dir",
+        "requires a build directory that exists but cannot be written (permissions)",
     ),
     (
         "lockfile-drift",

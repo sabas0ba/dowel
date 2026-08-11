@@ -45,7 +45,7 @@ fails type checking with a suggestion.
 
 | kind | Meaning | Artifact | Status |
 |---|---|---|---|
-| `lib` | static library | `lib<name>.a` | implemented |
+| `lib` | library; static by default, shared with `linkage = "shared"` ([ADR-0030](adr/0030-shared-libraries.md)) | `lib<name>.a`; shared: `lib<name>.so` / `lib<name>.dylib` / `<name>.dll` | implemented |
 | `bin` | executable | `bin/<name>`, `bin/<name>.exe` on Windows | implemented |
 | `test` | test executable; run by `dowel test`, exit status 0 = pass | `bin/<name>`, `.exe` on Windows | implemented |
 | `bench` | benchmark executable; measured by `dowel bench` ([ADR-0025](adr/0025-bench-wall-clock.md)) | `bin/<name>`, `.exe` on Windows | implemented |
@@ -86,6 +86,48 @@ set.
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
 | `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C and C++ may mix in one target; the language — and so the compiler — is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`, everything else compiles as C) |
+| `linkage` | `Str` | `replace` | how a `lib` is linked: `static` (the default) or `shared`. Ignored by other kinds |
+| `exports` | `List<Str>` | `append` | the symbols a shared library exports. Required when `linkage = "shared"` |
+
+#### Shared libraries
+
+A `lib` with `linkage = "shared"` produces a shared library rather than an
+archive, and **must** declare `exports`
+([ADR-0030](adr/0030-shared-libraries.md)):
+
+```
+[lib.core]
+sources = glob("src/*.c")
+linkage = "shared"
+exports = ["core_open", "core_close"]
+```
+
+`exports` has no default. It is the one place where the platforms disagree
+about what a declaration means: on ELF and Mach-O every non-`static` symbol
+is exported unless something says otherwise, and on Windows nothing is
+exported unless something says so. Taking either as the default would make
+the same manifest describe two different interfaces, so dowel requires the
+list and generates each linker's form of it — a version script, a Mach-O
+symbol list, or a `.def` — from the one declaration. Omitting it is
+`missing-exports`.
+
+Names are written as the linker sees them. For C that is the function name;
+for C++ it is the mangled name. dowel does not mangle, and adds only the
+uniform `_` prefix Mach-O requires.
+
+Declaring one library shared also changes how its dependencies are
+compiled: every target in a shared library's link closure is compiled
+`-fPIC`, because non-position-independent objects cannot be linked into a
+position-independent output.
+
+Binaries that link a shared library record a run-time search path pointing
+at the build tree's `lib/` directory, so they run from the build tree
+without help. Windows has no such mechanism, so `dowel test` and `dowel
+bench` put that directory on `PATH` for the child process instead; a
+Windows executable started by hand from the build tree will not find its
+DLLs.
+
+Symbol versioning (`libcore.so.1`) and installation are not implemented.
 
 ### `[<kind>.<name>.public]` and `[<kind>.<name>.private]`
 

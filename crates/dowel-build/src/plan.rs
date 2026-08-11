@@ -167,6 +167,9 @@ pub fn plan(
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
+    // ターゲット → 依存側がリンクに渡すもの。通常は成果物そのものだが、
+    // MSVC の共有ライブラリでは DLL ではなく取り込み用の書庫である
+    let mut link_inputs: BTreeMap<TargetId, PathBuf> = BTreeMap::new();
     // ターゲット → 自身のソースに C++ を含むか。リンカの選択が読む
     let mut has_cxx: BTreeMap<TargetId, bool> = BTreeMap::new();
     // C++ コンパイラの実在検査は C++ ソースが現れたときに1度だけ行う。
@@ -176,6 +179,20 @@ pub fn plan(
     let mut ar_toolchain_checked = false;
     // 変換の道具も同じ扱い。使う宣言があったときに1度だけ確かめる
     let mut probed_tools: BTreeSet<String> = BTreeSet::new();
+
+    // 共有ライブラリと、位置独立に翻訳するターゲット（ADR-0030）。
+    //
+    // 宣言したターゲットだけでは足りない。静的ライブラリが共有ライブラリに
+    // 取り込まれるとき、その目的コードも位置独立でなければリンカに弾かれる
+    // ——繋ぎ方の宣言は、依存の翻訳の仕方まで動かす。
+    let mut position_independent: BTreeSet<TargetId> = BTreeSet::new();
+    let mut shared_targets: BTreeSet<TargetId> = BTreeSet::new();
+    for &tid in &graph.order {
+        if needed.contains(&tid) && is_shared(sess, tid, cfg) {
+            shared_targets.insert(tid);
+            position_independent.extend(graph.link_closure(tid));
+        }
+    }
 
     // `graph.order` は依存が先。成果物ができてからリンクする順になる。
     for &tid in &graph.order {
@@ -278,6 +295,9 @@ pub fn plan(
             let depfile = obj.with_extension(format!("{}.d", toolstyle::object_extension(cfg)));
             let mut args: Vec<String> = Vec::new();
             args.extend(toolstyle::default_compile_flags(cfg));
+            if position_independent.contains(&tid) {
+                args.extend(toolstyle::shared_object_flags(cfg));
+            }
             args.extend(flags.iter().cloned());
             // 言語別のフラグは共通の `flags` の後。後勝ちの慣習により、
             // 言語別の指定が共通の指定を上書きできる向きにする
@@ -319,6 +339,113 @@ pub fn plan(
 
         // --- 集約（アーカイブ／リンク） ---
         match target.kind {
+            TableKind::Lib if is_shared(sess, tid, cfg) => {
+                let exports = collect_root_strs(sess, tid, cfg, "exports");
+                if exports.is_empty() {
+                    // 既定に落とさない。platform ごとに違う意味を持つ宣言は
+                    // 宣言ではない（ADR-0030）。
+                    diags.push(
+                        Diagnostic::error(
+                            "missing-exports",
+                            format!("shared library `{}` declares no exports", sess.label(tid)),
+                        )
+                        .at(target.site.file, target.site.span, "`linkage = \"shared\"` is declared here")
+                        .note(
+                            "add `exports = [\"...\"]`; a shared library's exported symbols are its interface, \
+                             and leaving them to the platform means the same declaration exports everything \
+                             on ELF and nothing on Windows",
+                        ),
+                    );
+                    continue;
+                }
+
+                let out =
+                    build_dir.join("lib").join(toolstyle::shared_library_name(cfg, &target.name));
+                // リンカが読む形は対象の形式が決める。生成物はリンクの入力で
+                // あり、`exports` を変えれば結び直る。
+                let form = toolstyle::export_form(cfg);
+                let export_path = build_dir.join("lib").join(format!(
+                    "{}.{}",
+                    target.name,
+                    toolstyle::export_file_extension(form)
+                ));
+                if let Some(dir) = export_path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                if let Err(e) = std::fs::write(&export_path, toolstyle::export_file(form, &exports))
+                {
+                    diags.push(Diagnostic::error(
+                        "unwritable-build-dir",
+                        format!("cannot write {}: {e}", export_path.display()),
+                    ));
+                    continue;
+                }
+
+                // 共有ライブラリも依存を取り込む。リンカの選択は実行ファイルと
+                // 同じ判断による——閉包のどこかに C++ があれば C++ の driver。
+                let link_needs_cxx = graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .any(|t| has_cxx.get(&t).copied().unwrap_or(false));
+                let linker = cfg.linker(link_needs_cxx).to_string();
+                let libs: Vec<PathBuf> = graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .filter(|t| *t != tid)
+                    .filter_map(|t| link_inputs.get(&t).cloned())
+                    .collect();
+                let mut inputs_args: Vec<String> =
+                    objects.iter().map(|o| o.display().to_string()).collect();
+                inputs_args.extend(libs.iter().map(|l| l.display().to_string()));
+                let mut flags = link_flags.clone();
+                // 自身が共有ライブラリに繋ぐ場合も、実行時の探索路が要る。
+                if graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .any(|t| t != tid && shared_targets.contains(&t))
+                {
+                    flags.extend(toolstyle::runtime_search_path(cfg, &build_dir.join("lib")));
+                }
+                let args = toolstyle::link_shared(cfg, &inputs_args, &flags, &out, &export_path);
+
+                let mut inputs = objects.clone();
+                inputs.extend(libs.iter().cloned());
+                inputs.push(export_path.clone());
+                let mut deps = compile_ids.clone();
+                deps.extend(
+                    graph
+                        .link_closure(tid)
+                        .into_iter()
+                        .filter(|t| *t != tid)
+                        .filter_map(|t| producer.get(&t).copied()),
+                );
+
+                let id = ActionId(plan.actions.len());
+                plan.actions.push(Action {
+                    id,
+                    kind: ActionKind::Link,
+                    target: tid,
+                    program: linker,
+                    args,
+                    inputs,
+                    outputs: vec![out.clone()],
+                    depfile: None,
+                    description: format!("SHLIB {}", rel_display(&build_dir, &out)),
+                    deps,
+                });
+                log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
+                producer.insert(tid, id);
+                // MSVC では繋ぐ相手が DLL ではなく取り込み用の書庫である。
+                // 成果物（動かすもの）と、リンクの入力は別物になる。
+                link_inputs.insert(
+                    tid,
+                    match cfg.style {
+                        dowel_eval::config::Style::Msvc => out.with_extension("lib"),
+                        _ => out.clone(),
+                    },
+                );
+                plan.artifacts.insert(tid, out);
+            }
             TableKind::Lib => {
                 // 書庫作成器の実在検査は、書庫を作るときに1度だけ行う。
                 // コンパイラと同じく、固定した対象の実在は計画段で確かめる
@@ -345,6 +472,7 @@ pub fn plan(
                 });
                 log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
                 producer.insert(tid, id);
+                link_inputs.insert(tid, out.clone());
                 plan.artifacts.insert(tid, out);
             }
             TableKind::Bin | TableKind::Test | TableKind::Bench => {
@@ -364,12 +492,22 @@ pub fn plan(
                     .link_closure(tid)
                     .into_iter()
                     .filter(|t| *t != tid)
-                    .filter_map(|t| plan.artifacts.get(&t).cloned())
+                    .filter_map(|t| link_inputs.get(&t).cloned())
                     .collect();
                 let mut inputs_args: Vec<String> =
                     objects.iter().map(|o| o.display().to_string()).collect();
                 inputs_args.extend(libs.iter().map(|l| l.display().to_string()));
-                let args = toolstyle::link(cfg, &inputs_args, &link_flags, &out);
+                let mut flags = link_flags.clone();
+                // 共有ライブラリに繋ぐなら、実行時にそれを見つける道を
+                // 焼き込む。soname と対で初めて効く（ADR-0030）。
+                if graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .any(|t| t != tid && shared_targets.contains(&t))
+                {
+                    flags.extend(toolstyle::runtime_search_path(cfg, &build_dir.join("lib")));
+                }
+                let args = toolstyle::link(cfg, &inputs_args, &flags, &out);
 
                 let mut inputs = objects.clone();
                 inputs.extend(libs.iter().cloned());
@@ -753,6 +891,32 @@ fn c_string_literal(s: &str) -> String {
 /// 併合は `max` であり、閉包の中で最も高い標準が既に選ばれている
 /// （`dowel_eval::schema::Merge::Max`）。C++17 を要求するライブラリを
 /// C++20 の実行ファイルから使う形が、そのまま通る。
+/// ターゲット直下のプロパティを、そのパッケージの構成で具体化して読む。
+///
+/// `sources` と同じ道である。`public` / `private` に置くものではないため
+/// `compile_env` には現れない——繋ぎ方も書き出す記号も伝播しない。
+fn root_value(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Option<Value> {
+    let target = sess.target(tid);
+    let value = target.root.get(name)?;
+    let cfg = cfg.for_package(&sess.package(target.package).name);
+    dowel_eval::specialize(value, &cfg)
+}
+
+fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Vec<String> {
+    root_value(sess, tid, cfg, name).map(|v| flatten_strs(&v)).unwrap_or_default()
+}
+
+/// 共有ライブラリとして繋ぐか（ADR-0030）。
+///
+/// `lib` 以外では意味を持たない。`bin` に `linkage` を書いても実行ファイルの
+/// 作り方は変わらない——書けてしまうことは型検査の範囲であり、ここでは
+/// 「何を作るか」だけを決める。
+fn is_shared(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
+    sess.target(tid).kind == TableKind::Lib
+        && root_value(sess, tid, cfg, "linkage").and_then(|v| v.as_str().map(|s| s.to_string()))
+            == Some("shared".to_string())
+}
+
 fn std_flag(env: &dowel_model::PropMap, name: &str) -> Option<String> {
     env.get(name).and_then(|v| v.as_str()).map(|s| format!("-std={s}"))
 }

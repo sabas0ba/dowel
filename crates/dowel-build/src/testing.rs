@@ -515,7 +515,31 @@ pub fn plan_jobs(
             out.push(job);
         }
     }
+    // Windows には rpath が無い。共有ライブラリは実行ファイルの隣か `PATH` に
+    // 在るものしか見つからず、dowel は両者を隣り合う別のディレクトリに置く
+    // ——走らせる側が渡す（ADR-0030）。
+    //
+    // 事例が `env` を宣言するとそれが `job.env` を置き換えるため、組み立ての
+    // 最後に施す。途中で足すと、`env` を書いた事例だけが見つけられなくなる。
+    if dowel_eval::config::triple_os(&cfg.target) == "windows" {
+        let lib_dir = plan.build_dir.join("lib");
+        for job in &mut out {
+            prepend_to_path(&mut job.env, &lib_dir);
+        }
+    }
     out
+}
+
+/// `PATH` の先頭にディレクトリを足す。既に宣言されていればそれを土台にする。
+fn prepend_to_path(env: &mut Vec<(String, String)>, dir: &Path) {
+    let sep = ";";
+    match env.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("PATH")) {
+        Some((_, v)) => *v = format!("{}{sep}{v}", dir.display()),
+        None => {
+            let inherited = std::env::var("PATH").unwrap_or_default();
+            env.push(("PATH".to_string(), format!("{}{sep}{inherited}", dir.display())));
+        }
+    }
 }
 
 /// 事例の `cwd` を実在の場所にする（issue #95）。
@@ -1134,6 +1158,20 @@ mod tests {
         assert_eq!(o.jobs, 1);
         assert!(o.capture);
         assert!(!o.fail_fast);
+    }
+
+    #[test]
+    fn the_library_directory_reaches_a_windows_child_through_path() {
+        // Windows には rpath が無い。宣言された `env` を土台にして足すこと
+        // ——置き換えると、`env` を書いた事例だけが DLL を見つけられない。
+        let mut declared = vec![("PATH".to_string(), "C:\\tools".to_string())];
+        prepend_to_path(&mut declared, Path::new("B:\\build\\lib"));
+        assert_eq!(declared[0].1, "B:\\build\\lib;C:\\tools");
+
+        // 宣言が無ければ、継いだ `PATH` の前に置く。
+        let mut empty: Vec<(String, String)> = Vec::new();
+        prepend_to_path(&mut empty, Path::new("B:\\build\\lib"));
+        assert!(empty[0].1.starts_with("B:\\build\\lib;"), "{:?}", empty[0].1);
     }
 
     #[test]

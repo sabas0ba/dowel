@@ -6,8 +6,9 @@
 //! ## Meson 固有の写像
 //!
 //! - `executable` → `bin`、`static library` → `lib`。`shared library` も
-//!   `lib` にする（共有ライブラリは未実装のため、その旨をコメントに残す）。
-//!   `custom` / `run` は読み飛ばす
+//!   静的な `lib` にする。共有ライブラリは作れるが、書き出す記号の一覧が
+//!   要り（ADR-0030）、introspect はそれを答えない。当てずっぽうを置かず、
+//!   その旨をコメントに残す。`custom` / `run` は読み飛ばす
 //! - **翻訳の引数は仕分けられていない。** CMake の reply が `defines` /
 //!   `includes` / フラグに分けて答えるのに対し、Meson は
 //!   `target_sources[].parameters` に1つの配列で渡してくる。仕分けは
@@ -111,7 +112,7 @@ fn extract(t: &Json, source_dir: &Path) -> Option<Imported> {
         "executable" => ("bin", None),
         "static library" => ("lib", None),
         "shared library" | "shared module" => {
-            ("lib", Some("was a shared library; dowel builds static archives today"))
+            ("lib", Some("was a shared library. imported as a static library: dowel needs an explicit\n#       `exports` list for a shared one (ADR-0030), and introspection does not report it"))
         }
         _ => return None,
     };
