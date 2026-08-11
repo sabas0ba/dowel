@@ -651,18 +651,33 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   without failing — porting is incremental (docs/40-migration.md 4)
 - Both reference forms are read (`arguments` array and shell-quoted
   `command` string). Output is text or `--format=json`
-- `dowel migrate import <cmake-build-dir>` drafts `dowel.toml` /
-  `dowel.build` into the CMake source directory from a File API
-  `codemodel-v2` reply, refusing to overwrite. The draft is marked
+- `dowel migrate import <old-build-dir>` drafts `dowel.toml` /
+  `dowel.build` into the old system's source directory, refusing to
+  overwrite. Two sources are read: CMake's File API `codemodel-v2` reply and
+  Meson's `meson-info/` introspection. Which one it is, is decided by
+  looking at the directory rather than by a `--from=` flag — what gets
+  passed is the old build directory, and what made it is written there; if
+  neither is found, the error names both recipes. The draft is marked
   **UNVERIFIED** in a header comment (the favored shape of Q6; a machine
   gate on unverified targets remains open) and points at `migrate verify`.
   Everything lands in `private` blocks — the public/private intent is
-  unknowable from the File API — and sources are listed explicitly, not
-  globbed, so the draft stays faithful to the extracted projection.
-  Configuration-level flags from the CMake build type (`-O` / `-g` /
+  unknowable from what either system reports — and sources are listed
+  explicitly, not globbed, so the draft stays faithful to the extracted
+  projection. Configuration-level flags from the build type (`-O` / `-g` /
   `-DNDEBUG`) are not copied: dowel's `--config` supplies them, and copying
   them unconditionally would make a draft imported from Release produce
   optimized `NDEBUG` debug builds (issue #54)
+- The two differ in what they hand over. CMake reports compile arguments
+  already sorted into `defines` / `includes` / fragments and names
+  in-project `dependencies`, which become `target(...)`. Meson hands over
+  one `parameters` array per target, so the sorting is dowel's (one rule,
+  shared by both readers), and its introspection does not say which targets
+  link against which — `deps` is therefore left empty for Meson imports
+  rather than guessed from output filenames, which would put wrong edges
+  into a draft that is already unverified. Meson's generated sources are
+  listed as skipped comments instead of being dropped silently, and
+  subproject targets are not imported: they are a different package, and
+  merging them into one `dowel.build` would erase where they came from
 
 ### Scaffolding (`dowel-cli`)
 
@@ -730,16 +745,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (620 tests):
+Current breakdown (628 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 330 |
+| `unit-*` | per-crate unit tests | 336 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 206 |
+| `e2e` | compile real C and C++, run it, check the output | 208 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
