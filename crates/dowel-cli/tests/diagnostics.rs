@@ -207,10 +207,10 @@ const CASES: &[Case] = &[
     },
     Case {
         code: "unimplemented-kind",
-        why: "`template` is a recognized kind that is not implemented yet",
+        why: "`toolchain` is a recognized kind that is not implemented yet",
         files: &[(
             "app/dowel.build",
-            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[template.t]\nsources = glob(\"src/*.c\")\n",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[toolchain.t]\nc = \"cc\"\n",
         )],
         args: CHECK,
     },
@@ -557,6 +557,25 @@ const CASES: &[Case] = &[
             "[package]\nname = \"app\"\nversion = \"0.1.0\"\ntoolchains = \"nowhere.toml\"\n",
         )],
         args: CHECK,
+    },
+    Case {
+        code: "unknown-template",
+        why: "`use` names a template that is not declared (ADR-0035)",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\nuse = [template(\"nope\")]\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "not-a-target",
+        why: "a template is named on the command line; it produces no artifact",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[template.t]\n\n\
+             [template.t.private]\nflags = [\"-DX\"]\n",
+        )],
+        args: &["check", "--message-format=json", "t"],
     },
     Case {
         code: "missing-exports",

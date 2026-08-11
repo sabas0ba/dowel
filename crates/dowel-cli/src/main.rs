@@ -831,7 +831,14 @@ fn default_targets(
         .collect();
     if out.is_empty() {
         // ライブラリしかない場合はそれを作る。ここもこの木の中だけ。
-        return Ok(sess.targets.iter().filter(buildable).map(|t| t.id).collect());
+        // テンプレートは成果物を作らないので数えない（ADR-0035）。
+        return Ok(sess
+            .targets
+            .iter()
+            .filter(buildable)
+            .filter(|t| t.kind.is_target())
+            .map(|t| t.id)
+            .collect());
     }
     Ok(out)
 }

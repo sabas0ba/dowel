@@ -184,6 +184,7 @@ impl W {
                 self.ty(e);
             }
             Type::Word => self.u8(13),
+            Type::TemplateRef => self.u8(14),
         }
     }
 
@@ -263,6 +264,10 @@ impl W {
             }
             Data::Target(s) => {
                 self.u8(6);
+                self.str(s);
+            }
+            Data::Template(s) => {
+                self.u8(13);
                 self.str(s);
             }
             Data::List(items) => {
@@ -444,6 +449,7 @@ impl R<'_> {
             11 => Type::Map(Box::new(self.ty()?)),
             12 => Type::Cfg(Box::new(self.ty()?)),
             13 => Type::Word,
+            14 => Type::TemplateRef,
             _ => return None,
         })
     }
@@ -523,6 +529,7 @@ impl R<'_> {
             10 => Data::When { pred: self.pred()?, inner: Box::new(self.value()?) },
             11 => Data::Error,
             12 => Data::PkgRef(self.str()?),
+            13 => Data::Template(self.str()?),
             _ => return None,
         })
     }

@@ -224,6 +224,22 @@ pub fn plan(
             continue;
         }
         let target = sess.target(tid);
+        // テンプレートは記述の共有であって成果物ではない（ADR-0035）。
+        // 展開は模型の側で済んでおり、計画に居る理由が無い——名指しされた
+        // ときだけ、そう述べて外す。
+        if target.kind == TableKind::Template {
+            if requested.contains(&tid) {
+                diags.push(
+                    Diagnostic::error(
+                        "not-a-target",
+                        format!("`{}` is a template, not something to build", sess.label(tid)),
+                    )
+                    .at(target.site.file, target.site.span, "templates produce no artifact")
+                    .note("build a target that uses it, as in `use = [template(\"...\")]`"),
+                );
+            }
+            continue;
+        }
         let pkg = sess.package(target.package);
         let env = interface::compile_env(sess, tid, &mut diags);
 

@@ -23,6 +23,8 @@ pub enum Type {
     DepRef,
     /// `target("foo")` — 同一パッケージ内のターゲットへの参照
     TargetRef,
+    /// `template("name")`（[ADR-0035](../../../docs/adr/0035-template-kind.md)）
+    TemplateRef,
     /// ABI ラベル。`must_equal` で検証される。
     /// 現時点では文字列で書く。算出は Phase 6（docs/90-roadmap.md）
     AbiLabel,
@@ -53,6 +55,7 @@ impl Type {
             Type::Path => "Path".into(),
             Type::DepRef => "DepRef".into(),
             Type::TargetRef => "TargetRef".into(),
+            Type::TemplateRef => "TemplateRef".into(),
             Type::AbiLabel => "AbiLabel".into(),
             Type::Val => "Val".into(),
             Type::Word => "Str | Path".into(),
@@ -280,6 +283,8 @@ pub enum Data {
     Glob(String),
     Dep(String),
     Target(String),
+    /// `template("name")`。展開は模型の側で行う（ADR-0035）
+    Template(String),
     List(Vec<Value>),
     Map(BTreeMap<String, Value>),
     /// 構成で分岐する値。具体化まで保持する。
@@ -499,6 +504,7 @@ impl Value {
             Data::Glob(g) => format!("glob({g:?})"),
             Data::Dep(d) => format!("dep({d:?})"),
             Data::Target(t) => format!("target({t:?})"),
+            Data::Template(t) => format!("template({t:?})"),
             Data::List(items) => {
                 let inner: Vec<String> = items.iter().map(|v| v.display()).collect();
                 format!("[{}]", inner.join(", "))

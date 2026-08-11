@@ -41,3 +41,4 @@ was originally written in.
 | [0032](0032-predicate-composition.md) | `when` predicates compose with `and` / `or` / `not`; `match` stays the way to choose | Accepted |
 | [0033](0033-shared-toolchain-file.md) | A build can name a toolchain file it shares; the unit of override is one tool | Accepted |
 | [0034](0034-closed-vocabulary.md) | The configuration vocabulary is closed; a project's own axes are features | Accepted |
+| [0035](0035-template-kind.md) | A template shares manifest text, not a graph edge; it expands into the block it came from | Accepted |

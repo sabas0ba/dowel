@@ -294,8 +294,10 @@ mod tests {
     fn a_table_kind_says_whether_it_produces_an_artifact() {
         assert!(markdown("[l|ib.foo]\n").contains("produces an artifact"));
         assert!(markdown("[run|ner.riscv64]\n").contains("does not produce an artifact"));
+        // テンプレートは実装されているが、成果物は作らない（ADR-0035）。
+        assert!(markdown("[temp|late.b]\n").contains("does not produce an artifact"));
         // 未実装の種別はそう書く。
-        assert!(markdown("[temp|late.b]\n").contains("not implemented"));
+        assert!(markdown("[tool|chain.b]\n").contains("not implemented"));
     }
 
     #[test]
