@@ -1325,7 +1325,7 @@ impl TargetSink<'_> {
                             "declarable tools: {}",
                             dowel_eval::config::TOOLS
                                 .iter()
-                                .map(|(n, _)| *n)
+                                .map(|(n, _, _)| *n)
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         )),
@@ -1335,7 +1335,7 @@ impl TargetSink<'_> {
             let Some(tool_name) = tool.as_str() else { continue };
 
             // 道具の名前は表が決める。実体の選択は `[toolchain]` の仕事。
-            let tools: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _)| *n).collect();
+            let tools: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _, _)| *n).collect();
             if !tools.contains(&tool_name) {
                 let mut d = Diagnostic::error(
                     "unknown-tool",

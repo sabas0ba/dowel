@@ -11,6 +11,7 @@ pub mod glob;
 pub mod migrate;
 pub mod plan;
 pub mod testing;
+pub mod toolstyle;
 
 pub use action::{Action, ActionId, ActionKind};
 pub use backend::{Backend, BuildGraph, Step};

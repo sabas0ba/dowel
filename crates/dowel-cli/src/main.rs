@@ -631,13 +631,16 @@ bench result: FAILED. {} of {n} could not be measured",
 /// 段では判定できない。値の妥当性は別の語彙（マニフェスト）が決めるものであり、
 /// 引数解析にはその情報がない。
 fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>), String> {
-    let mut cfg = Config::host_default();
     let mut diags = Vec::new();
+    // 三つ組が様式を決め、様式が道具の既定を決める（ADR-0027）。構成を
+    // 三つ組から作るのは、後から `target` を差し替えると既定が付いてこない
+    // ためである。
+    let mut cfg = match &opts.target {
+        Some(t) => Config::for_target(t.clone()),
+        None => Config::host_default(),
+    };
     cfg.opt = Opt::parse(&opts.config)
         .ok_or_else(|| format!("`--config` must be debug or release (got `{}`)", opts.config))?;
-    if let Some(t) = &opts.target {
-        cfg.target = t.clone();
-    }
     if let Some(root) = sess.root_package() {
         // 対象の宣言があれば、それ以外のトリプルを求められたときに拒む。
         // ホストには既定の道具があるため、宣言の不在では拒めない——
@@ -681,8 +684,13 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
         let host = dowel_eval::config::default_triple();
         match root.toolchain_for(&cfg.target, &host) {
             Some(decl) => {
+                // 様式が先。道具の既定が様式で変わるので、後に置くと
+                // 明示していない道具だけ別の様式の既定に留まる。
+                if let Some(style) = decl.style {
+                    cfg.set_style(style);
+                }
                 // 道具の集合は表（dowel_eval::config::TOOLS）が決める。
-                for (name, _) in dowel_eval::config::TOOLS {
+                for (name, _, _) in dowel_eval::config::TOOLS {
                     if let Some(t) = decl.tool(name) {
                         cfg.set_tool(name, t.command.clone());
                     }
@@ -1282,12 +1290,21 @@ fn schema_dump() -> String {
     }
     w.end_array();
 
+    // 既定は様式で変わる（ADR-0027）。1つだけ出すと、もう片方の様式では
+    // 嘘になる。
     w.key("tools").begin_array();
-    for (name, default) in dowel_eval::config::TOOLS {
+    for (name, gnu, msvc) in dowel_eval::config::TOOLS {
         w.begin_object();
         w.field_str("name", name);
-        w.field_str("default", default);
+        w.field_str("default_gnu", gnu);
+        w.field_str("default_msvc", msvc);
         w.end_object();
+    }
+    w.end_array();
+
+    w.key("toolchain_styles").begin_array();
+    for name in dowel_eval::config::Style::ALL {
+        w.str(name);
     }
     w.end_array();
 

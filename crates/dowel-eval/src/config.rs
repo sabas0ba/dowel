@@ -58,9 +58,58 @@ pub struct Config {
     /// 選択された道具。道具名（[`TOOLS`]）→ コマンド。
     /// 既定は [`TOOLS`] が与え、`[toolchain]` の宣言が上書きする
     tools: BTreeMap<String, String>,
+    /// 引数の綴り方（ADR-0027）。三つ組から導き、`[toolchain] style` が上書きする
+    pub style: Style,
 }
 
-/// ツールチェーンを構成する道具の表。（名前, 既定のコマンド）。
+/// 道具に渡す引数の綴り方（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)）。
+///
+/// 道具の**名前**は宣言できても、綴りが Unix 固定だと `cl` は解釈できない
+/// 命令が組み上がる。しかも `-MD` は MSVC で「動的 CRT をリンクする」という
+/// **別の、それ自体は正当な意味**を持つ——依存の書き出しを頼んだつもりの旗が
+/// ABI を選ぶ旗になる（issue #113）。
+///
+/// 様式は2つしか無い。GNU（gcc / clang / MinGW）と MSVC（cl / clang-cl）で
+/// あり、それ以外は前者に準ずる。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Style {
+    #[default]
+    Gnu,
+    Msvc,
+}
+
+impl Style {
+    pub fn parse(s: &str) -> Option<Style> {
+        match s {
+            "gnu" => Some(Style::Gnu),
+            "msvc" => Some(Style::Msvc),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Style::Gnu => "gnu",
+            Style::Msvc => "msvc",
+        }
+    }
+
+    pub const ALL: &'static [&'static str] = &["gnu", "msvc"];
+}
+
+/// 三つ組から様式を導く。
+///
+/// `x86_64-pc-windows-msvc` は MSVC の道具を指す三つ組である——`--target` に
+/// 既に書かれている以上、宣言させ直す理由が無い（ADR-0026 と同じ判断）。
+/// `[toolchain] style` はこの導出を上書きする。
+pub fn triple_style(triple: &str) -> Style {
+    match triple.rsplit('-').next() {
+        Some("msvc") => Style::Msvc,
+        _ => Style::Gnu,
+    }
+}
+
+/// ツールチェーンを構成する道具の表。（名前, GNU の既定, MSVC の既定）。
 ///
 /// 道具を増やすとき（例: disasm、objcopy）はここに1行と、[`VOCABULARY`] の
 /// `tc.<名前>` の行を足す（両者の一致は検査される）。`[toolchain]` のキー・
@@ -68,16 +117,20 @@ pub struct Config {
 /// **いつ実在を確かめるか**だけは表に置かない。C コンパイラは常に、
 /// C++ は C++ ソースが現れたとき、archiver は書庫を作るときに要る——
 /// 要不要は道具を使う側の意味論であり、使う箇所が判断する。
-pub const TOOLS: &[(&str, &str)] = &[
-    ("c", "cc"),
-    ("cxx", "c++"),
-    ("ar", "ar"),
-    ("objcopy", "objcopy"),
-    ("size", "size"),
-    ("nm", "nm"),
-    ("objdump", "objdump"),
-    ("readelf", "readelf"),
-    ("debug", "gdb"),
+pub const TOOLS: &[(&str, &str, &str)] = &[
+    ("c", "cc", "cl"),
+    ("cxx", "c++", "cl"),
+    ("ar", "ar", "lib"),
+    // リンカ。GNU では driver が兼ねるので既定を持たない——空は
+    // 「`tc.c` / `tc.cxx` がリンクする」を意味する。MSVC では別物である
+    // （`link.exe`）。
+    ("link", "", "link"),
+    ("objcopy", "objcopy", "objcopy"),
+    ("size", "size", "size"),
+    ("nm", "nm", "dumpbin"),
+    ("objdump", "objdump", "dumpbin"),
+    ("readelf", "readelf", "dumpbin"),
+    ("debug", "gdb", "cdb"),
 ];
 
 /// パスの1要素として安全な形にする。
@@ -101,22 +154,56 @@ pub fn path_safe(s: &str) -> String {
     out
 }
 
-/// 道具の既定のコマンド。
-pub fn default_tool(name: &str) -> &'static str {
-    TOOLS.iter().find(|(n, _)| *n == name).map(|(_, d)| *d).unwrap_or("")
+/// 道具の既定のコマンド。様式で変わる——GNU の `ar` は MSVC で `lib` である。
+pub fn default_tool(name: &str, style: Style) -> &'static str {
+    TOOLS
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(_, gnu, msvc)| match style {
+            Style::Gnu => *gnu,
+            Style::Msvc => *msvc,
+        })
+        .unwrap_or("")
 }
 
 impl Config {
     pub fn host_default() -> Config {
+        Config::for_target(default_triple())
+    }
+
+    /// 三つ組に対応する既定の構成。様式と道具の既定がここで決まる。
+    pub fn for_target(target: String) -> Config {
+        let style = triple_style(&target);
         Config {
             opt: Opt::Debug,
-            target: default_triple(),
+            target,
             host_os: host_os().to_string(),
             host_arch: host_arch().to_string(),
             features: BTreeSet::new(),
             package: String::new(),
             versions: BTreeMap::new(),
-            tools: TOOLS.iter().map(|(n, d)| (n.to_string(), d.to_string())).collect(),
+            tools: TOOLS
+                .iter()
+                .map(|(n, _, _)| (n.to_string(), default_tool(n, style).to_string()))
+                .collect(),
+            style,
+        }
+    }
+
+    /// 様式を変える。宣言（`[toolchain] style`）が導出を上書きしたときに、
+    /// 明示されていない道具の既定も付いて動く必要がある。
+    pub fn set_style(&mut self, style: Style) {
+        self.style = style;
+        for (name, _, _) in TOOLS {
+            self.tools.insert(name.to_string(), default_tool(name, style).to_string());
+        }
+    }
+
+    /// リンクに使う道具。GNU では driver が兼ねる（`link` は空）。
+    pub fn linker(&self, needs_cxx: bool) -> &str {
+        match self.tool("link") {
+            "" => self.tool(if needs_cxx { "cxx" } else { "c" }),
+            explicit => explicit,
         }
     }
 
@@ -248,6 +335,12 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
     ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
     ("tc", "cxx", Domain::Open, "identifier of the selected C++ toolchain"),
     ("tc", "ar", Domain::Open, "identifier of the selected archiver"),
+    (
+        "tc",
+        "link",
+        Domain::Open,
+        "identifier of the selected linker; empty when the compiler driver links",
+    ),
     ("tc", "objcopy", Domain::Open, "identifier of the selected object copier"),
     ("tc", "size", Domain::Open, "identifier of the selected size reporter"),
     ("tc", "nm", Domain::Open, "identifier of the selected symbol lister"),
@@ -506,7 +599,7 @@ mod tests {
         // 道具ができる。
         let vocab: BTreeSet<&str> =
             VOCABULARY.iter().filter(|(ns, ..)| *ns == "tc").map(|(_, n, ..)| *n).collect();
-        let tools: BTreeSet<&str> = TOOLS.iter().map(|(n, _)| *n).collect();
+        let tools: BTreeSet<&str> = TOOLS.iter().map(|(n, _, _)| *n).collect();
         assert_eq!(vocab, tools);
     }
 

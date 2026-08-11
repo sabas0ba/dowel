@@ -50,6 +50,9 @@ pub struct ToolchainDecl {
     pub site: Option<Site>,
     /// 道具名 → 宣言。宣言の無い道具は表の既定に落ちる
     tools: BTreeMap<String, ToolDecl>,
+    /// 引数の綴り方（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)）。
+    /// 宣言が無ければ三つ組から導く
+    pub style: Option<dowel_eval::config::Style>,
 }
 
 /// 1つの道具の宣言。
@@ -122,6 +125,9 @@ pub enum DepKind {
 
 /// `dowel.toml` が読む最上位のテーブル。
 const KNOWN_TABLES: &[&str] = &["package", "toolchain", "dependencies", "features"];
+
+/// `[toolchain]` で道具ではないキー。引数の綴り方を選ぶ（ADR-0027）。
+pub const STYLE_KEY: &str = "style";
 
 /// 予約済みで、まだ読まないテーブル（docs/11-toml-reference.md）。
 /// 拒まないのは、書いてあっても無視すると**文書で述べてある**ためである。
@@ -262,7 +268,7 @@ pub fn from_document(
         let mut decl = ToolchainDecl { site: Some(t.site), ..ToolchainDecl::default() };
         // 受け付ける道具は表が決める。表に1行足せば、ここも `tc.<名前>` の
         // 語彙も宣言の写しも揃って追随する。
-        for (name, _) in dowel_eval::config::TOOLS {
+        for (name, _, _) in dowel_eval::config::TOOLS {
             if let Some(e) = t.entry(name) {
                 match e.value.as_str() {
                     Some(s) => decl.set_tool(name, s.to_string(), e.site),
@@ -270,10 +276,38 @@ pub fn from_document(
                 }
             }
         }
+        // 様式は道具ではない。名前ではなく綴り方を選ぶ宣言である（ADR-0027）。
+        if let Some(e) = t.entry(STYLE_KEY) {
+            match e.value.as_str().and_then(dowel_eval::config::Style::parse) {
+                Some(style) => decl.style = Some(style),
+                None => {
+                    let mut d = Diagnostic::error(
+                        "invalid-value",
+                        format!("`{STYLE_KEY}` has to name an argument style"),
+                    )
+                    .at(e.site.file, e.site.span, "this is not a style")
+                    .note(format!(
+                        "the styles are: {}",
+                        dowel_eval::config::Style::ALL.join(", ")
+                    ))
+                    .note("the style decides how dowel spells the arguments it assembles (`-I` vs `/I`, `-o` vs `/Fo:`), not the flags you write yourself");
+                    if let Some(name) = e.value.as_str() {
+                        if let Some(c) = dowel_support::diag::closest(
+                            name,
+                            dowel_eval::config::Style::ALL.iter().copied(),
+                        ) {
+                            d = d.note(format!("did you mean `{c}`?"));
+                        }
+                    }
+                    diags.push(d);
+                }
+            }
+        }
         // 表に無いキーは拒む。黙って無視すると、道具の綴り間違いが既定値への
         // 無言の後退になる——クロスの archiver を打ち間違えると、ホストの
         // `ar` が黙って書庫を作る。#50 が防ごうとした状態が戻る（issue #59）
-        let known: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _)| *n).collect();
+        let mut known: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _, _)| *n).collect();
+        known.push(STYLE_KEY);
         for e in &t.entries {
             let name = e.key.join(".");
             if known.contains(&name.as_str()) {

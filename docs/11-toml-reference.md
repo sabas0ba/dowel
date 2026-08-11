@@ -51,15 +51,50 @@ cxx = "aarch64-linux-gnu-g++"
 
 | Key | Type | Behavior |
 |---|---|---|
-| `c` | string | the C compiler command, default `cc` for host builds. It must be on PATH at plan time (a value containing a path separator is probed as a path) — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain`. Required in `[toolchain.<triple>]`: missing there is `missing-field` |
+| `style` | string | how dowel spells the arguments **it** assembles: `gnu` or `msvc` ([ADR-0027](adr/0027-toolchain-style.md)). Derived from the triple when absent (`*-msvc` → `msvc`), and this key overrides that derivation. It also decides the tools' defaults, so a project declaring nothing gets a coherent set. An unknown value is `invalid-value` |
+| `c` | string | the C compiler command, default `cc` (`cl` under the MSVC style) for host builds. It must be on PATH at plan time (a value containing a path separator is probed as a path) — toolchain fetching is not implemented. Missing from PATH: `missing-toolchain`. Required in `[toolchain.<triple>]`: missing there is `missing-field` |
 | `cxx` | string | the C++ compiler command, default `c++` for host builds. Required — and probed — only when the build contains C++ sources. Missing from PATH: `missing-toolchain` |
-| `ar` | string | the archiver command, default `ar`. Required — and probed — only when the build produces a static library. Cross builds should declare it alongside `c` / `cxx` so archives are not created by the host's tool. Missing from PATH: `missing-toolchain` |
+| `link` | string | the linker command. Empty by default under the GNU style, where the compiler driver links (and the C++ driver is chosen when the link closure contains C++); `link` under MSVC, where it is a separate program. Probed only when something is linked |
+| `ar` | string | the archiver command, default `ar` (`lib` under the MSVC style). Required — and probed — only when the build produces a static library. Cross builds should declare it alongside `c` / `cxx` so archives are not created by the host's tool. Missing from PATH: `missing-toolchain` |
 | `objcopy` | string | the object copier, default `objcopy`. Used by `[<kind>.<name>.artifacts]` to derive files from an artifact ([12-build-reference.md](12-build-reference.md)); probed only when such a declaration exists. Missing from PATH: `missing-toolchain` |
 | `size` `nm` `objdump` `readelf` | string | reporting tools, each defaulting to its own name. Used by `[<kind>.<name>.inspect]` ([12-build-reference.md](12-build-reference.md)). An inspection is not part of the build graph, so these are not probed at plan time; `dowel inspect` reports a tool it cannot start |
 
 Any other key is `unknown-property`, with a suggestion — a misspelled tool
 would otherwise silently fall back to its default, which for a cross
 archiver means the host's `ar` quietly builds the archives.
+
+### The argument style
+
+Declaring a tool's **name** is not enough to use it: the arguments dowel
+assembles have a spelling, and it differs between toolchains
+([ADR-0027](adr/0027-toolchain-style.md)).
+
+| | GNU | MSVC |
+|---|---|---|
+| include path | `-Iinc` | `/Iinc` |
+| define | `-DA=1` | `/DA=1` |
+| debug / no optimisation | `-g -O0` | `/Z7 /Od` |
+| compile | `-c src.c -o out.o` | `/c src.c /Fo:out.obj` |
+| header dependencies | `-MD -MF out.o.d` | `/showIncludes` |
+| archive | `ar rcs libcore.a …` | `lib /OUT:core.lib …` |
+| link output | `-o bin/app` | `/OUT:bin\app.exe` |
+| object / archive names | `.o`, `lib<name>.a` | `.obj`, `<name>.lib` |
+
+`-MD` is why this cannot be left to the user: under MSVC it is a valid flag
+meaning "link the dynamic CRT". A request for a dependency record would be
+read as a choice of ABI.
+
+**Only what dowel assembles is spelled per style.** The `flags` and
+`link_flags` written in a manifest pass through untouched — translating them
+would mean holding a table of flag equivalences, which is to say knowing the
+compiler. A project building for MSVC writes MSVC flags.
+
+Header dependencies differ in mechanism, not only spelling: MSVC writes no
+record, it prints one. Whoever runs the compiler folds those lines into the
+same `.d` file, so everything that reads the record stays style-agnostic.
+The consequence is that under MSVC the record is not shared across backends
+(ninja keeps its own in `.ninja_deps`), so switching backends costs one
+extra recompile.
 
 The toolchain is selected by the target triple, the same way
 `[runner.<triple>]` is (issue #42). The plain `[toolchain]` table is the

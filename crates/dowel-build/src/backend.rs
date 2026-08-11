@@ -33,6 +33,9 @@ pub struct BuildGraph {
     pub artifacts: Vec<(String, PathBuf)>,
     /// 対象を指定しなかったときに作るもの
     pub default_outputs: Vec<PathBuf>,
+    /// ヘッダ依存の取り方（ADR-0027）。1回のビルドで様式は1つなので、
+    /// ステップごとではなくグラフが持つ
+    pub deps: crate::toolstyle::Deps,
 }
 
 /// 1回のプロセス起動。
@@ -94,6 +97,7 @@ impl BuildGraph {
             steps,
             artifacts: plan.artifacts.iter().map(|(t, p)| (sess.label(*t), p.clone())).collect(),
             default_outputs: plan.default_outputs(),
+            deps: plan.deps,
         }
     }
 
@@ -204,6 +208,7 @@ pub fn run(backend: &dyn Backend, g: &BuildGraph, jobs: Option<usize>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::toolstyle::Deps;
 
     #[test]
     fn every_listed_backend_resolves_to_one_with_that_name() {
@@ -249,6 +254,7 @@ mod tests {
             build_dir: PathBuf::from("/b"),
             steps,
             artifacts: vec![],
+            deps: Deps::Depfile,
             default_outputs: vec![],
         }
     }

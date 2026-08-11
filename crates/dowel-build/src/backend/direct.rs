@@ -7,8 +7,10 @@
 //! depfile を読む。ここで作った機構は将来、内容アドレスによるアクション
 //! キャッシュへ置き換わる（docs/20-architecture.md 8節）。
 
+use crate::action::ActionKind;
 use crate::backend::{Backend, BuildGraph, Step};
 use crate::exec::{CommandLog, Failure};
+use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
 use dowel_support::{log_debug, log_info, log_trace};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -76,7 +78,57 @@ fn run_step(g: &BuildGraph, step: &Step) -> Result<(), Failure> {
             stderr: String::from_utf8_lossy(&out.stderr).to_string(),
         });
     }
+    // MSVC はヘッダ依存の記録を書かない。標準出力に1行1件で並べるだけなので、
+    // それを `.d` に畳むのは**実行した側**の仕事になる（ADR-0027）。畳んで
+    // おけば、最新性を判定する側は様式を知らずに済む。
+    if g.deps == Deps::ShowIncludes && step.kind == ActionKind::Compile {
+        if let Some(d) = &step.depfile {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            write_depfile_from_show_includes(d, &step.outputs, &stdout)?;
+        }
+    }
     Ok(())
+}
+
+/// `/showIncludes` の出力を make 形式の `.d` に畳む。
+///
+/// 接頭辞に合う行が1つも無いことは、**依存が無いこと**ではない。地域化された
+/// `cl` は別の文言を出す。`.d` を空で書くと「ヘッダに依存しない翻訳単位」と
+/// 読まれ、ヘッダの変更が黙って見落とされる——書かずに残せば、次回は
+/// 「記録が無い」として保守的に組み直される（[`is_up_to_date`]）。
+fn write_depfile_from_show_includes(
+    depfile: &Path,
+    outputs: &[PathBuf],
+    stdout: &str,
+) -> Result<(), Failure> {
+    let headers: Vec<&str> = stdout
+        .lines()
+        .filter_map(|l| l.trim_end().strip_prefix(SHOW_INCLUDES_PREFIX))
+        .map(|rest| rest.trim())
+        .filter(|rest| !rest.is_empty())
+        .collect();
+    if headers.is_empty() {
+        log_debug!("  no `{SHOW_INCLUDES_PREFIX}` lines; leaving the dependency record unwritten");
+        return Ok(());
+    }
+    let target = outputs.first().map(|p| p.display().to_string()).unwrap_or_default();
+    // make 形式。空白を含む道はエスケープする——読む側（`read_depfile`）が
+    // その形を期待している。
+    let mut text = format!("{}:", target.replace(' ', "\\ "));
+    for h in &headers {
+        text.push_str(&format!(" \\\n  {}", h.replace(' ', "\\ ")));
+    }
+    text.push('\n');
+    if let Some(parent) = depfile.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(depfile, text).map_err(|e| {
+        Failure::of(
+            "recording the header dependencies",
+            depfile.display().to_string(),
+            format!("{e} (cannot write `{}`)", depfile.display()),
+        )
+    })
 }
 
 /// 出力が全ての入力より新しいか。

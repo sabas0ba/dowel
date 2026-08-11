@@ -332,6 +332,26 @@ changes, only the speed.
   plan-stage site that uses it — only *when* a tool is required stays a
   per-use-site judgment (the C compiler always, C++ when C++ sources
   appear, the archiver when an archive is produced)
+- A toolchain also has an **argument style**: `gnu` or `msvc`
+  ([ADR-0027](adr/0027-toolchain-style.md)). Declaring a tool's *name* was
+  not enough to use it — the arguments dowel assembles were spelled Unix-only,
+  so naming `cl` produced a command line no `cl` can read, and `-MD` (a
+  request for a dependency record) is a valid MSVC flag meaning "link the
+  dynamic CRT" — a choice of ABI, and the very flag `00-overview.md` cites
+  under "no single ABI" (issue #113). The style is derived from the triple
+  (`*-msvc`) and `[toolchain] style` overrides it; it also decides the
+  tools' defaults (`ar` → `lib`) and adds `link`, which is empty under GNU
+  (the driver links) and `link.exe` under MSVC. **Only what dowel assembles
+  is spelled per style** — a user's `flags` pass through untranslated,
+  because a table of flag equivalences would be knowing the compiler.
+  Header dependencies differ in mechanism: MSVC prints `/showIncludes`
+  lines instead of writing a record, so whoever runs the compiler folds
+  them into the same `.d`, and everything that reads the record stays
+  style-agnostic. The cost is that under MSVC the record is not shared
+  across backends (ninja keeps its own), so switching backends costs one
+  recompile. Whether an MSVC build then *succeeds* is unverifiable here —
+  there is no Windows CI — so the checks put a fake `cl` on the path and
+  read the assembled command
 - `compile_commands.json` (`arguments` array form)
 - The output stage is a backend layer over one neutral build graph
   ([ADR-0018](adr/0018-backend-layer.md)). Four backends: `ninja` (default),
@@ -668,16 +688,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (587 tests):
+Current breakdown (598 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 311 |
+| `unit-*` | per-crate unit tests | 316 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 192 |
+| `e2e` | compile real C and C++, run it, check the output | 198 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

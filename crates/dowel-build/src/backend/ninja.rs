@@ -7,6 +7,7 @@
 use crate::action::ActionKind;
 use crate::backend::{Backend, BuildGraph};
 use crate::exec::{drive, responds_to_version, Failure};
+use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
 use dowel_support::log_debug;
 use std::path::PathBuf;
 
@@ -53,13 +54,23 @@ pub fn generate(g: &BuildGraph) -> String {
     out.push_str("rule cc\n");
     out.push_str("  command = $cmd\n");
     out.push_str("  description = $desc\n");
-    // ヘッダ依存は深さ優先の再走査ではなくコンパイラの出力（depfile）から取る。
-    //
-    // `deps = gcc` は使わない。あれは読み取った `.d` を `.ninja_deps` へ畳んで
-    // 消すため、依存の記録が ninja の実装詳細の中に閉じる。他のバックエンドも
-    // 同じ `.d` を読んで最新性を判定するので、記録はバックエンドを跨いで
-    // ディスク上に残す（issue #41）。
-    out.push_str("  depfile = $depfile\n\n");
+    match g.deps {
+        // ヘッダ依存は深さ優先の再走査ではなくコンパイラの出力（depfile）から
+        // 取る。
+        //
+        // `deps = gcc` は使わない。あれは読み取った `.d` を `.ninja_deps` へ
+        // 畳んで消すため、依存の記録が ninja の実装詳細の中に閉じる。他の
+        // バックエンドも同じ `.d` を読んで最新性を判定するので、記録は
+        // バックエンドを跨いでディスク上に残す（issue #41）。
+        Deps::Depfile => out.push_str("  depfile = $depfile\n\n"),
+        // MSVC はコンパイラに記録を書かせない。`/showIncludes` の出力を
+        // 拾うのは**実行する側**であり、ここでは ninja がそれを行う
+        // （ADR-0027）。`.d` を跨いで共有する形は、書く者がいないので採れない。
+        Deps::ShowIncludes => {
+            out.push_str("  deps = msvc\n");
+            out.push_str(&format!("  msvc_deps_prefix = {SHOW_INCLUDES_PREFIX}\n\n"));
+        }
+    }
 
     out.push_str("rule ar\n");
     out.push_str("  command = rm -f $out && $cmd\n");
@@ -86,7 +97,7 @@ pub fn generate(g: &BuildGraph) -> String {
         ));
         out.push_str(&format!("  cmd = {}\n", value(&step.command_line())));
         out.push_str(&format!("  desc = {}\n", value(&step.description)));
-        if step.kind == ActionKind::Compile {
+        if step.kind == ActionKind::Compile && g.deps == Deps::Depfile {
             if let Some(d) = &step.depfile {
                 out.push_str(&format!("  depfile = {}\n", value(&d.display().to_string())));
             }

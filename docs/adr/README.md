@@ -33,3 +33,4 @@ was originally written in.
 | [0024](0024-debug-command.md) | `dowel debug` starts a declared debugger; the stub is declared, not guessed | Accepted |
 | [0025](0025-bench-wall-clock.md) | `bench` measures whole-process wall-clock time; no framework is imposed | Accepted |
 | [0026](0026-target-os-arch.md) | The target's OS and architecture are vocabulary of their own, derived from the triple | Accepted |
+| [0027](0027-toolchain-style.md) | A toolchain declares its argument style; dowel spells what it assembles, and translates nothing else | Accepted |
