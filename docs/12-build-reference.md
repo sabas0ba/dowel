@@ -56,6 +56,16 @@ fails type checking with a suggestion.
 Targets are referenced as `<name>` or `<package>:<name>` on the command
 line, and via `target("name")` / `dep("package")` in properties.
 
+**A target's name is unique within its package**, across kinds: a package
+cannot hold both `[lib.foo]` and `[bin.foo]`. The second declaration is
+refused with `duplicate-target`, naming both sites. The name is what
+`target("...")` resolves, what the `<package>:<target>` label spells, and
+what the object directory is keyed on, so allowing two would mean
+qualifying all three by kind — a wide change for what it buys, since the
+artifact spellings (`libfoo.a` and `foo`) were the only thing that did not
+collide (issue #114). A library and its CLI want
+`[lib.foo]` with `[bin.foo-cli]`, or the `plot-core` / `plot` shape.
+
 ## 3. Target properties
 
 A target has three blocks. The root block holds what belongs to the target
