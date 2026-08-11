@@ -5608,3 +5608,74 @@ fn a_dependencys_shared_toolchain_file_is_not_read_either() {
     r.failure();
     r.stderr_contains("missing-toolchain");
 }
+
+#[test]
+fn an_unknown_configuration_key_says_where_a_projects_own_axis_goes() {
+    // 「無い」とだけ言う診断は、何を書けばよいかを述べない。dowel が知らない
+    // 軸で分岐したい人は正当な要求を持っており、置き場所は前から在る
+    // （ADR-0034）。以前は「語彙は暫定、Q1 を見よ」と答えていた。
+    let p = Project::new("closed-vocabulary");
+    p.write("dowel.toml", "[package]\nname = \"closed-vocabulary\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\n\
+         flags = [\"-fsanitize=address\"] when cfg.sanitizer == \"address\"\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-cfg-key");
+    r.stderr_contains("the vocabulary is closed");
+    // 打ち間違いとして近い鍵が無いので、名前を当てはめて導く。
+    r.stderr_contains("declare `sanitizer` in `[features]`");
+    r.stderr_contains("write `feature.sanitizer`");
+    // 開いていた頃の案内は残っていない。
+    assert!(!r.stderr.contains("provisional"), "{}", r.stderr);
+}
+
+#[test]
+fn following_the_suggestion_lands_on_the_next_correct_step() {
+    // 2段の導線であること。`unknown-cfg-key` は `dowel.build` の評価中に
+    // 出るので `[features]` を読めない——宣言の有無を知る段が次に答える。
+    let p = Project::new("closed-vocabulary-next-step");
+    p.write("dowel.toml", "[package]\nname = \"closed-vocabulary-next-step\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-fsanitize=address\"] when feature.sanitizer\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-feature");
+    r.stderr_contains("not declared in `dowel.toml`");
+
+    // 宣言すれば通る。導線の行き先が実際に有効であること。
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"closed-vocabulary-next-step\"\nversion = \"0\"\n\n\
+         [features]\nsanitizer = []\n",
+    );
+    p.run(".", &["check"]).success();
+}
+
+#[test]
+fn a_misspelled_key_still_gets_the_near_one() {
+    // 導線を足しても、打ち間違いの提案が押しのけられないこと。
+    let p = Project::new("closed-vocabulary-typo");
+    p.write("dowel.toml", "[package]\nname = \"closed-vocabulary-typo\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-DX\"] when cfg.taget == \"x\"\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("did you mean `target`?");
+    assert!(!r.stderr.contains("feature.taget"), "{}", r.stderr);
+}
