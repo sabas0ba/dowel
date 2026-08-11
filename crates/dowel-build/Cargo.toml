@@ -12,3 +12,4 @@ dowel-support.workspace = true
 dowel-syntax.workspace = true
 dowel-eval.workspace = true
 dowel-model.workspace = true
+dowel-store.workspace = true

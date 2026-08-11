@@ -60,6 +60,14 @@ pub struct Config {
     tools: BTreeMap<String, String>,
     /// 引数の綴り方（ADR-0027）。三つ組から導き、`[toolchain] style` が上書きする
     pub style: Style,
+    /// ホストの三つ組。「対象がホストと同じか」の判定がこれを読む。
+    ///
+    /// 既定は OS と構成から組み立てた近似だが、C コンパイラに `-dumpmachine`
+    /// で訊けた場合はその名乗りに差し替わる（[ADR-0028](../../../docs/adr/0028-probe-facts.md)）。
+    /// 近似のままだと、`x86_64-pc-linux-gnu` を名乗る道具を持つ機械で
+    /// `--target` にその綴りを渡した利用者が、クロス扱いされてランナーを
+    /// 求められる
+    pub host: String,
 }
 
 /// 道具に渡す引数の綴り方（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)）。
@@ -187,6 +195,7 @@ impl Config {
                 .map(|(n, _, _)| (n.to_string(), default_tool(n, style).to_string()))
                 .collect(),
             style,
+            host: default_triple(),
         }
     }
 
@@ -197,6 +206,20 @@ impl Config {
         for (name, _, _) in TOOLS {
             self.tools.insert(name.to_string(), default_tool(name, style).to_string());
         }
+    }
+
+    /// 対象がホストと同じ機械か。
+    ///
+    /// 綴りの一致で見る。ホストの三つ組は道具の名乗りに差し替わりうるので、
+    /// 「近似の綴りで書かれた `--target`」と「道具が名乗る綴り」の両方が
+    /// ホストとして通る（ADR-0028）。
+    pub fn targets_host(&self) -> bool {
+        self.target == self.host || self.target == default_triple()
+    }
+
+    /// ホストの三つ組を、道具が名乗ったもので置き換える。
+    pub fn set_host(&mut self, triple: String) {
+        self.host = triple;
     }
 
     /// リンクに使う道具。GNU では driver が兼ねる（`link` は空）。

@@ -34,3 +34,4 @@ was originally written in.
 | [0025](0025-bench-wall-clock.md) | `bench` measures whole-process wall-clock time; no framework is imposed | Accepted |
 | [0026](0026-target-os-arch.md) | The target's OS and architecture are vocabulary of their own, derived from the triple | Accepted |
 | [0027](0027-toolchain-style.md) | A toolchain declares its argument style; dowel spells what it assembles, and translates nothing else | Accepted |
+| [0028](0028-probe-facts.md) | What was asked of a tool is recorded outside the project, keyed by the tool's identity | Accepted |

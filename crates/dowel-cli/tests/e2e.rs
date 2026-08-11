@@ -4244,6 +4244,127 @@ exec cc $args -o "$out"
     assert!(!third.stderr.contains("ran 0 steps"), "a header change was missed\n{third}");
 }
 
+/// 道具について確かめた事実（[ADR-0028](../../../docs/adr/0028-probe-facts.md)）。
+///
+/// 事実はプロジェクトの外（利用者のキャッシュ領域）に置かれる。検査は
+/// `XDG_CACHE_HOME` を木の中へ向けて、利用者の環境を汚さずに読む。
+fn facts_project(name: &str) -> (Project, String) {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname    = \"d\"\nversion = \"0.1.0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let cache = p.path("cache").display().to_string();
+    (p, cache)
+}
+
+#[test]
+fn what_was_asked_of_a_tool_is_not_asked_again() {
+    let (p, cache) = facts_project("facts-reuse");
+    let env: &[(&str, &str)] = &[("XDG_CACHE_HOME", &cache), ("DOWEL_LOG", "debug")];
+
+    let first = p.run_env(".", &["build"], env);
+    first.success();
+    // 1回目は道具に訊く。何を訊くかは構成次第なので、数は問わない。
+    let launched = |r: &common::Run| {
+        r.stderr
+            .lines()
+            .find_map(|l| {
+                l.split("probe: launched ").nth(1)?.split(' ').next()?.parse::<u32>().ok()
+            })
+            .expect("the probe count is missing from the log")
+    };
+    assert!(launched(&first) > 0, "nothing was probed on the first run\n{first}");
+
+    // 2回目は憶えている。プロセスを1つも起こさない。
+    let second = p.run_env(".", &["build"], env);
+    second.success();
+    assert_eq!(launched(&second), 0, "a remembered fact was asked again\n{second}");
+}
+
+#[test]
+fn the_facts_live_outside_the_project() {
+    // 事実は道具のものであってプロジェクトのものではない。木を消しても
+    // 残り、別の木から引ける。
+    let (p, cache) = facts_project("facts-outside");
+    let env: &[(&str, &str)] = &[("XDG_CACHE_HOME", &cache)];
+    p.run_env(".", &["build"], env).success();
+
+    let facts = std::path::Path::new(&cache).join("dowel/facts/v1/facts");
+    assert!(facts.exists(), "no fact file at {}", facts.display());
+    // ビルドディレクトリの中には無い。
+    let build = p.path(".dowel");
+    assert!(!build.join("facts").exists(), "facts were written into the project");
+
+    // 別の木が同じ事実を引く。
+    let (other, _) = facts_project("facts-outside-second");
+    let second =
+        other.run_env(".", &["build"], &[("XDG_CACHE_HOME", &cache), ("DOWEL_LOG", "debug")]);
+    second.success();
+    second.stderr_contains("probe: launched 0 process(es)");
+}
+
+#[test]
+fn the_host_triple_is_what_the_compiler_calls_itself() {
+    // dowel が組み立てる綴りは近似である。道具が別の名を名乗る機械で、
+    // その名を `--target` に渡した利用者がクロス扱いされてはならない
+    // （ADR-0028）。
+    let (p, cache) = facts_project("facts-host-triple");
+    // 三つ組を名乗る偽のコンパイラ。実際の翻訳は cc に委ねる。
+    let cc = p.write_script(
+        "fake/cc",
+        r#"#!/bin/sh
+if [ "$1" = "-dumpmachine" ]; then echo custom-vendor-linux-gnu; exit 0; fi
+exec cc "$@"
+"#,
+    );
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname    = \"d\"\nversion = \"0.1.0\"\n\n[toolchain]\nc = \"{}\"\n",
+            cc.display()
+        ),
+    );
+    p.write("dowel.build", "[test.t]\nsources = glob(\"src/*.c\")\n");
+    let env: &[(&str, &str)] = &[("XDG_CACHE_HOME", &cache)];
+
+    // 名乗った綴りはホストとして通る。ランナーは要らない。
+    let named = p.run_env(".", &["test", "--target=custom-vendor-linux-gnu"], env);
+    named.success();
+    named.stderr_contains("d:t ... ok");
+
+    // dowel の近似もホストのままである。片方に寄せると、もう片方が
+    // クロス扱いになる。
+    let approx = p.run_env(".", &["test"], env);
+    approx.success();
+    approx.stderr_contains("d:t ... ok");
+
+    // 本当に別の機械を指す三つ組は、今までどおり宣言を求める。
+    let cross = p.run_env(".", &["test", "--target=riscv64gc-unknown-linux-gnu"], env);
+    cross.failure();
+    cross.stderr_contains("missing-toolchain");
+}
+
+#[test]
+fn the_cache_commands_cover_the_facts_too() {
+    let (p, cache) = facts_project("facts-cache-cmd");
+    let env: &[(&str, &str)] = &[("XDG_CACHE_HOME", &cache)];
+    p.run_env(".", &["build"], env).success();
+
+    let info = p.run_env(".", &["cache", "info"], env);
+    info.success();
+    info.stdout_contains("facts");
+    // 消えたときに探す先が2つあることが読める。
+    info.stdout_contains("dowel/facts/v1");
+
+    // 古い形式版を置くと回収される。
+    let stale = std::path::Path::new(&cache).join("dowel/facts/v0");
+    std::fs::create_dir_all(&stale).unwrap();
+    let gc = p.run_env(".", &["cache", "gc"], env);
+    gc.success();
+    gc.stderr_contains("fact database(s)");
+    assert!(!stale.exists(), "the old format version survived gc");
+}
+
 /// `dowel bench`（ADR-0025）。
 ///
 /// 測るのはプロセス全体の壁時計であり、枠組みは課さない。dowel が失敗と

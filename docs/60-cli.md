@@ -541,12 +541,24 @@ dowel cache gc
 
 | Subcommand | Meaning |
 |---|---|
-| `info` | report the size and record count of the on-disk store |
-| `gc` | remove stores left by older formats |
+| `info` | report the size and record count of the on-disk store, and of the probe-fact database |
+| `gc` | remove stores and fact databases left by older formats |
 
 Neither reads the manifests: cleanup must work even when a manifest is
 broken. The store's contents and guarantees are described under "The store"
 below.
+
+There are **two** caches, and `info` names both. The store is per-project
+(`.dowel/cache/`); the **probe facts** are per-user
+(`$XDG_CACHE_HOME/dowel/facts/`, falling back to `~/.cache`) because a fact
+about a tool is the same in every project that uses that tool
+([ADR-0028](adr/0028-probe-facts.md)). What is recorded there is what dowel
+asked a tool and what it answered: the triple a compiler calls itself
+(`-dumpmachine`), whether a generator answers `--version`. Keys carry the
+tool's path, size, and mtime, so replacing a tool makes the old facts
+unreachable rather than wrong; `gc` collects them.
+
+Deleting either by hand is safe — they are caches. The next run asks again.
 
 ## `dowel lsp`
 

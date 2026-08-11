@@ -140,7 +140,8 @@ pub trait Backend {
     fn name(&self) -> &'static str;
 
     /// この環境で使えるか。既定の選択が見る。
-    fn available(&self) -> bool {
+    fn available(&self, probe: &mut crate::probe::Prober) -> bool {
+        let _ = probe;
         true
     }
 
@@ -170,14 +171,17 @@ pub fn find(name: &str) -> Option<Box<dyn Backend>> {
 }
 
 /// 指定されたバックエンド。指定が無ければ既定を選ぶ。
-pub fn select(requested: Option<&str>) -> Result<Box<dyn Backend>, String> {
+pub fn select(
+    requested: Option<&str>,
+    probe: &mut crate::probe::Prober,
+) -> Result<Box<dyn Backend>, String> {
     match requested {
         Some(name) => find(name).ok_or_else(|| {
             format!("`--backend` must be one of {} (got `{name}`)", NAMES.join(", "))
         }),
         // ninja が既定。無ければ direct へ落ちる。make へは落ちない——
         // 既定が環境によって別の生成器になると、同じ指示が別の失敗を出す。
-        None => Ok(if ninja::Ninja.available() {
+        None => Ok(if ninja::Ninja.available(probe) {
             Box::new(ninja::Ninja)
         } else {
             log_debug!("ninja not found; falling back to the direct backend");
@@ -229,7 +233,10 @@ mod tests {
 
     #[test]
     fn an_unknown_backend_names_the_ones_that_exist() {
-        let e = select(Some("bazel")).err().expect("an unknown backend must be refused");
+        let mut probe =
+            crate::probe::Prober::in_dir(std::env::temp_dir().join("dowel-backend-test-facts"));
+        let e =
+            select(Some("bazel"), &mut probe).err().expect("an unknown backend must be refused");
         assert!(e.contains("ninja"), "{e}");
         assert!(e.contains("bazel"), "{e}");
     }

@@ -283,8 +283,7 @@ fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
     let mut cfg = dowel_eval::Config::host_default();
     if let Some(root) = sess.root_package() {
         sess.configure(&mut cfg);
-        let host = dowel_eval::config::default_triple();
-        if let Some(decl) = root.toolchain_for(&cfg.target, &host) {
+        if let Some(decl) = root.toolchain_for(&cfg.target, cfg.targets_host()) {
             for (name, _, _) in dowel_eval::config::TOOLS {
                 if let Some(t) = decl.tool(name) {
                     cfg.set_tool(name, t.command.clone());

@@ -34,7 +34,7 @@ afterward. The insertion point is confined to
 | `dowel-support` | spans, source maps, diagnostics, structured logging, JSON output |
 | `dowel-syntax` | lexing, lossless CST, error-tolerant parser |
 | `dowel-query` | memoization, dependency tracking, early cutoff, durability layers, cancellation |
-| `dowel-store` | the on-disk store: append-only value log, fixed-length index, single writer |
+| `dowel-store` | the on-disk store (append-only value log, fixed-length index, single writer) and the per-user probe-fact database |
 | `dowel-eval` | typed values with provenance, expression evaluation, schema and merge semantics, configuration specialization, value serialization |
 | `dowel-model` | package loading, targets, the dependency graph, interface merging, `why` |
 | `dowel-build` | glob expansion, the action graph, the backend layer (ninja / direct / make / graph), `compile_commands.json`, execution |
@@ -107,6 +107,35 @@ bypasses the memo and redoes the merge on the spot.
 - Input change detection compares `(mtime, size, inode, ctime)` and takes a
   content fingerprint only when they differ
 - `dowel cache info` / `dowel cache gc`
+
+### Probe facts (`dowel-store::facts`, `dowel-build::probe`)
+
+What dowel asked a tool and what it answered, recorded in the **user's**
+cache (`$XDG_CACHE_HOME/dowel/facts/<format-version>/`) rather than the
+project's ([ADR-0028](adr/0028-probe-facts.md), docs/20-architecture.md
+section 9).
+
+- Outside the project because a fact belongs to the tool: the same compiler
+  gives the same answer in every tree, and under `.dowel/cache/` the
+  question is re-asked once per tree — the top of the durability hierarchy
+  living in the most volatile place
+- The key carries the tool's identity (path, size, mtime) beside the
+  question, which is why there is no invalidation mechanism: replace the
+  tool and the key changes, so the stale fact is unreachable. `cache gc`
+  collects old format versions
+- Only questions that **start a process** are recorded: `-dumpmachine` and
+  `--version`. Scanning `PATH` is a few `stat` calls, and recording it would
+  cost more to keep honest than it saves. A recorded resolution is still
+  checked for existence, since a tool can be removed without `PATH` changing
+- "It did not answer" is recorded too — `cl` has no `-dumpmachine`, and
+  without recording the silence every run asks again
+- Its first reader replaced an unrecorded input: the host triple used to be
+  assembled from the OS and architecture dowel itself was compiled for, so a
+  machine whose compiler says `x86_64-pc-linux-gnu` would treat that
+  spelling as a cross target and demand a runner. `configure` now asks the
+  host C compiler, and both spellings count as the host
+- Unwritable is not an error, the same judgment as the store: what is lost
+  is the saving, not the answer
 
 `Session` records the files it read into the store, and the next process
 checks against that record to judge changes. The verdicts
@@ -688,16 +717,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (598 tests):
+Current breakdown (613 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 316 |
+| `unit-*` | per-crate unit tests | 327 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 10 |
-| `e2e` | compile real C and C++, run it, check the output | 198 |
+| `e2e` | compile real C and C++, run it, check the output | 202 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (66 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

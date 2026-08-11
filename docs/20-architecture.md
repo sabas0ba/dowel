@@ -123,9 +123,14 @@ Required because the CLI and the language server touch the same store.
 - **Store GC** — append-only means growth. The store lives under
   `.dowel/cache/` (gitignored) and `dowel cache gc` collects by generation
   count or size cap
-- **A separate probe-fact DB** — toolchain-dependent facts should be shared
-  across projects, so they live in the user cache area, content-addressed;
-  the top of the durability hierarchy
+- **A separate probe-fact DB** — toolchain-dependent facts are shared across
+  projects, so they live in the user cache area
+  (`$XDG_CACHE_HOME/dowel/facts/`), keyed by the tool's identity; the top of
+  the durability hierarchy. Implemented for the questions that start a
+  process ([ADR-0028](adr/0028-probe-facts.md)): what a compiler calls
+  itself (`-dumpmachine`) and whether a generator answers `--version`.
+  `try_compile`-style checks are not implemented; they would be built on the
+  same key and storage
 
 ## 6. Where the language server stands
 
@@ -183,3 +188,10 @@ The countermeasure: treat probe results not as an implicit cache
 - It also matters for reproducibility: today's probes depend on "the state of
   the host they ran on", an unrecorded input, which this promotes to an
   explicit one
+
+The database exists ([ADR-0028](adr/0028-probe-facts.md)). The key is the
+tool's identity (path, size, mtime) plus the question, which is also what
+makes invalidation unnecessary: replace the tool and the key changes, so
+the stale fact is never asked for again. The first input it promoted was
+the host triple — previously assembled from the OS and architecture dowel
+itself was compiled for, never asked of the machine's compiler.

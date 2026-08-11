@@ -10,7 +10,7 @@
 
 use crate::action::ActionKind;
 use crate::backend::{Backend, BuildGraph, Step};
-use crate::exec::{drive, responds_to_version, Failure};
+use crate::exec::{drive, Failure};
 use dowel_support::log_debug;
 use std::path::{Path, PathBuf};
 
@@ -30,8 +30,8 @@ impl Backend for Make {
         "make"
     }
 
-    fn available(&self) -> bool {
-        responds_to_version("make")
+    fn available(&self, probe: &mut crate::probe::Prober) -> bool {
+        probe.responds_to_version("make")
     }
 
     fn emit(&self, g: &BuildGraph) -> Result<Vec<PathBuf>, Failure> {
