@@ -117,14 +117,14 @@ pub fn plan(
 
     // ツールチェーンの宣言はターゲットトリプルで引く。無印の `[toolchain]` は
     // ホスト向け、`[toolchain.<triple>]` はそのトリプル向けである（issue #42）。
-    let host = dowel_eval::config::default_triple();
-    let root_toolchain = sess.root_package().and_then(|p| p.toolchain_for(&cfg.target, &host));
+    let is_host = cfg.targets_host();
+    let root_toolchain = sess.root_package().and_then(|p| p.toolchain_for(&cfg.target, is_host));
 
     // ツールチェーンが混ざると ABI の前提が崩れる。1回のビルドで1つに限る。
     // 比較するのは今のターゲットトリプルに適用される宣言だけ。別トリプル向けの
     // 宣言は、このビルドに対する要求ではない。
     for p in &sess.packages {
-        let Some(decl) = p.toolchain_for(&cfg.target, &host) else { continue };
+        let Some(decl) = p.toolchain_for(&cfg.target, is_host) else { continue };
         for (name, _, _) in dowel_eval::config::TOOLS {
             let Some(t) = decl.tool(name) else { continue };
             let used = cfg.tool(name);
@@ -190,7 +190,7 @@ pub fn plan(
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
         if has_cxx[&tid] && !cxx_toolchain_checked {
             cxx_toolchain_checked = true;
-            if cfg.target != host && root_toolchain.is_none_or(|t| t.tool("cxx").is_none()) {
+            if !is_host && root_toolchain.is_none_or(|t| t.tool("cxx").is_none()) {
                 // ホストの `c++` へ落とすと、C++ の翻訳単位だけ別アーキテクチャの
                 // オブジェクトになる。黙って組まず、宣言の不足として述べる。
                 let mut d = Diagnostic::error(

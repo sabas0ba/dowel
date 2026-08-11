@@ -6,7 +6,7 @@
 
 use crate::action::ActionKind;
 use crate::backend::{Backend, BuildGraph};
-use crate::exec::{drive, responds_to_version, Failure};
+use crate::exec::{drive, Failure};
 use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
 use dowel_support::log_debug;
 use std::path::PathBuf;
@@ -20,8 +20,8 @@ impl Backend for Ninja {
         "ninja"
     }
 
-    fn available(&self) -> bool {
-        responds_to_version("ninja")
+    fn available(&self, probe: &mut crate::probe::Prober) -> bool {
+        probe.responds_to_version("ninja")
     }
 
     fn emit(&self, g: &BuildGraph) -> Result<Vec<PathBuf>, Failure> {

@@ -39,8 +39,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+pub mod facts;
 pub mod input;
 
+pub use facts::Facts;
 pub use input::{InputKey, Inputs};
 
 /// ストアの形式版。形式を変えたらこれを上げる。

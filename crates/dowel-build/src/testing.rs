@@ -95,7 +95,7 @@ impl Launcher {
     ) -> (Launcher, Vec<dowel_support::Diagnostic>) {
         let mut diags = Vec::new();
         let Some(runner) = sess.runners.get(&cfg.target) else {
-            if cfg.target != dowel_eval::config::default_triple() {
+            if !cfg.targets_host() {
                 let declared: Vec<&str> = sess.runners.keys().map(|s| s.as_str()).collect();
                 let mut d = dowel_support::Diagnostic::error(
                     "missing-runner",

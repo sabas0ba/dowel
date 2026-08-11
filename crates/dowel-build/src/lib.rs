@@ -10,6 +10,7 @@ pub mod exec;
 pub mod glob;
 pub mod migrate;
 pub mod plan;
+pub mod probe;
 pub mod testing;
 pub mod toolstyle;
 

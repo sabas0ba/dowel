@@ -88,8 +88,7 @@ pub fn prepare(
     let cwd = sess.package(target.package).root.clone();
 
     // ホストと同じトリプルなら、そのまま起動できる。
-    let host = dowel_eval::config::default_triple();
-    if cfg.target == host {
+    if cfg.targets_host() {
         return Ok(Launch {
             program,
             cwd,

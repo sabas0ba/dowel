@@ -46,16 +46,22 @@ fn main() -> ExitCode {
     log::init(opts.log_level, opts.log_format, opts.color);
     log_debug!("starting dowel {}", env!("CARGO_PKG_VERSION"));
 
-    match run(&opts) {
+    // 道具について確かめたことは、プロジェクトを跨いで憶えておく（ADR-0028）。
+    // 作るのはここ1つで、書き出すのも戻ってきてから1度だけ——`run` は
+    // 途中で幾つも返るので、内側に置くと保存を書き落とす。
+    let mut probe = dowel_build::probe::Prober::new();
+    let code = match run(&opts, &mut probe) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::from(EXIT_USAGE)
         }
-    }
+    };
+    probe.save();
+    code
 }
 
-fn run(opts: &Options) -> Result<ExitCode, String> {
+fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCode, String> {
     if opts.command == Command::SchemaDump {
         // スキーマの出力はマニフェストを要さない。
         println!("{}", schema_dump());
@@ -78,7 +84,11 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     if opts.command == Command::CacheGc {
         let removed = dowel_store::Store::gc(&opts.directory)
             .map_err(|e| format!("cannot clean the store: {e}"))?;
-        eprintln!("removed {removed} store(s) left by older formats");
+        // 事実も古い形式版を残す。片方だけ掃除すると、掃除したつもりの
+        // 利用者に残骸が残る（ADR-0028）。
+        let facts = dowel_store::facts::Facts::gc()
+            .map_err(|e| format!("cannot clean the fact database: {e}"))?;
+        eprintln!("removed {removed} store(s) and {facts} fact database(s) left by older formats");
         return Ok(ExitCode::SUCCESS);
     }
     // 下書きの生成はマニフェストを要さない。読むのは CMake の reply である。
@@ -126,7 +136,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
     for (path, change) in sess.input_changes() {
         log_trace!("input {}: {change:?}", path.display());
     }
-    let (cfg, cfg_diags) = configure(&sess, opts)?;
+    let (cfg, cfg_diags) = configure(&sess, opts, probe)?;
     sess.diagnostics.extend(cfg_diags);
     log_debug!("configuration {}", cfg.id());
 
@@ -234,7 +244,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
 
         Command::Build { targets } => {
             let requested = default_targets(&sess, targets)?;
-            let backend = backend::select(opts.backend.as_deref())?;
+            let backend = backend::select(opts.backend.as_deref(), probe)?;
             if !backend.builds() {
                 return emit_only(&mut sess, &g, &cfg, opts, &requested, &*backend);
             }
@@ -263,7 +273,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 );
                 return Ok(ExitCode::SUCCESS);
             }
-            let backend = building_backend(opts, "dowel inspect")?;
+            let backend = building_backend(opts, "dowel inspect", probe)?;
             let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
             };
@@ -281,7 +291,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
                 None => (target.as_str(), None),
             };
             let tid = sess.find_target(target_ref)?;
-            let backend = building_backend(opts, "dowel debug")?;
+            let backend = building_backend(opts, "dowel debug", probe)?;
             let requested = vec![tid];
             let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
                 return Ok(ExitCode::FAILURE);
@@ -303,7 +313,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         }
 
         Command::Bench { targets } => {
-            let backend = building_backend(opts, "dowel bench")?;
+            let backend = building_backend(opts, "dowel bench", probe)?;
             let requested = runnable_targets(&sess, targets, dowel_eval::schema::TableKind::Bench)?;
             // 測るものが1つも無い木は、誤りではない。宣言が無いだけである。
             if requested.targets.is_empty() {
@@ -339,7 +349,7 @@ fn run(opts: &Options) -> Result<ExitCode, String> {
         }
 
         Command::Test { targets } => {
-            let backend = building_backend(opts, "dowel test")?;
+            let backend = building_backend(opts, "dowel test", probe)?;
             let requested = test_targets(&sess, targets)?;
             let build_dir = build_plan::build_dir(
                 &sess.root_package().map(|p| p.root.clone()).unwrap_or_default(),
@@ -630,7 +640,11 @@ bench result: FAILED. {} of {n} could not be measured",
 /// `--features` に渡された名前も `[features]` の宣言に照らす。オプション解析の
 /// 段では判定できない。値の妥当性は別の語彙（マニフェスト）が決めるものであり、
 /// 引数解析にはその情報がない。
-fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>), String> {
+fn configure(
+    sess: &Session,
+    opts: &Options,
+    probe: &mut dowel_build::probe::Prober,
+) -> Result<(Config, Vec<Diagnostic>), String> {
     let mut diags = Vec::new();
     // 三つ組が様式を決め、様式が道具の既定を決める（ADR-0027）。構成を
     // 三つ組から作るのは、後から `target` を差し替えると既定が付いてこない
@@ -641,6 +655,24 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
     };
     cfg.opt = Opt::parse(&opts.config)
         .ok_or_else(|| format!("`--config` must be debug or release (got `{}`)", opts.config))?;
+
+    // ホストの三つ組は、この機械の C コンパイラに訊く（ADR-0028）。dowel が
+    // OS と構成から組み立てる綴りは近似であり、道具の名乗りとは別物である
+    // （`x86_64-pc-linux-gnu` と `x86_64-unknown-linux-gnu`）。訊かないと、
+    // 自分の道具が名乗る綴りを `--target` に渡した利用者がクロス扱いされ、
+    // 在るはずのないランナーを求められる。
+    //
+    // 訊く相手は**ホスト向けの宣言**である。対象向けの `c` に訊くと、返るのは
+    // 対象の三つ組でありホストのものではない。
+    let host_cc = sess
+        .root_package()
+        .and_then(|p| p.toolchain.tool("c"))
+        .map(|t| t.command.clone())
+        .unwrap_or_else(|| dowel_eval::config::default_tool("c", cfg.style).to_string());
+    if let Some(named) = probe.triple(&host_cc) {
+        log_debug!("host triple: {named} (as named by `{host_cc}`)");
+        cfg.set_host(named);
+    }
     if let Some(root) = sess.root_package() {
         // 対象の宣言があれば、それ以外のトリプルを求められたときに拒む。
         // ホストには既定の道具があるため、宣言の不在では拒めない——
@@ -681,8 +713,7 @@ fn configure(sess: &Session, opts: &Options) -> Result<(Config, Vec<Diagnostic>)
         // 同じ形である。宣言の無いトリプルはここで拒む。ホストのコンパイラで
         // 組んで別トリプルの名前を付けると、誤りが qemu の
         // `Invalid ELF image` などとして1段あとに現れる（issue #42）。
-        let host = dowel_eval::config::default_triple();
-        match root.toolchain_for(&cfg.target, &host) {
+        match root.toolchain_for(&cfg.target, cfg.targets_host()) {
             Some(decl) => {
                 // 様式が先。道具の既定が様式で変わるので、後に置くと
                 // 明示していない道具だけ別の様式の既定に留まる。
@@ -1131,8 +1162,12 @@ fn runnable_targets(
 ///
 /// 書き出すだけのバックエンド（`graph`）では走らせるものが無い。
 /// 黙って何もしないより断る（ADR-0018）。
-fn building_backend(opts: &Options, command: &str) -> Result<Box<dyn backend::Backend>, String> {
-    let backend = backend::select(opts.backend.as_deref())?;
+fn building_backend(
+    opts: &Options,
+    command: &str,
+    probe: &mut dowel_build::probe::Prober,
+) -> Result<Box<dyn backend::Backend>, String> {
+    let backend = backend::select(opts.backend.as_deref(), probe)?;
     if !backend.builds() {
         return Err(format!(
             "`{}` writes the build description but does not build. \
@@ -1184,6 +1219,12 @@ fn cache_info(root: &std::path::Path) -> Result<ExitCode, String> {
     println!("format     {}", dowel_store::FORMAT);
     println!("records    {}", store.len());
     println!("values     {values} bytes");
+    // 道具について確かめたことは、プロジェクトの外に置く（ADR-0028）。
+    // 同じ表示に並べるのは、消えたときに探す先が2つあることを知らせるため。
+    let facts = dowel_store::Facts::open();
+    println!("facts      {}", dowel_store::facts::Facts::dir().display());
+    println!("  format   {}", dowel_store::facts::FORMAT);
+    println!("  records  {}", facts.len());
     Ok(ExitCode::SUCCESS)
 }
 

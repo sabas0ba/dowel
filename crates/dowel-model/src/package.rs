@@ -82,11 +82,17 @@ impl Package {
     /// あり、別トリプルのビルドには適用しない。ホストのコンパイラで組んだ
     /// 成果物に別トリプルの名前が付くのが issue #42 の形である。
     /// 別トリプルに宣言が無い場合は `None` を返し、呼び手が拒む。
-    pub fn toolchain_for(&self, triple: &str, host: &str) -> Option<&ToolchainDecl> {
+    /// `is_host` は「その三つ組がこの機械を指すか」。
+    ///
+    /// 綴りの一致で判定させない。ホストには綴りが2つある——dowel が組み立てる
+    /// 近似と、C コンパイラが名乗るもの（[ADR-0028](../../../docs/adr/0028-probe-facts.md)）
+    /// ——ので、どちらか一方と比べると、もう一方がクロス扱いになる。判定は
+    /// `Config::targets_host` が持つ。
+    pub fn toolchain_for(&self, triple: &str, is_host: bool) -> Option<&ToolchainDecl> {
         if let Some(d) = self.toolchains.get(triple) {
             return Some(d);
         }
-        if triple == host {
+        if is_host {
             return Some(&self.toolchain);
         }
         None
@@ -750,8 +756,8 @@ mod tests {
 
         // ホストのビルドは無印の宣言、別トリプルはそのトリプルの宣言。
         let command = |d: &ToolchainDecl| d.tool("c").map(|t| t.command.clone());
-        assert_eq!(command(p.toolchain_for(HOST, HOST).unwrap()).as_deref(), Some("cc"));
-        assert_eq!(command(p.toolchain_for(CROSS, HOST).unwrap()).as_deref(), Some("riscv64-gcc"));
+        assert_eq!(command(p.toolchain_for(HOST, true).unwrap()).as_deref(), Some("cc"));
+        assert_eq!(command(p.toolchain_for(CROSS, false).unwrap()).as_deref(), Some("riscv64-gcc"));
     }
 
     #[test]
@@ -761,9 +767,7 @@ mod tests {
         p.toolchain.set_tool("c", "cc".into(), site);
         // 無印の宣言はホスト向けであり、別トリプルのビルドへは落ちない。
         // ここが `Some` になると、ホストの成果物に別トリプルの名前が付く（issue #42）。
-        assert!(p
-            .toolchain_for("riscv64gc-unknown-linux-gnu", "x86_64-unknown-linux-gnu")
-            .is_none());
+        assert!(p.toolchain_for("riscv64gc-unknown-linux-gnu", false).is_none());
     }
 
     #[test]
