@@ -484,17 +484,23 @@ prints the same report as one JSON object on stdout.
 ## `dowel migrate import`
 
 ```
-dowel migrate import <cmake-build-dir>
+dowel migrate import <old-build-dir>
 ```
 
-Drafts `dowel.toml` / `dowel.build` from a CMake File API reply
-(`codemodel-v2`), writing them **into the CMake source directory** — next to
-the code they describe. Existing manifests are never overwritten. To make
-CMake produce the reply:
+Drafts `dowel.toml` / `dowel.build` from what an existing build system says
+about itself, writing them **into its source directory** — next to the code
+they describe. Existing manifests are never overwritten.
+
+| Source | Read from | How to produce it |
+|---|---|---|
+| CMake | File API reply (`codemodel-v2`) | `mkdir -p build/.cmake/api/v1/query && touch build/.cmake/api/v1/query/codemodel-v2`, then re-run `cmake -B build ...` |
+| Meson | `build/meson-info/` | `meson setup build <source>` writes it on its own |
+
+Which one it is, is decided by **looking at the directory** — there is no
+`--from=` flag. What gets passed is the old build directory, and what made
+it is written there. If neither is present, the error names both recipes.
 
 ```sh
-mkdir -p build/.cmake/api/v1/query && touch build/.cmake/api/v1/query/codemodel-v2
-cmake -B build ...
 dowel migrate import build
 ```
 
@@ -510,14 +516,27 @@ and points at the follow-up:
 dowel migrate verify <old-build>/compile_commands.json
 ```
 
-Mapping: `EXECUTABLE` → `bin`; `STATIC_LIBRARY` / `OBJECT_LIBRARY` (and,
-with a note, `SHARED_LIBRARY`) → `lib`; in-project `dependencies` →
-`target(...)`; external `-l...` libraries → `link_flags`; includes outside
-the source tree → `-I` flags. Target names are mapped to valid identifiers.
-Configuration-level flags coming from the CMake build type (`-O` / `-g` /
-`-DNDEBUG`) are **not** copied — dowel's own `--config` supplies them, and
-copying them unconditionally would make a draft imported from Release
-produce optimized `NDEBUG` "debug" builds. The draft header states this.
+Common mapping: executables → `bin`; static (and, with a note, shared)
+libraries → `lib`; includes outside the source tree → `-I` flags. Target
+names are mapped to valid identifiers. Configuration-level flags coming from
+the build type (`-O` / `-g` / `-DNDEBUG`) are **not** copied — dowel's own
+`--config` supplies them, and copying them unconditionally would make a
+draft imported from Release produce optimized `NDEBUG` "debug" builds. The
+draft header states this.
+
+What differs between the two sources:
+
+- **CMake** reports compile arguments already sorted into `defines`,
+  `includes`, and fragments, and it names in-project `dependencies`, which
+  become `target(...)`. External `-l...` libraries become `link_flags`
+- **Meson** hands over one `parameters` array per target, so dowel does the
+  sorting (`-I` → `includes`, `-D` → `defines`, the rest → `flags`). Its
+  introspection does **not** say which targets link against which, so
+  `deps` is left empty and has to be written by hand — guessing from output
+  filenames would put wrong edges in a draft that is already unverified.
+  Generated sources are listed as skipped comments rather than dropped
+  silently, and subproject targets are not imported (they are a different
+  package)
 
 ## `dowel schema dump`
 

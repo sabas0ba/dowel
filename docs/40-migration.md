@@ -51,7 +51,8 @@ with every flag flattened and intent lost, gets committed as-is, and becomes
 a maintenance burden.
 
 ```
-dowel migrate import   # generate a draft from the File API (marked unverified)
+dowel migrate import   # draft from CMake's File API or Meson's introspection
+                       # (marked unverified)
 dowel migrate verify   # compare the existing system's compile_commands.json
                        # against our action set, and report the differences
 ```

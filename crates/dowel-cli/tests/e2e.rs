@@ -1927,6 +1927,90 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
     assert!(again.stderr.contains("already exists"), "{again}");
 }
 
+/// Meson の introspect からの取り込み（docs/40-migration.md 4節）。
+#[test]
+fn migrate_import_drafts_manifests_from_meson_introspection() {
+    let p = Project::new("meson-import");
+    let src = p.path(".").display().to_string();
+    p.write("lib/len.h", "#pragma once\nint len_of(const char *s);\n");
+    p.write(
+        "lib/len.c",
+        "#include \"len.h\"\nint len_of(const char *s) { int n = 0; while (s[n]) n++; return n + LIMIT - LIMIT; }\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"len.h\"\nint main(void) { printf(\"n=%d\\n\", len_of(\"abcd\")); return 0; }\n",
+    );
+
+    // meson が `meson setup` で自ら書くもの。引数は仕分けられておらず、
+    // 1つの配列で来る——そこが CMake の reply と一番違う。
+    p.write(
+        "build/meson-info/intro-projectinfo.json",
+        r#"{"version": "1.2.3", "descriptive_name": "demo", "subprojects": []}"#,
+    );
+    p.write(
+        "build/meson-info/intro-targets.json",
+        &format!(
+            r#"[
+              {{"name": "len", "type": "static library", "defined_in": "{src}/meson.build",
+                "subproject": null,
+                "target_sources": [{{"language": "c", "compiler": ["cc"],
+                  "parameters": ["-I{src}/lib", "-DLIMIT=64", "-Wall", "-O2", "-g"],
+                  "sources": ["{src}/lib/len.c"], "generated_sources": []}}]}},
+              {{"name": "app", "type": "executable", "defined_in": "{src}/meson.build",
+                "subproject": null,
+                "target_sources": [{{"language": "c", "compiler": ["cc"],
+                  "parameters": ["-I{src}/lib", "-Wall"],
+                  "sources": ["{src}/src/main.c"], "generated_sources": []}}]}},
+              {{"name": "docs", "type": "custom", "defined_in": "{src}/meson.build",
+                "subproject": null, "target_sources": []}}
+            ]"#
+        ),
+    );
+
+    let r = p.run(".", &["migrate", "import", "build"]);
+    r.success();
+    r.stderr_contains("imported 2 target(s)");
+    r.stderr_contains("UNVERIFIED");
+
+    let manifest = std::fs::read_to_string(p.path("dowel.toml")).unwrap();
+    assert!(manifest.contains("name    = \"demo\""), "{manifest}");
+    // 印は Meson から来たことを述べる。CMake の文言のままにしない。
+    assert!(manifest.contains("Meson configuration"), "{manifest}");
+
+    let build_file = std::fs::read_to_string(p.path("dowel.build")).unwrap();
+    assert!(build_file.contains("[lib.len]"), "{build_file}");
+    assert!(build_file.contains("[bin.app]"), "{build_file}");
+    // `custom` は組めない。読み飛ばす。
+    assert!(!build_file.contains("docs"), "{build_file}");
+    // 1つの配列が仕分けられている。
+    assert!(build_file.contains("includes = [dir(\"lib\")]"), "{build_file}");
+    assert!(build_file.contains("LIMIT = 64"), "{build_file}");
+    let flags_line = build_file
+        .lines()
+        .find(|l| l.trim_start().starts_with("flags"))
+        .expect("the draft declares flags");
+    assert!(flags_line.contains("-Wall"), "{flags_line}");
+    // 構成レベルのものは写らない。`-O2` / `-g` は `cfg.opt` の担当である。
+    assert!(!flags_line.contains("-O2") && !flags_line.contains("\"-g\""), "{flags_line}");
+
+    // 下書きがそのまま読める。組むには依存を人が書き足す必要がある——
+    // introspect にリンク先が無いためで、それは下書きの限界として残る。
+    p.run(".", &["check"]).success();
+}
+
+#[test]
+fn migrate_import_says_what_to_run_when_it_finds_neither() {
+    // 渡す先を間違えたときに、何を渡せばよいかが読めること。
+    let p = Project::new("import-neither");
+    p.write("build/CMakeCache.txt", "# not the File API\n");
+    let r = p.run(".", &["migrate", "import", "build"]);
+    r.failure();
+    r.stderr_contains("neither a CMake File API reply nor Meson introspection");
+    r.stderr_contains("codemodel-v2");
+    r.stderr_contains("meson setup");
+}
+
 /// pkg-config で解決する `version` 依存の全経路。
 ///
 /// システムのモジュールに依存すると環境で揺れるため、`.pc` と実体の
