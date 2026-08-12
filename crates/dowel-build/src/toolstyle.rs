@@ -235,8 +235,25 @@ pub fn shared_object_flags(cfg: &Config) -> Vec<String> {
     }
 }
 
-/// 共有ライブラリの綴り。
-pub fn shared_library_name(cfg: &Config, target: &str) -> String {
+/// 共有ライブラリの綴り。版を書けば、それが名前に入る
+/// （[ADR-0040](../../../docs/adr/0040-shared-library-version.md)）。
+///
+/// 版の入る位置は形式ごとに違う。ELF は末尾に足し、Mach-O は拡張子の前に
+/// 挟み、PE は名前そのものに繋ぐ。どれも各々の慣習であって、選べるもので
+/// はない——利用者が置き場所を見て名前を読むためである。
+pub fn shared_library_name(cfg: &Config, target: &str, soversion: Option<i64>) -> String {
+    let plain = shared_library_link_name(cfg, target);
+    let Some(v) = soversion else { return plain };
+    match (cfg.style, dowel_eval::config::triple_os(&cfg.target)) {
+        (Style::Msvc, _) => format!("{target}-{v}.dll"),
+        (Style::Gnu, "macos") => format!("lib{target}.{v}.dylib"),
+        (Style::Gnu, "windows") => format!("lib{target}-{v}.dll"),
+        (Style::Gnu, _) => format!("lib{target}.so.{v}"),
+    }
+}
+
+/// 版を持たない綴り。`-lcore` が見つける名前である。
+pub fn shared_library_link_name(cfg: &Config, target: &str) -> String {
     match (cfg.style, dowel_eval::config::triple_os(&cfg.target)) {
         (Style::Msvc, _) => format!("{target}.dll"),
         (Style::Gnu, "macos") => format!("lib{target}.dylib"),
@@ -244,6 +261,14 @@ pub fn shared_library_name(cfg: &Config, target: &str) -> String {
         (Style::Gnu, "windows") => format!("lib{target}.dll"),
         (Style::Gnu, _) => format!("lib{target}.so"),
     }
+}
+
+/// 版付きの実体に対し、版を持たない名前を並べて置くか。
+///
+/// 置くのは記号連結を使う形式に限る。PE には記号連結が無く、`-lcore` に
+/// 当たるのも DLL ではなく取り込み用の書庫であるため、並べる意味が無い。
+pub fn has_link_name_alias(cfg: &Config) -> bool {
+    !matches!(export_form(cfg), ExportForm::ModuleDefinition)
 }
 
 /// 共有ライブラリを作るリンクの引数。
@@ -464,7 +489,7 @@ mod tests {
     fn a_shared_library_is_spelled_and_named_per_target() {
         let exports = Path::new("core.map");
         let linux = for_target("x86_64-unknown-linux-gnu");
-        assert_eq!(shared_library_name(&linux, "core"), "libcore.so");
+        assert_eq!(shared_library_name(&linux, "core", None), "libcore.so");
         let args =
             link_shared(&linux, &["a.o".into()], &[], Path::new("/b/lib/libcore.so"), exports);
         assert!(args.contains(&"-shared".to_string()), "{args:?}");
@@ -473,14 +498,14 @@ mod tests {
         assert!(args.iter().any(|a| a.starts_with("-Wl,--version-script=")), "{args:?}");
 
         let mac = for_target("aarch64-apple-darwin");
-        assert_eq!(shared_library_name(&mac, "core"), "libcore.dylib");
+        assert_eq!(shared_library_name(&mac, "core", None), "libcore.dylib");
         let args = link_shared(&mac, &["a.o".into()], &[], Path::new("/b/libcore.dylib"), exports);
         assert!(args.contains(&"-dynamiclib".to_string()), "{args:?}");
         assert!(args.contains(&"-Wl,-install_name,@rpath/libcore.dylib".to_string()), "{args:?}");
         assert!(!args.iter().any(|a| a.contains("version-script")), "{args:?}");
 
         let msvc = for_target("x86_64-pc-windows-msvc");
-        assert_eq!(shared_library_name(&msvc, "core"), "core.dll");
+        assert_eq!(shared_library_name(&msvc, "core", None), "core.dll");
         let args = link_shared(&msvc, &["a.obj".into()], &[], Path::new("/b/core.dll"), exports);
         assert!(args.contains(&"/DLL".to_string()), "{args:?}");
         assert!(args.iter().any(|a| a.starts_with("/DEF:")), "{args:?}");
@@ -488,7 +513,7 @@ mod tests {
 
         // mingw: GNU の綴りで、記述は入力ファイルとして置く。
         let mingw = for_target("x86_64-pc-windows-gnu");
-        assert_eq!(shared_library_name(&mingw, "core"), "libcore.dll");
+        assert_eq!(shared_library_name(&mingw, "core", None), "libcore.dll");
         let args = link_shared(
             &mingw,
             &["a.o".into()],
@@ -499,6 +524,38 @@ mod tests {
         assert!(args.contains(&"-shared".to_string()), "{args:?}");
         assert!(args.contains(&"c.def".to_string()), "{args:?}");
         assert!(!args.iter().any(|a| a.contains("soname")), "{args:?}");
+    }
+
+    #[test]
+    fn a_declared_version_enters_the_name_where_the_format_puts_it() {
+        // 位置は形式ごとの慣習であり、選べるものではない（ADR-0040）。
+        let linux = for_target("x86_64-unknown-linux-gnu");
+        assert_eq!(shared_library_name(&linux, "core", Some(1)), "libcore.so.1");
+        let mac = for_target("aarch64-apple-darwin");
+        assert_eq!(shared_library_name(&mac, "core", Some(1)), "libcore.1.dylib");
+        let msvc = for_target("x86_64-pc-windows-msvc");
+        assert_eq!(shared_library_name(&msvc, "core", Some(1)), "core-1.dll");
+        let mingw = for_target("x86_64-pc-windows-gnu");
+        assert_eq!(shared_library_name(&mingw, "core", Some(1)), "libcore-1.dll");
+
+        // soname は出力の名前から取るので、版はそのまま入る。付けないと
+        // 使う側はリンク時のパスを記録し、世代を跨いだ入れ替えが効かない。
+        let args = link_shared(
+            &linux,
+            &["a.o".into()],
+            &[],
+            Path::new("/b/lib/libcore.so.1"),
+            Path::new("core.map"),
+        );
+        assert!(args.contains(&"-Wl,-soname,libcore.so.1".to_string()), "{args:?}");
+
+        // 版を持たない名前を並べるのは記号連結を使う形式に限る。PE には
+        // 無く、`-lcore` が当たるのも DLL ではなく取り込み用の書庫である。
+        assert!(has_link_name_alias(&linux));
+        assert!(has_link_name_alias(&mac));
+        assert!(!has_link_name_alias(&msvc));
+        assert!(!has_link_name_alias(&mingw));
+        assert_eq!(shared_library_link_name(&linux, "core"), "libcore.so");
     }
 
     #[test]

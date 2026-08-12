@@ -489,8 +489,32 @@ pub fn plan(
                     continue;
                 }
 
-                let out =
-                    build_dir.join("lib").join(toolstyle::shared_library_name(cfg, &target.name));
+                // ABI の世代（ADR-0040）。書かなければ版を持たない。
+                let declared_soversion = root_value(sess, tid, cfg, "soversion");
+                let soversion = declared_soversion.as_ref().and_then(|v| v.as_int());
+                if soversion.is_some_and(|v| v < 0) {
+                    let site = declared_soversion
+                        .as_ref()
+                        .and_then(|v| v.prov.nearest_site())
+                        .unwrap_or(target.site);
+                    diags.push(
+                        Diagnostic::error(
+                            "invalid-soversion",
+                            format!(
+                                "`soversion` is {}; an ABI generation counts up from 0",
+                                soversion.unwrap_or_default()
+                            ),
+                        )
+                        .at(site.file, site.span, "declared here")
+                        .note("the number becomes part of the library's file name"),
+                    );
+                    continue;
+                }
+                let out = build_dir.join("lib").join(toolstyle::shared_library_name(
+                    cfg,
+                    &target.name,
+                    soversion,
+                ));
                 // リンカが読む形は対象の形式が決める。生成物はリンクの入力で
                 // あり、`exports` を変えれば結び直る。
                 let form = toolstyle::export_form(cfg);
@@ -574,6 +598,13 @@ pub fn plan(
                         _ => out.clone(),
                     },
                 );
+                if soversion.is_some() && toolstyle::has_link_name_alias(cfg) {
+                    link_name_alias(
+                        &build_dir.join("lib"),
+                        &toolstyle::shared_library_link_name(cfg, &target.name),
+                        &out,
+                    );
+                }
                 plan.shared_libraries.push(out.clone());
                 plan.declared_exports.push(DeclaredExports {
                     target: tid,
@@ -1107,6 +1138,40 @@ pub fn supports_target(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
 
 fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Vec<String> {
     root_value(sess, tid, cfg, name).map(|v| flatten_strs(&v)).unwrap_or_default()
+}
+
+/// 版付きの実体の隣に、版を持たない名前を置く
+/// （[ADR-0040](../../../docs/adr/0040-shared-library-version.md)）。
+///
+/// `-lcore` が見つけるのはこの名前である。版付きの実体しか無いと、同じ
+/// ディレクトリに在る書庫（ADR-0038）の方が拾われ、共有ライブラリを作った
+/// はずのビルドが静的に繋がる。
+///
+/// 行動としてではなく計画時に置く。中身に依存しない別名であり、実体が
+/// まだ無くても構わない——記号連結は、指す先が現れた時点で有効になる。
+/// 加えて `dowel` は毎回ここを通るので、消されても次で戻る。
+fn link_name_alias(dir: &Path, link_name: &str, target: &Path) {
+    let alias = dir.join(link_name);
+    if alias == target {
+        return;
+    }
+    let Some(file) = target.file_name() else { return };
+    #[cfg(unix)]
+    {
+        // 相対で指す。ビルド木は移せないが、別名が実体を辿れなくなる理由を
+        // 1つ減らす。
+        if std::fs::read_link(&alias).ok().as_deref() == Some(Path::new(file)) {
+            return;
+        }
+        let _ = std::fs::remove_file(&alias);
+        if let Err(e) = std::os::unix::fs::symlink(file, &alias) {
+            log_debug!("cannot place {}: {e}", alias.display());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (alias, file);
+    }
 }
 
 /// 共有ライブラリとして繋ぐか（ADR-0030）。
