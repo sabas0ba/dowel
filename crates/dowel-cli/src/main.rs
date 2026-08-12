@@ -583,6 +583,17 @@ fn build(
         eprint!("error: {f}");
         return Ok(None);
     }
+
+    // 出来上がった共有ライブラリに、何を書き出したか聞く（ADR-0039）。
+    // ビルドの段ではなく後に置くのは、答が出るのが判定であってファイルでは
+    // ないためである——グラフに載せるには出力ファイルが要る。後に置けば、
+    // ninja でも make でも直接実行でも同じように働く。
+    let export_diags = dowel_build::exports::check(&p.declared_exports, cfg);
+    if !export_diags.is_empty() {
+        sess.diagnostics.extend(export_diags);
+        report(sess, opts);
+        return Ok(None);
+    }
     Ok(Some(p))
 }
 

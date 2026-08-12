@@ -587,6 +587,20 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unexported-symbol",
+        why: "`exports` names a symbol the built library does not export (ADR-0039)",
+        files: &[
+            (
+                "app/dowel.build",
+                "[lib.core]\nsources = [file(\"src/core.c\")]\nlinkage = \"shared\"\n\
+                 exports = [\"core_opne\"]\n",
+            ),
+            ("app/src/core.c", "int core_open(void) { return 42; }\n"),
+        ],
+        // 出来上がったものに聞く検査なので、`check` では出ない。
+        args: BUILD,
+    },
+    Case {
         code: "empty-glob",
         why: "the pattern matches no file",
         files: &[("app/dowel.build", "[bin.app]\nsources = glob(\"nowhere/*.c\")\n")],

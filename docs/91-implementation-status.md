@@ -440,8 +440,17 @@ changes, only the speed.
     compiled once; the archive costs one `ar` run. The shared object is
     built even when nothing links it, since shipping it is the reason to
     declare one
-  - Symbol versioning and installation are not implemented, and nothing
-    verifies that a name in `exports` exists
+  - **`exports` is checked against the library that was built**
+    ([ADR-0039](adr/0039-exports-are-checked.md)). After the build dowel
+    asks the toolchain's symbol lister (`tc.nm`, or `dumpbin` under MSVC)
+    what the library exports and compares. A name that is not in the answer
+    is `unexported-symbol`, pointing at the line that declared it and
+    naming the closest symbol that does exist. The linker cannot do this —
+    a shared library may legitimately have undefined symbols, so neither
+    `-Wl,-u` nor `--no-undefined` turns a missing export into an error
+    (measured). A symbol lister that is not on `PATH` skips the check
+    rather than failing the build
+  - Symbol versioning and installation are not implemented
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language
 - The language standard is typed: `c_std` / `cxx_std` take a value from a
@@ -896,19 +905,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (687 tests):
+Current breakdown (690 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 357 |
+| `unit-*` | per-crate unit tests | 358 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 235 |
+| `e2e` | compile real C and C++, run it, check the output | 237 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (70 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (71 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 7 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |

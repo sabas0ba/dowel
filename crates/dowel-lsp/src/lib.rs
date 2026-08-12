@@ -64,6 +64,10 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
         "lockfile-drift",
         "reconciling the lock happens when the CLI resolves; the server starts no external processes",
     ),
+    (
+        "unexported-symbol",
+        "the check asks the built library what it exports; the server builds nothing",
+    ),
 ];
 
 /// 開いている文書。エディタの緩衝が正本であり、ディスクは見ない。

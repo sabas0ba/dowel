@@ -302,6 +302,54 @@ pub fn link_shared(
     args
 }
 
+/// 出来上がった共有ライブラリに「何を書き出したか」を聞く引数
+/// （[ADR-0039](../../../docs/adr/0039-exports-are-checked.md)）。
+///
+/// 読むのは道具の出力であって、目的ファイルではない。形式の解読は道具の
+/// 側に残る（[ADR-0001](../../../docs/adr/0001-toolchain-vs-supply.md)）。
+pub fn list_exports(cfg: &Config, library: &Path) -> Vec<String> {
+    match cfg.style {
+        // `-D` は動的記号表、`--defined-only` はこのファイルが定義したもの。
+        Style::Gnu => {
+            vec!["-D".into(), "--defined-only".into(), library.display().to_string()]
+        }
+        Style::Msvc => vec!["/nologo".into(), "/exports".into(), library.display().to_string()],
+    }
+}
+
+/// 道具の出力から記号の名前だけを拾う。
+///
+/// 綴りは様式で違う。GNU の `nm` は `<番地> <種別> <名前>`、MSVC の
+/// `dumpbin /exports` は見出しと表の後に `<序数> <hint> <RVA> <名前>` を
+/// 並べる。どちらも「行の最後の語」が名前であることを使う——書式の全体を
+/// 解釈すると、道具の版ごとの差に付き合うことになる。
+pub fn parse_exports(cfg: &Config, output: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let name = match cfg.style {
+            // `0000000000001139 T core_open`。種別が1文字の行だけを採る。
+            Style::Gnu => {
+                if fields.len() != 3 || fields[1].len() != 1 {
+                    continue;
+                }
+                fields[2]
+            }
+            // `1    0 00001000 core_open`。4語で、先頭3つが数字の行。
+            Style::Msvc => {
+                if fields.len() != 4 || !fields[0].bytes().all(|b| b.is_ascii_digit()) {
+                    continue;
+                }
+                fields[3]
+            }
+        };
+        if !name.is_empty() && !out.contains(&name.to_string()) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
 /// 共有ライブラリに繋ぐ側が、実行時にそれを見つけるための引数。
 ///
 /// Windows には rpath が無い。実行する側が環境で渡す（ADR-0030）。
@@ -471,6 +519,35 @@ mod tests {
         // Windows に rpath は無い。実行する側が環境で渡す。
         assert!(runtime_search_path(&for_target("x86_64-pc-windows-msvc"), dir).is_empty());
         assert!(runtime_search_path(&for_target("x86_64-pc-windows-gnu"), dir).is_empty());
+    }
+
+    #[test]
+    fn the_symbol_listers_output_is_read_per_style() {
+        // 読むのは道具の出力であって目的ファイルではない（ADR-0039）。
+        // 書式の全体は解釈しない——道具の版ごとの差に付き合うことになる。
+        let gnu = cfg(Style::Gnu);
+        let listed = parse_exports(
+            &gnu,
+            "0000000000001139 T core_open\n\
+             0000000000001150 T core_close\n\
+                              U printf\n",
+        );
+        // 定義しているものだけ。未定義（`U`）は3語に満たない。
+        assert_eq!(listed, ["core_open", "core_close"]);
+
+        let msvc = cfg(Style::Msvc);
+        let listed = parse_exports(
+            &msvc,
+            "Dump of file core.dll\n\n\
+             ordinal hint RVA      name\n\n\
+             1    0 00001000 core_open\n\
+             2    1 00001010 core_close\n",
+        );
+        assert_eq!(listed, ["core_open", "core_close"]);
+
+        // 引数の綴りも様式が決める。
+        assert!(list_exports(&gnu, Path::new("l.so")).contains(&"--defined-only".to_string()));
+        assert!(list_exports(&msvc, Path::new("l.dll")).contains(&"/exports".to_string()));
     }
 
     #[test]
