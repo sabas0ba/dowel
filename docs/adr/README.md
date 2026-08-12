@@ -51,3 +51,4 @@ was originally written in.
 | [0042](0042-abi-label-components.md) | An ABI label is a set of components, so granularity is chosen per declaration instead of once for everyone | Accepted |
 | [0043](0043-pkgconfig-generation.md) | An installed library describes itself in pkg-config, because dowel already reads that notation and could not write it | Accepted |
 | [0044](0044-toolchain-acquisition.md) | A toolchain is fetched and pinned the way a dependency is, and it lives in the user's cache | Accepted |
+| [0045](0045-offline.md) | Offline is a mode the build is told to be in, not a state it happens to be in | Accepted |

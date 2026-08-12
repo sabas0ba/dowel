@@ -1094,6 +1094,11 @@ const UNCOVERED: &[(&str, &str)] = &[
          covered by the e2e with a .pc fixture",
     ),
     (
+        "needs-fetch",
+        "requires `--offline` with an unfetched git or archive dependency; the case harness \
+         passes no such flag. covered by the e2e with a local git dependency",
+    ),
+    (
         "unfetchable-toolchain",
         "needs a URL that fails to fetch; the case harness cannot host one, and a real \
          network call in a case would make the suite depend on the network. covered by the \

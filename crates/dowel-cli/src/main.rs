@@ -46,6 +46,12 @@ fn main() -> ExitCode {
     log::init(opts.log_level, opts.log_format, opts.color);
     log_debug!("starting dowel {}", env!("CARGO_PKG_VERSION"));
 
+    // 網へ行くかどうかは argv から1度だけ決まる（ADR-0045）。環境変数でも
+    // 与えられる——隔離した容器や CI では、命令ごとに旗を書き足すより
+    // 環境で決める方が漏れない。
+    let offline = opts.offline || matches!(std::env::var("DOWEL_OFFLINE").as_deref(), Ok("1"));
+    dowel_model::fetch::set_offline(offline);
+
     // 道具について確かめたことは、プロジェクトを跨いで憶えておく（ADR-0028）。
     // 作るのはここ1つで、書き出すのも戻ってきてから1度だけ——`run` は
     // 途中で幾つも返るので、内側に置くと保存を書き落とす。
@@ -226,6 +232,26 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
         | Command::Add { .. }
         | Command::MigrateImport { .. } => {
             unreachable!("handled above")
+        }
+
+        Command::Fetch => {
+            // 取得は模型の読み込みの中で起きる（依存）、および構成の組み立て
+            // の中で起きる（道具一式）。どちらもここまでで済んでいる。
+            // この命令は、それを**組まずに**行うためのものである。
+            // 取ってきたものは `.dowel/deps/` の下に在る。根は正準化されて
+            // いるので、比べる側も根のパッケージから採る。
+            let deps_dir =
+                sess.root_package().map(|p| p.root.join(".dowel").join("deps")).unwrap_or_default();
+            let fetched: Vec<&dowel_model::Package> =
+                sess.packages.iter().filter(|p| p.root.starts_with(&deps_dir)).collect();
+            if report(&sess, opts) {
+                return Ok(ExitCode::FAILURE);
+            }
+            for p in &fetched {
+                eprintln!("ready: {} at {}", p.name, p.root.display());
+            }
+            eprintln!("fetched {} package(s); the build can now run with --offline", fetched.len());
+            Ok(ExitCode::SUCCESS)
         }
 
         Command::Check => {

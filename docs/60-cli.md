@@ -47,6 +47,7 @@ the run short, the summary reports how many tests were not run.
 | `--target <triple>` | target triple | host | cross-compilation target ([63-guides.md](63-guides.md) section 5) |
 | `--features <a,b>` | comma-separated | — | feature flags to enable; may be repeated |
 | `--no-default-features` | — | — | do not pull in `default` from `[features]` |
+| `--offline` | flag | off | do not touch the network; use only what is already fetched, and report `needs-fetch` for anything missing ([ADR-0045](adr/0045-offline.md)). `DOWEL_OFFLINE=1` does the same |
 | `--message-format <fmt>` | `human` / `json` | `human` | diagnostic format |
 | `-v, --verbose` | — | — | more logging; once for info, twice or more for debug |
 | `--log-level <level>` | `off` / `error` / `warn` / `info` / `debug` / `trace` | — | log level; an explicit value overrides `-v` |
@@ -145,6 +146,26 @@ It takes **no target** — it checks everything, and a name passed to it is a
 usage error rather than a silently ignored argument. What it checks is every
 target that produces an artifact; a `template` produces none, so declaring
 one does not make `check` fail (issue #141).
+
+## `dowel fetch`
+
+```
+dowel fetch [common options]
+```
+
+Acquires every dependency and toolchain the build needs, and stops
+([ADR-0045](adr/0045-offline.md)):
+
+```
+$ dowel fetch
+ready: dep at /w/.dowel/deps/dep-1d726e00c095
+fetched 1 package(s); the build can now run with --offline
+```
+
+Nothing is compiled. Acquisition already happens while the model loads
+(dependencies) and while the configuration is assembled (the toolchain);
+this command is those two steps without the build, so "ready to go offline"
+is something you can see rather than infer. It takes no target.
 
 ## `dowel build`
 
