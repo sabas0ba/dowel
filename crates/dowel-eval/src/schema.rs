@@ -51,6 +51,33 @@ impl Merge {
 /// 言語の札を1つ選ぶと、それを全ての利用者に強制することになる（issue #78）。
 pub const C_ABI: &str = "c";
 
+/// ABI 札の成分（[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
+/// （名前, 説明, 値域）。
+///
+/// 閉じた語彙であり、ADR 1本につき1つずつ増やす（[ADR-0034]）。粒度を
+/// 大域に1つ決めないのがこの表の要点である——宣言する側が、自分の知って
+/// いる成分だけを名指す。
+///
+/// [ADR-0034]: ../../../docs/adr/0034-closed-vocabulary.md
+pub const ABI_COMPONENTS: &[(&str, &str, &[&str])] = &[
+    // dowel が三つ組から導ける唯一の成分である。`target.os` は答えない
+    // ——`linux-gnu` と `linux-musl` は同じ OS で、繋がらない2つである。
+    ("libc", "the C runtime this surface requires", crate::config::TARGET_ENVS),
+    // 導けない。だが宣言同士は突き合わせられる——`libstdc++` と `libc++` を
+    // 混ぜた `std::string` は、C++ で最も知られた破れ方である。
+    ("cxx_stdlib", "the C++ standard library this surface requires", CXX_STDLIBS),
+];
+
+/// C++ 標準ライブラリの実装の値域。
+pub const CXX_STDLIBS: &[&str] = &["libstdc++", "libc++", "msvc-stl"];
+
+/// 成分の名前から値域を引く。
+pub fn abi_component(
+    name: &str,
+) -> Option<&'static (&'static str, &'static str, &'static [&'static str])> {
+    ABI_COMPONENTS.iter().find(|(n, _, _)| *n == name)
+}
+
 /// ターゲットの種別。閉じた語彙であり、未知の種別は型検査で落ちる。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TableKind {
@@ -706,15 +733,13 @@ pub fn merge_values(def: &PropDef, values: &[Value], diags: &mut Vec<Diagnostic>
                 prov: merged_prov("error_on_conflict", values.first()),
             }
         }
+        // ABI 札は成分ごとに突き合わせる（ADR-0042）。規則が ABI 札の側に
+        // 在るのは ADR-0019 と同じ理由による——他のプロパティでの
+        // `must_equal` は依然「一致」である。
+        Merge::MustEqual if def.ty == Type::AbiLabel => merge_abi(def, values, diags),
         Merge::MustEqual => {
-            // 境界を指す札は、どの言語の札とも突き合わせない（ADR-0019）。
-            // 除外は ABI 札の語彙が持つ性質であって、`must_equal` の性質では
-            // ない——他のプロパティでの `must_equal` は依然「一致」である。
-            let exempt = |v: &Value| def.ty == Type::AbiLabel && v.as_str() == Some(C_ABI);
-            let mut iter = values.iter().filter(|v| !v.is_error() && !exempt(v));
+            let mut iter = values.iter().filter(|v| !v.is_error());
             let Some(first) = iter.next() else {
-                // 全てが `c`、あるいは値が無い。`c` は制約を足さないだけで
-                // 消しはしないので、残っているものをそのまま採る。
                 return values.iter().find(|v| !v.is_error()).cloned().unwrap_or_else(|| Value {
                     ty: def.ty.clone(),
                     data: Data::Error,
@@ -810,6 +835,94 @@ fn conflict_diagnostic(prop: &str, key: &str, prev: &Value, cur: &Value) -> Diag
     }
     for line in provenance_notes(prev).into_iter().chain(provenance_notes(cur)) {
         d = d.note(line);
+    }
+    d
+}
+
+/// ABI 札の突き合わせ（[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
+///
+/// 札は1つの語でも、成分の表でも書ける。表同士は**共通する成分だけ**を
+/// 比べ、片方しか名指していない成分は制約にならない。これが「粗すぎれば
+/// 検証が無意味、細かすぎれば共有が壊れる」という二律背反への答である——
+/// 粒度を大域に1つ決めるのをやめ、宣言ごとに選ばせる。
+///
+/// 併合した結果は成分の**和**である。制約は先へ伝わらなければ、途中の
+/// ターゲットが黙って落とすことになる。
+fn merge_abi(def: &PropDef, values: &[Value], diags: &mut Vec<Diagnostic>) -> Value {
+    // 境界を指す札は、どの札とも突き合わせない（ADR-0019）。
+    let exempt = |v: &Value| v.as_str() == Some(C_ABI);
+    let live: Vec<&Value> = values.iter().filter(|v| !v.is_error() && !exempt(v)).collect();
+    let Some(first) = live.first().copied() else {
+        // 全てが `c`、あるいは値が無い。`c` は制約を足さないだけで
+        // 消しはしないので、残っているものをそのまま採る。
+        return values.iter().find(|v| !v.is_error()).cloned().unwrap_or_else(|| Value {
+            ty: def.ty.clone(),
+            data: Data::Error,
+            prov: Prov::none(),
+        });
+    };
+    // 1つでも語で書かれていれば、成分に分解できない。全体で比べる。
+    if live.iter().any(|v| !matches!(v.data, Data::Map(_))) {
+        for v in live.iter().skip(1) {
+            if v.data != first.data {
+                let mut d = must_equal_diagnostic(def.name, first, v);
+                if matches!(first.data, Data::Map(_)) || matches!(v.data, Data::Map(_)) {
+                    d = d.note(
+                        "one side names components and the other is a single label; \
+                         a label written as one word cannot be taken apart",
+                    );
+                }
+                diags.push(d);
+            }
+        }
+        return first.clone();
+    }
+
+    let mut merged: BTreeMap<String, Value> = BTreeMap::new();
+    for v in &live {
+        let Data::Map(m) = &v.data else { continue };
+        for (name, item) in m {
+            match merged.get(name) {
+                Some(seen) if seen.data != item.data => {
+                    diags.push(abi_component_diagnostic(name, seen, item));
+                }
+                Some(_) => {}
+                None => {
+                    merged.insert(name.clone(), item.clone());
+                }
+            }
+        }
+    }
+    Value {
+        ty: def.ty.clone(),
+        data: Data::Map(merged),
+        prov: first.prov.clone().then(
+            Origin::Merged { prop: def.name.to_string(), rule: "abi" },
+            first.prov.nearest_site(),
+        ),
+    }
+}
+
+/// 成分1つの食い違い。どの成分かを名指す——札の全体を並べても、
+/// どこが違うのかは読み手が突き合わせることになる。
+fn abi_component_diagnostic(name: &str, first: &Value, other: &Value) -> Diagnostic {
+    let mut d = Diagnostic::error(
+        "abi-mismatch",
+        format!(
+            "`abi` component `{name}` does not match: {} vs {}",
+            first.display(),
+            other.display()
+        ),
+    )
+    .note("components only one side names are not a constraint; this one is named by both");
+    if let Some(s) = other.prov.nearest_site() {
+        d = d.at(s.file, s.span, format!("this one is {}", other.display()));
+    }
+    if let Some(l) = site_label(
+        first.prov.nearest_site(),
+        &format!("the value that arrived first is {}", first.display()),
+    ) {
+        d = d.with_label(l);
     }
     d
 }
@@ -963,6 +1076,75 @@ mod tests {
         merge_values(&def, &[label("gnu11", 0), label("gnu11", 9)], &mut diags);
         assert!(diags.is_empty());
         merge_values(&def, &[label("gnu11", 0), label("cxx11abi0", 9)], &mut diags);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, "abi-mismatch");
+    }
+
+    #[test]
+    fn abi_components_are_compared_one_by_one_and_merged_by_union() {
+        // 粒度を大域に1つ決めるのをやめ、宣言する側に選ばせる（ADR-0042）。
+        let def = lookup(Block::Public, "abi").unwrap();
+        let label = |pairs: &[(&str, &str)], at: u32| Value {
+            ty: Type::AbiLabel,
+            data: Data::Map(
+                pairs
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.to_string(),
+                            Value {
+                                ty: Type::Str,
+                                data: Data::Str(v.to_string()),
+                                prov: Prov::at(Origin::Literal, site(at)),
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            prov: Prov::at(Origin::Literal, site(at)),
+        };
+
+        // 片方しか名指していない成分は制約にならない。
+        let mut diags = Vec::new();
+        let merged = merge_values(
+            &def,
+            &[label(&[("libc", "gnu")], 0), label(&[("cxx_stdlib", "libc++")], 9)],
+            &mut diags,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        // 結果は和である。落とすと、その先が検査を受けずに通る。
+        let Data::Map(m) = &merged.data else { panic!("not a map: {merged:?}") };
+        assert_eq!(m.len(), 2, "{m:?}");
+
+        // 双方が名指す成分が食い違えば、その成分を名指して落ちる。
+        let mut diags = Vec::new();
+        merge_values(
+            &def,
+            &[label(&[("libc", "gnu")], 0), label(&[("libc", "musl")], 9)],
+            &mut diags,
+        );
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code, "abi-mismatch");
+        assert!(diags[0].message.contains("libc"), "{}", diags[0].message);
+
+        // `c` は成分表とも突き合わせない（ADR-0019）。
+        let c = Value {
+            ty: Type::AbiLabel,
+            data: Data::Str(C_ABI.into()),
+            prov: Prov::at(Origin::Literal, site(18)),
+        };
+        let mut diags = Vec::new();
+        merge_values(&def, &[label(&[("libc", "gnu")], 0), c], &mut diags);
+        assert!(diags.is_empty(), "{diags:?}");
+
+        // 1つの語と成分表は分解できない。黙って通すより、比べられないと言う。
+        let word = Value {
+            ty: Type::AbiLabel,
+            data: Data::Str("x86_64-linux-gnu".into()),
+            prov: Prov::at(Origin::Literal, site(27)),
+        };
+        let mut diags = Vec::new();
+        merge_values(&def, &[label(&[("libc", "gnu")], 0), word], &mut diags);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].code, "abi-mismatch");
     }

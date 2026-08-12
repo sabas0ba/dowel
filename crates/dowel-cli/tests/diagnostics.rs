@@ -587,6 +587,16 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unknown-abi-component",
+        why: "an `abi` component outside the closed vocabulary (ADR-0042)",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+             [bin.app.private]\nabi = { cxx_stdlibb = \"libc++\" }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "invalid-soversion",
         why: "an ABI generation cannot be negative (ADR-0040)",
         files: &[(

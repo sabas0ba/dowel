@@ -6299,3 +6299,131 @@ fn a_published_include_path_that_is_not_a_directory_is_reported_when_installing(
     // 警告であって失敗ではない。ライブラリ自身は入る。
     assert!(prefix.join("lib/libcore.a").is_file(), "the library is still installed");
 }
+
+#[test]
+fn abi_components_constrain_only_where_both_sides_name_them() {
+    // 粒度を大域に1つ決めると、粗すぎれば検証が無意味になり、細かすぎれば
+    // 共有が壊れる。成分ごとに比べれば、決めるのは宣言する側になる
+    // （ADR-0042）。
+    let p = Project::new("abi-components");
+    p.write("core/dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nabi = { cxx_stdlib = \"libc++\" }\n",
+    );
+    p.write("core/src/core.c", "int core_open(void) { return 42; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"core\"\npath = \"../core\"\n",
+    );
+
+    // 双方が名指す成分が食い違えば落ちる。
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\n\
+         abi = { cxx_stdlib = \"libstdc++\" }\n",
+    );
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("abi-mismatch");
+    r.stderr_contains("cxx_stdlib");
+
+    // 片方しか名指していない成分は制約にならない。粗い側は少なく縛る。
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\n\
+         abi = { libc = \"gnu\" }\n",
+    );
+    p.run("app", &["check"]).success();
+
+    // 併合の結果は成分の和である。制約が途中で落ちれば、その先は検査を
+    // 受けずに通る。
+    let why = p.run("app", &["why", "app", "abi"]);
+    why.success();
+    assert!(why.stdout.contains("cxx_stdlib"), "{}", why.stdout);
+    assert!(why.stdout.contains("libc"), "{}", why.stdout);
+}
+
+#[test]
+fn a_label_written_as_one_word_is_still_compared_whole() {
+    // 既に書かれた札を壊さない。1つの語で書かれたものは分解できないので、
+    // 全体で比べる——`c` の免除もそのままである（ADR-0019）。
+    let p = Project::new("abi-word");
+    p.write("core/dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nabi = \"x86_64-linux-musl\"\n",
+    );
+    p.write("core/src/core.c", "int core_open(void) { return 42; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"core\"\npath = \"../core\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\nabi = \"x86_64-linux-gnu\"\n",
+    );
+    p.write("app/src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("abi-mismatch");
+
+    // 語と成分表を混ぜると比べられない。分解できないことを述べる。
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\nabi = { libc = \"musl\" }\n",
+    );
+    let r = p.run("app", &["check"]);
+    r.failure();
+    r.stderr_contains("cannot be taken apart");
+
+    // `c` は成分表とも突き合わせない。制約を足さないだけである。
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nabi = \"c\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\nabi = { libc = \"gnu\" }\n",
+    );
+    p.run("app", &["check"]).success();
+}
+
+#[test]
+fn a_surface_requiring_another_c_runtime_than_the_build_is_refused() {
+    // 札同士の比較は「誰が何を要求するか」しか見ない。このビルドが何で
+    // あるかは見ていない——`musl` を要求する面を gnu 向けに組めば、要求は
+    // 満たされないままリンクが通り、失敗は実行時に出る（ADR-0042）。
+    let p = Project::new("abi-vs-build");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nabi = { libc = \"musl\" }\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("abi-mismatch");
+    r.stderr_contains("musl");
+
+    // 三つ組と合っていれば黙る。導ける成分だけを見るので、`cxx_stdlib` は
+    // ここでは何も言われない。
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nabi = { libc = \"gnu\", cxx_stdlib = \"libc++\" }\n",
+    );
+    p.run(".", &["check"]).success();
+}

@@ -334,6 +334,7 @@ pub fn plan(
         }
         let pkg = sess.package(target.package);
         let env = interface::compile_env(sess, tid, &mut diags);
+        check_abi_against_build(&env, cfg, &mut diags);
 
         let sources = collect_sources(sess, tid, cfg, &mut diags);
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
@@ -1144,6 +1145,36 @@ pub fn supports_target(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
 
 fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Vec<String> {
     root_value(sess, tid, cfg, name).map(|v| flatten_strs(&v)).unwrap_or_default()
+}
+
+/// 宣言された ABI 札を、このビルドそのものと突き合わせる
+/// （[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
+///
+/// 札同士の比較は誰が何を要求するかを見るが、**このビルドが何であるか**は
+/// 見ていない。`libc = "musl"` を要求する面を gnu 向けに組めば、要求は
+/// 満たされていない——そしてリンクは通り、失敗は実行時に出る。
+///
+/// dowel が三つ組から導ける成分に限る。導けないものは、ここで言えることが
+/// 何も無い。
+fn check_abi_against_build(env: &dowel_model::PropMap, cfg: &Config, diags: &mut Vec<Diagnostic>) {
+    let Some(value) = env.get("abi") else { return };
+    let Some(value) = dowel_eval::specialize(value, cfg) else { return };
+    let Data::Map(components) = &value.data else { return };
+    let Some(declared) = components.get("libc").and_then(|v| v.as_str()) else { return };
+    let actual = dowel_eval::config::triple_env(&cfg.target);
+    if declared == actual {
+        return;
+    }
+    let mut d = Diagnostic::error(
+        "abi-mismatch",
+        format!("this surface requires `libc = \"{declared}\"` but the build is `{actual}`"),
+    )
+    .note(format!("the target triple is `{}`", cfg.target))
+    .note("nothing later refuses this; the link succeeds and the failure is at run time");
+    if let Some(s) = components.get("libc").and_then(|v| v.prov.nearest_site()) {
+        d = d.at(s.file, s.span, "declared here");
+    }
+    diags.push(d);
 }
 
 /// このターゲット自身が公開しているヘッダの置き場所
