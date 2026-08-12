@@ -294,7 +294,20 @@ fn editor_config(sess: &dowel_model::Session) -> dowel_eval::Config {
         if let Some(decl) = root.toolchain_for(&cfg.target, cfg.targets_host()) {
             for (name, _, _) in dowel_eval::config::TOOLS {
                 if let Some(t) = decl.tool(name) {
-                    cfg.set_tool(name, t.command.clone());
+                    // サーバは取りに行かない（外部プロセスを起こさない）。
+                    // 既に取れている道具一式があればその根から解き、無ければ
+                    // 宣言のまま置く（ADR-0044）。
+                    let root = decl
+                        .source
+                        .as_ref()
+                        .and_then(|s| dowel_model::fetch::existing_toolchain(&s.sha256));
+                    let command = match (&root, std::path::Path::new(&t.command)) {
+                        (Some(r), p) if !p.is_absolute() && p.components().count() >= 2 => {
+                            r.join(p).display().to_string()
+                        }
+                        _ => t.command.clone(),
+                    };
+                    cfg.set_tool(name, command);
                 }
             }
         }

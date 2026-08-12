@@ -178,8 +178,10 @@ change what gets built.
 - Build directories are separated per configuration, under `.dowel/`.
   Executables land in its `bin/` (`./.dowel/build/*/bin/<name>`)
 - The compiler comes from `[toolchain]` in `dowel.toml` (default: `cc` on
-  PATH). Toolchain fetching is not implemented; whatever is named must be on
-  PATH
+  PATH). A toolchain table that declares `url` + `sha256` is fetched once
+  into the user's cache and its tools are found inside it
+  ([ADR-0044](adr/0044-toolchain-acquisition.md)); otherwise whatever is
+  named must already be on PATH
 - The toolchain is selected by the target triple. `--target=<triple>`
   requires a `[toolchain.<triple>]` declaration
   ([11-toml-reference.md](11-toml-reference.md)); a triple with none is

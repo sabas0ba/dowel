@@ -588,6 +588,16 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unpinned-toolchain",
+        why: "a toolchain names a `url` with no `sha256` (ADR-0044)",
+        files: &[(
+            "app/dowel.toml",
+            "[package]\nname    = \"app\"\nversion = \"0.1.0\"\n\n\
+             [toolchain]\nurl = \"https://example.invalid/tc.tar.gz\"\nc = \"bin/cc\"\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unknown-abi-component",
         why: "an `abi` component outside the closed vocabulary (ADR-0042)",
         files: &[(
@@ -1082,6 +1092,12 @@ const UNCOVERED: &[(&str, &str)] = &[
         "lockfile-drift",
         "needs a resolvable system package; the case harness cannot set PKG_CONFIG_PATH. \
          covered by the e2e with a .pc fixture",
+    ),
+    (
+        "unfetchable-toolchain",
+        "needs a URL that fails to fetch; the case harness cannot host one, and a real \
+         network call in a case would make the suite depend on the network. covered by the \
+         e2e with a local archive and a wrong digest",
     ),
     (
         "uninstallable-headers",
