@@ -176,6 +176,18 @@ Names are written as the linker sees them. For C that is the function name;
 for C++ it is the mangled name. dowel does not mangle, and adds only the
 uniform `_` prefix Mach-O requires.
 
+**Within its own package, a shared library is linked statically**
+([ADR-0038](adr/0038-shared-inside-its-package.md)). `exports` is a
+boundary toward code that was not written alongside it, and a package is
+the unit of distribution — so a sibling target links the archive that is
+built beside the shared object, and sees everything. This is what lets a
+library's own tests reach inside it; testing only the public surface
+cannot cover what is behind it. A consumer in another package
+(`dep("...")`) links the shared library and sees exactly `exports`.
+
+The shared library is built even when nothing links it, since the reason
+to declare one is to ship it.
+
 Declaring one library shared also changes how its dependencies are
 compiled: every target in a shared library's link closure is compiled
 `-fPIC`, because non-position-independent objects cannot be linked into a

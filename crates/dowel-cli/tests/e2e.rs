@@ -5798,3 +5798,165 @@ fn an_unknown_template_names_the_declared_ones() {
     r.stderr_contains("unknown-template");
     r.stderr_contains("did you mean `tool`?");
 }
+
+#[test]
+fn a_draft_imported_from_meson_builds_without_editing() {
+    // Meson の `parameters` にはリンクと書庫の引数が混ざる。仕分けずに
+    // `flags` へ入れると `cc` が入力ファイルとして読み、下書きはそのままでは
+    // **組めない**（issue #135）。読めることだけを見ていては捕まらない。
+    let p = Project::new("meson-import-buildable");
+    let src = p.path(".").display().to_string();
+    p.write("include/shapes.h", "#pragma once\nint area(int a);\n");
+    p.write("src/area.c", "#include \"shapes.h\"\nint area(int a) { return a * a; }\n");
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"shapes.h\"\n\
+         int main(void) { printf(\"a=%d\\n\", area(3)); return 0; }\n",
+    );
+
+    // `static_library` + `executable` + `link_with` の普通の木。ここで初めて
+    // `ar` の引数とリンカの引数が配列に現れる。
+    p.write(
+        "build/meson-info/intro-projectinfo.json",
+        r#"{"version": "0.1", "descriptive_name": "shapes", "subprojects": []}"#,
+    );
+    p.write(
+        "build/meson-info/intro-targets.json",
+        &format!(
+            r#"[
+              {{"name": "shapes", "type": "static library", "defined_in": "{src}/meson.build",
+                "subproject": null,
+                "target_sources": [{{"language": "c", "compiler": ["cc"],
+                  "parameters": ["-I{src}/include", "-I", "-DSHAPES_BUILD=1", "-Wall",
+                                 "-fdiagnostics-color=always", "csrDT"],
+                  "sources": ["{src}/src/area.c"], "generated_sources": []}}]}},
+              {{"name": "shapetool", "type": "executable", "defined_in": "{src}/meson.build",
+                "subproject": null,
+                "target_sources": [{{"language": "c", "compiler": ["cc"],
+                  "parameters": ["-I{src}/include", "-DTOOL=1", "-Wall",
+                                 "-Wl,--as-needed", "-Wl,--start-group", "libshapes.a",
+                                 "-Wl,--end-group"],
+                  "sources": ["{src}/src/main.c"], "generated_sources": []}}]}}
+            ]"#
+        ),
+    );
+
+    p.run(".", &["migrate", "import", "build"]).success();
+    let build_file = std::fs::read_to_string(p.path("dowel.build")).unwrap();
+
+    // 翻訳の引数だけが `flags` に残る。
+    for line in build_file.lines().filter(|l| l.trim_start().starts_with("flags")) {
+        for stray in ["csrDT", "libshapes.a", "-Wl,"] {
+            assert!(!line.contains(stray), "`{stray}` is not a compile flag:\n{line}");
+        }
+    }
+    // リンカの引数は link_flags へ。
+    assert!(build_file.contains("-Wl,--as-needed"), "{build_file}");
+    // 落とした入力は名前が残る。`deps` に書き直すのは読み手の仕事である。
+    assert!(build_file.contains("libshapes.a"), "the dropped input should be named");
+    assert!(build_file.contains("belong in `deps`"), "the header should say why");
+    // 空の `-I` は `dir("")` にしない。
+    assert!(!build_file.contains("dir(\"\")"), "{build_file}");
+
+    // そして実際に組める。`shapes` は自足しており、`shapetool` は依存を
+    // 書き足すまで繋がらないので、ここではライブラリを組んで確かめる。
+    p.run(".", &["build", "shapes"]).success();
+}
+
+#[test]
+fn a_shared_librarys_own_tests_reach_inside_it() {
+    // 内側を見る検査は、ライブラリの検査として普通の形である。公開の面
+    // だけを叩く検査は、面の後ろの表や状態機械を覆えない（issue #134）。
+    //
+    // `exports` は「一緒に書かれていないコード」に対する境界であり、
+    // 兄弟のターゲットは配る相手ではない——パッケージが配布の単位だから
+    // である（ADR-0038）。
+    let p = Project::new("shared-own-tests");
+    p.write("dowel.toml", "[package]\nname = \"shared-own-tests\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\"]\n\n\
+         [test.unit]\nsources = [file(\"tests/unit.c\")]\n\n\
+         [test.unit.private]\ndeps = [target(\"core\")]\n",
+    );
+    p.write(
+        "src/core.c",
+        "int core_step(int x) { return x + 1; }\n\
+         int core_open(void) { return core_step(41); }\n",
+    );
+    // 公開の面と、面に無い内部の名前の両方を呼ぶ。
+    p.write(
+        "tests/unit.c",
+        "int core_open(void);\nint core_step(int);\n\
+         int main(void) { return (core_open() == 42 && core_step(1) == 2) ? 0 : 1; }\n",
+    );
+
+    let r = p.run(".", &["test"]);
+    r.success();
+    assert!(r.stderr.contains("unit"), "the library's own test should run:\n{}", r.stderr);
+
+    // 面は変わっていない。配る相手から見えるのは `exports` だけである。
+    p.run(".", &["build"]).success();
+    let lib = build_dir(&p.path("."), "debug").join("lib/libcore.so");
+    assert!(lib.is_file(), "the shared library is still built");
+    let out = std::process::Command::new("nm")
+        .args(["-D", "--defined-only", &lib.display().to_string()])
+        .output()
+        .expect("nm is not available");
+    let symbols = String::from_utf8_lossy(&out.stdout);
+    assert!(symbols.contains("core_open"), "{symbols}");
+    assert!(
+        !symbols.contains("core_step"),
+        "the internal name must stay off the surface:\n{symbols}"
+    );
+}
+
+#[test]
+fn a_consumer_in_another_package_still_sees_only_the_surface() {
+    // 対になる検査。境界は残っている——別のパッケージからは面越しである。
+    let p = Project::new("shared-across-packages");
+    p.write("core/dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\"]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("core/include/core.h", "#pragma once\nint core_open(void);\nint core_step(int);\n");
+    p.write(
+        "core/src/core.c",
+        "int core_step(int x) { return x + 1; }\n\
+         int core_open(void) { return core_step(41); }\n",
+    );
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"core\"\npath = \"../core\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\n",
+    );
+    // 面にあるものだけを呼ぶ使う側は組めて、走る。
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"core.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", core_open()); return 0; }\n",
+    );
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("app"), "debug").join("bin/app")), "v=42\n");
+
+    // 面に無いものを呼ぶと、別のパッケージからは繋がらない。
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"core.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", core_step(1)); return 0; }\n",
+    );
+    p.run("app", &["build"]).failure();
+}

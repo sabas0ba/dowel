@@ -124,6 +124,7 @@ fn extract(t: &Json, source_dir: &Path) -> Option<Imported> {
         flags: Vec::new(),
         link_flags: Vec::new(),
         deps: Vec::new(),
+        dropped_inputs: Vec::new(),
         note,
     };
 
