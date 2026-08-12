@@ -141,6 +141,11 @@ resolution, and toolchain existence, the configuration diagnostics that
 [ADR-0010](adr/0010-check-scope.md)). It is faster than a build and intended
 to run on every save.
 
+It takes **no target** — it checks everything, and a name passed to it is a
+usage error rather than a silently ignored argument. What it checks is every
+target that produces an artifact; a `template` produces none, so declaring
+one does not make `check` fail (issue #141).
+
 ## `dowel build`
 
 ```

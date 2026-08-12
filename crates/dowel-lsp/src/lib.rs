@@ -48,6 +48,10 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
     ),
     ("missing-runner", "triggered by `--target`, which is not part of any manifest"),
     (
+        "not-a-target",
+        "triggered by naming a template on the command line; the editor names none (issue #141)",
+    ),
+    (
         "unsupported-target",
         "triggered by the requested triple; the editor has no `--target` and would show a \
          permanent error the reader cannot clear",
@@ -326,7 +330,7 @@ fn publish_workspace(docs: &Documents, uri: &str, path: &std::path::Path) -> Str
         // パス解決・ツールチェーンの実在検査はファイルシステムを読むだけで、
         // 何も書かず、外部プロセスも起動しない。併合の診断（衝突・ABI
         // 不一致）も `compile_env` を経由してこの中で出る。
-        let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
+        let all = sess.buildable_targets();
         let (_, pdiags) = dowel_build::plan::plan(&sess, &graph, &cfg, &all);
         diags.extend(pdiags);
         // この文書に主ラベルを持つものだけを、この文書へ出す。他の開いている

@@ -127,7 +127,8 @@ win. `dowel why` names the template's line.
   target is*, and a template is not a target
 - Templates do not use templates: reading is one level
 - A template produces no artifact and is not in the graph. Naming one on
-  the command line is `not-a-target`
+  the command line is `not-a-target`; declaring one is not, and `check`
+  passes (issue #141)
 - `use` naming an undeclared template is `unknown-template`
 
 #### Restricting a target to some triples

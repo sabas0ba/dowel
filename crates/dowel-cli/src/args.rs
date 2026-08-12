@@ -511,6 +511,15 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             [path] => Command::Add { path: Some(path.clone()) },
             _ => return Err("`add` takes at most one argument: <path>".into()),
         },
+        // `check` は目標を取らない。全ターゲットを検査する入口であり、
+        // 渡された名前を黙って捨てると、絞ったつもりの利用者が全体の
+        // 結果を読むことになる（issue #141）。
+        "check" if !positional.is_empty() => {
+            return Err(format!(
+                "`check` takes no target (got `{}`); it checks everything",
+                positional.join(" ")
+            ))
+        }
         "check" => Command::Check,
         "build" => Command::Build { targets: positional },
         "test" => {

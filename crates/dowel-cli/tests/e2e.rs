@@ -6427,3 +6427,36 @@ fn a_surface_requiring_another_c_runtime_than_the_build_is_refused() {
     );
     p.run(".", &["check"]).success();
 }
+
+#[test]
+fn a_package_that_declares_a_template_still_passes_check() {
+    // `check` は何も名指ししていない。それでも `not-a-target` が出ていた
+    // ——「全ターゲット」を数える経路が、雛型まで要求として計画へ渡して
+    // いたためである（issue #141）。
+    //
+    // `build` と `test` は通っていたので、壊れていたのは機構ではなく
+    // 目標の数え方の方だった。
+    let p = Project::new("template-check");
+    p.write("dowel.toml", "[package]\nname = \"template-check\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[template.warn]\n\n\
+         [template.warn.private]\nflags = [\"-Wall\", \"-Wextra\"]\n\n\
+         [bin.app]\nuse = [template(\"warn\")]\nsources = [file(\"src/main.c\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.success();
+    assert!(!r.stderr.contains("not-a-target"), "stderr:\n{}", r.stderr);
+    // 数えるのは成果物を作るものだけ。雛型は目標ではないと述べている以上、
+    // 目標として数えてもいけない。
+    assert!(r.stderr.contains("1 targets"), "stderr:\n{}", r.stderr);
+
+    p.run(".", &["build"]).success();
+
+    // 名指しは今までどおり断る。そちらは文書どおりで、有用である。
+    let named = p.run(".", &["build", "warn"]);
+    named.failure();
+    named.stderr_contains("not-a-target");
+}
