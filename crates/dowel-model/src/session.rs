@@ -218,6 +218,7 @@ impl Session {
         use dowel_eval::value::{Origin, Prov, Type};
         let pid = PackageId(self.packages.len());
         self.packages.push(Package {
+            description: String::new(),
             id: pid,
             name: name.to_string(),
             version: r.version.clone(),

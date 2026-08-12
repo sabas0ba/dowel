@@ -1147,6 +1147,39 @@ fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) ->
     root_value(sess, tid, cfg, name).map(|v| flatten_strs(&v)).unwrap_or_default()
 }
 
+/// このターゲット自身が公開している翻訳時の語
+/// （[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）。
+///
+/// `defines` と `flags` を、コンパイラに渡す綴りで返す。dowel の利用者が
+/// 受け取るものと、pkg-config の利用者が受け取るものが違ってはならない。
+pub fn public_words(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> {
+    let target = sess.target(tid);
+    let pkg_cfg = cfg.for_package(&sess.package(target.package).name);
+    let mut out = Vec::new();
+    if let Some(v) = target.public.get("defines").and_then(|v| dowel_eval::specialize(v, &pkg_cfg))
+    {
+        let mut env = dowel_model::PropMap::new();
+        env.insert("defines".into(), v);
+        for (key, value) in collect_defines(&env) {
+            out.push(toolstyle::define(cfg, &key, &value));
+        }
+    }
+    if let Some(v) = target.public.get("flags").and_then(|v| dowel_eval::specialize(v, &pkg_cfg)) {
+        out.extend(flatten_strs(&v));
+    }
+    out
+}
+
+/// このターゲット自身が公開しているリンク時の語（ADR-0043）。
+pub fn public_link_flags(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> {
+    let target = sess.target(tid);
+    let pkg_cfg = cfg.for_package(&sess.package(target.package).name);
+    match target.public.get("link_flags").and_then(|v| dowel_eval::specialize(v, &pkg_cfg)) {
+        Some(v) => flatten_strs(&v),
+        None => Vec::new(),
+    }
+}
+
 /// 宣言された ABI 札を、このビルドそのものと突き合わせる
 /// （[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
 ///

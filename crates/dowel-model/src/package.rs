@@ -15,6 +15,8 @@ pub struct Package {
     pub id: PackageId,
     pub name: String,
     pub version: String,
+    /// `[package] description`。一行の説明。空なら名前で代える
+    pub description: String,
     /// マニフェストの置かれたディレクトリ。`dir()` / `glob()` の基準点。
     pub root: PathBuf,
     pub manifest_file: FileId,
@@ -215,6 +217,7 @@ pub fn from_document(
     diags: &mut Vec<Diagnostic>,
 ) -> Package {
     let mut pkg = Package {
+        description: String::new(),
         id,
         name: root
             .file_name()
@@ -272,6 +275,14 @@ pub fn from_document(
                         }
                     }
                     _ => type_err(diags, e.site, "package.targets", "a list of strings"),
+                }
+            }
+            // 一行の説明。pkg-config の記述は `Description` を要求するので、
+            // 書ける場所が要る（[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）。
+            if let Some(e) = t.entry("description") {
+                match e.value.as_str() {
+                    Some(s) => pkg.description = s.to_string(),
+                    None => type_err(diags, e.site, "package.description", "a string"),
                 }
             }
             // 共有の toolchain 記述ファイル（ADR-0033）。読み込みは
@@ -834,6 +845,7 @@ mod tests {
             map.insert(k.to_string(), v.iter().map(|s| s.to_string()).collect());
         }
         Package {
+            description: String::new(),
             id: PackageId(0),
             name: "p".into(),
             version: "0".into(),

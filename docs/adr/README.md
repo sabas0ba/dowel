@@ -49,3 +49,4 @@ was originally written in.
 | [0040](0040-shared-library-version.md) | A shared library's ABI generation is declared, and it names the file | Accepted |
 | [0041](0041-install.md) | `dowel install` copies the build tree's products; artifacts are linked to find their libraries relative to themselves | Accepted |
 | [0042](0042-abi-label-components.md) | An ABI label is a set of components, so granularity is chosen per declaration instead of once for everyone | Accepted |
+| [0043](0043-pkgconfig-generation.md) | An installed library describes itself in pkg-config, because dowel already reads that notation and could not write it | Accepted |

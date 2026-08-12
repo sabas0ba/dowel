@@ -23,6 +23,9 @@ pub enum Item {
     Copy { from: PathBuf, to: PathBuf },
     /// 版を持たない名前を、版付きの実体の隣に置く（ADR-0040）
     Link { at: PathBuf, to: String },
+    /// dowel が組み立てた本文を書く。pkg-config の記述がこれである
+    /// （[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）
+    Write { at: PathBuf, text: String },
 }
 
 impl Item {
@@ -31,6 +34,7 @@ impl Item {
         match self {
             Item::Copy { to, .. } => to,
             Item::Link { at, .. } => at,
+            Item::Write { at, .. } => at,
         }
     }
 }
@@ -87,6 +91,25 @@ pub fn entries(
         if let Some(tid) = plan.artifacts.iter().find(|(_, p)| *p == lib).map(|(t, _)| *t) {
             alias_of(cfg, &sess.target(tid).name, lib, &root.join("lib"), &mut items);
         }
+    }
+
+    // pkg-config の記述は、入れるライブラリが出揃ってから書く。挙げてよい
+    // `Requires` は、この実行で実際に書いた記述だけだからである（ADR-0043）。
+    let installed_libs: Vec<String> = targets
+        .iter()
+        .filter(|t| sess.target(**t).kind == TableKind::Lib)
+        .filter(|t| plan.artifacts.contains_key(t))
+        .map(|t| sess.package(sess.target(*t).package).name.clone())
+        .collect();
+    for &tid in targets {
+        let target = sess.target(tid);
+        if target.kind != TableKind::Lib || !plan.artifacts.contains_key(&tid) {
+            continue;
+        }
+        items.push(Item::Write {
+            at: root.join("lib/pkgconfig").join(format!("{}.pc", target.name)),
+            text: pkgconfig(sess, tid, cfg, prefix, &installed_libs),
+        });
     }
 
     items.sort_by(|a, b| a.destination().cmp(b.destination()));
@@ -194,6 +217,10 @@ pub fn perform(items: &[Item]) -> Result<(), String> {
                     format!("cannot copy {} to {}: {e}", from.display(), to.display())
                 })?;
             }
+            Item::Write { at, text } => {
+                std::fs::write(at, text)
+                    .map_err(|e| format!("cannot write {}: {e}", at.display()))?;
+            }
             Item::Link { at, to } => {
                 let _ = std::fs::remove_file(at);
                 #[cfg(unix)]
@@ -205,6 +232,79 @@ pub fn perform(items: &[Item]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+// --- pkg-config の記述（[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）---
+
+/// 入れたライブラリを、dowel を知らない道具から見つけられるようにする。
+///
+/// dowel は `.pc` を**読む**側であり（[ADR-0015]）、書く側が無かった。
+/// 結果として「ライブラリを dowel へ移すには使う側も全部同時に移す」ことに
+/// なり、これは漸進的な導入という前提と正面から反する。
+///
+/// 書く内容は既に宣言されているものだけである。公開の面は `public` に
+/// 書かれており、`.pc` はそれを別の記法で述べ直したものにすぎない。
+///
+/// [ADR-0015]: ../../../docs/adr/0015-version-deps-pkgconfig.md
+fn pkgconfig(
+    sess: &Session,
+    tid: TargetId,
+    cfg: &Config,
+    prefix: &Path,
+    installed_libs: &[String],
+) -> String {
+    let target = sess.target(tid);
+    let pkg = sess.package(target.package);
+    let mut s = String::new();
+    // 記録するのは `prefix` であって、段取り用のディレクトリではない
+    // （ADR-0041）。入れた先を指さない記述は、その場では正しく見えて
+    // 配った先で外れる。
+    s.push_str(&format!("prefix={}\n", prefix.display()));
+    s.push_str("exec_prefix=${prefix}\n");
+    s.push_str("libdir=${prefix}/lib\n");
+    s.push_str("includedir=${prefix}/include\n\n");
+    s.push_str(&format!("Name: {}\n", target.name));
+    // `Description` は pkg-config が要求する。書かれていなければ名前で代える
+    // ——空の記述はファイルを不正にする。
+    let description =
+        if pkg.description.is_empty() { target.name.clone() } else { pkg.description.clone() };
+    s.push_str(&format!("Description: {description}\n"));
+    s.push_str(&format!("Version: {}\n", pkg.version));
+
+    // 名指しできるのは、この実行で実際に書いた記述だけである。無い `.pc` を
+    // 挙げると pkg-config はその場で失敗する——黙って落とすより悪い。
+    let requires: Vec<String> = pkg
+        .deps
+        .iter()
+        .filter_map(|d| match &d.kind {
+            // システムのパッケージは pkg-config の名前がそのまま鍵である。
+            dowel_model::package::DepKind::PkgConfig { min_version } => {
+                Some(format!("{} >= {min_version}", d.name))
+            }
+            _ if installed_libs.contains(&d.name) => Some(d.name.clone()),
+            _ => None,
+        })
+        .collect();
+    if !requires.is_empty() {
+        s.push_str(&format!("Requires: {}\n", requires.join(", ")));
+    }
+
+    let mut cflags = Vec::new();
+    if !crate::plan::public_include_dirs(sess, tid, cfg).is_empty() {
+        cflags.push("-I${includedir}".to_string());
+    }
+    // 公開の定義と旗も面の一部である。dowel の利用者が受け取るものと、
+    // pkg-config の利用者が受け取るものが違ってはならない。
+    cflags.extend(crate::plan::public_words(sess, tid, cfg));
+    if !cflags.is_empty() {
+        s.push_str(&format!("Cflags: {}\n", cflags.join(" ")));
+    }
+    // 公開の `link_flags` も面の一部である。静的ライブラリが `-lm` を要する
+    // なら、それは使う側のリンク行に載らなければならない。
+    let mut libs = vec!["-L${libdir}".to_string(), format!("-l{}", target.name)];
+    libs.extend(crate::plan::public_link_flags(sess, tid, cfg));
+    s.push_str(&format!("Libs: {}\n", libs.join(" ")));
+    s
 }
 
 #[cfg(test)]

@@ -6460,3 +6460,99 @@ fn a_package_that_declares_a_template_still_passes_check() {
     named.failure();
     named.stderr_contains("not-a-target");
 }
+
+#[test]
+fn an_installed_library_is_found_by_pkg_config_and_builds_a_plain_consumer() {
+    // dowel は `.pc` を読む側であり（ADR-0015）、書く側が無かった。結果と
+    // して「ライブラリを dowel へ移すには使う側も全部同時に移す」ことに
+    // なり、漸進的な導入という前提と正面から反する（ADR-0043）。
+    //
+    // ここで確かめるのは、dowel を一切通さない利用者が組めることである。
+    // pkg-config は `version` 依存の検査が既に前提にしている。
+    let p = Project::new("pkgconfig");
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"core\"\nversion = \"1.2.3\"\n\
+         description = \"a small hashing library\"\n",
+    );
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources   = [file(\"src/core.c\")]\n\
+         linkage   = \"shared\"\n\
+         soversion = 2\n\
+         exports   = [\"core_open\"]\n\n\
+         [lib.core.public]\n\
+         includes = [dir(\"include\")]\n\
+         defines  = { CORE_SHARED = 1 }\n",
+    );
+    p.write("include/core.h", "#pragma once\nint core_open(void);\n");
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    let prefix = p.path("out");
+    p.run(".", &["install", &format!("--prefix={}", prefix.display())]).success();
+
+    let pc = prefix.join("lib/pkgconfig/core.pc");
+    let text = std::fs::read_to_string(&pc).expect("no pkg-config file was written");
+    // 記録するのは prefix であって、ビルド木でも段取り用の場所でもない。
+    assert!(text.contains(&format!("prefix={}", prefix.display())), "{text}");
+    // 公開の面がそのまま出ている。dowel の利用者と pkg-config の利用者が
+    // 受け取るものが違ってはならない。
+    assert!(text.contains("Version: 1.2.3"), "{text}");
+    assert!(text.contains("Description: a small hashing library"), "{text}");
+    assert!(text.contains("-DCORE_SHARED=1"), "{text}");
+
+    let dir = prefix.join("lib/pkgconfig");
+    let run = |args: &[&str]| {
+        std::process::Command::new("pkg-config")
+            .env("PKG_CONFIG_PATH", &dir)
+            .args(args)
+            .output()
+            .expect("cannot start pkg-config")
+    };
+    assert!(run(&["--validate", "core"]).status.success(), "the file does not validate:\n{text}");
+
+    // 印字された旗で、dowel を通さずに組んで走らせる。ここが本題である。
+    let out = run(&["--cflags", "--libs", "core"]);
+    assert!(out.status.success(), "pkg-config could not answer:\n{text}");
+    let flags: Vec<String> =
+        String::from_utf8_lossy(&out.stdout).split_whitespace().map(|s| s.to_string()).collect();
+    p.write(
+        "consumer.c",
+        "#include <stdio.h>\n#include \"core.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", core_open()); return 0; }\n",
+    );
+    let exe = p.path("consumer");
+    let built = std::process::Command::new("cc")
+        .arg("-o")
+        .arg(&exe)
+        .arg(p.path("consumer.c"))
+        .args(&flags)
+        .arg(format!("-Wl,-rpath,{}", prefix.join("lib").display()))
+        .output()
+        .expect("cannot start cc");
+    assert!(
+        built.status.success(),
+        "a plain consumer did not build: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert_eq!(run_artifact(&exe), "v=42\n");
+}
+
+#[test]
+fn a_package_without_a_description_still_writes_a_valid_file() {
+    // pkg-config は `Description` を要求する。空の記述はファイルを不正に
+    // するので、書かれていなければ名前で代える（ADR-0043）。
+    let p = Project::new("pkgconfig-default");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[lib.core]\nsources = [file(\"src/core.c\")]\n");
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    let prefix = p.path("out");
+    p.run(".", &["install", &format!("--prefix={}", prefix.display())]).success();
+    let text = std::fs::read_to_string(prefix.join("lib/pkgconfig/core.pc")).expect("no file");
+    assert!(text.contains("Description: core"), "{text}");
+
+    // `bin` には書かない。組んで繋ぐ相手ではない。
+    assert!(!prefix.join("lib/pkgconfig/app.pc").exists());
+}
