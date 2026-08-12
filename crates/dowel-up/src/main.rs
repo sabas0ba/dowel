@@ -94,7 +94,14 @@ fn run(opts: Options) -> Result<ExitCode, String> {
             let default = store::read_selection(&home.default_file()).ok();
             for i in store::installed(&home) {
                 let mark = if default.as_deref() == Some(i.sha.as_str()) { "*" } else { " " };
-                println!("{mark} {}  {}", i.sha, i.specs.join(", "));
+                // どう届いたかを並べる。ADR-0036 はこの違いを信用の根に
+                // 置いており、「何が入っているか」を尋ねる道具に「どういう
+                // 資格で入っているか」が無いのは片手落ちである（issue #146）。
+                let from = match i.from.as_deref() {
+                    Some(f) => format!("  [{f}]"),
+                    None => String::new(),
+                };
+                println!("{mark} {}  {}{from}", i.sha, i.specs.join(", "));
             }
         }
         Command::Which => {
@@ -105,6 +112,19 @@ fn run(opts: Options) -> Result<ExitCode, String> {
                 return Err(not_installed(sha, &source));
             }
             eprintln!("selected by {source}");
+            // どういう資格で入っているかを添える。ADR-0036 は2つの経路の
+            // 違いを信用の根に置いており、選んだものについて何を言ってよい
+            // かはそこで決まる（issue #146）。
+            if let Some(i) = store::installed(&home).iter().find(|i| i.sha == sha) {
+                match (i.from.as_deref(), i.asset_sha256.as_deref()) {
+                    (Some("asset"), Some(d)) => {
+                        eprintln!("installed from a release asset (sha256 {d})")
+                    }
+                    (Some(f), _) => eprintln!("installed from {f}"),
+                    // この記録より前に入れたものは、どちらとも言えない。
+                    (None, _) => {}
+                }
+            }
             println!("{}", bin.display());
         }
         Command::Run { needle, args } => {

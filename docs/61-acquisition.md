@@ -62,7 +62,16 @@ binary** from the release assets, verified against the `.sha256` published
 beside it ([ADR-0036](adr/0036-prebuilt-distribution.md)). Everything else
 — `nightly`, `branch:`, a bare sha — has no asset to take, and builds from
 source with `cargo`. `--from-source` forces the build in every case.
-`install` says which path it took.
+`install` says which path it took, and the record keeps it: `dowelup list`
+marks each version `[asset]` or `[source]`, and `versions/<sha>/origin`
+carries the same word plus the verified digest. Without that, a version
+installed months ago cannot be told apart from one that quietly fell back to
+a source build — and the fallback is silent by design.
+
+A fetch that fails says why, naming the tool that actually ran; if the
+source build then fails too, the reason the asset was abandoned is repeated
+there, since otherwise the last words a user reads are about `cargo` rather
+than about the asset (issue #145).
 
 The two differ in what they let you conclude:
 
@@ -116,7 +125,7 @@ branch name alone does not count as pinned
 |---|---|
 | `$DOWELUP_HOME` (default `~/.dowel`) | the root of dowelup's state |
 | `versions/<sha>/bin/dowel` | an installed binary |
-| `versions/<sha>/origin` | which specifiers and upstream it was resolved from; appended to when the same sha is installed again under a different specifier |
+| `versions/<sha>/origin` | which specifiers and upstream it was resolved from; appended to when the same sha is installed again under a different specifier. Also `from=asset` or `from=source`, and for an asset the `asset_sha256` that was verified — ADR-0036 puts the difference between the two paths at the root of what can be claimed about a binary, so it has to survive the install (issue #146). Unlike the specifiers, the path is not accumulated: one file on disk arrived one way. Re-installing an already-present sha keeps it, because the binary was not replaced |
 | `upstream.git` | the mirror used for resolution and fetching |
 | `default` | the sha used where no pin exists |
 | `tmp/<sha>` | a build work tree; removed on success, kept on failure for inspection |
