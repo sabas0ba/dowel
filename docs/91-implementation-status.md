@@ -107,6 +107,28 @@ bypasses the memo and redoes the merge on the spot.
 - Input change detection compares `(mtime, size, inode, ctime)` and takes a
   content fingerprint only when they differ
 - `dowel cache info` / `dowel cache gc`
+  ([ADR-0037](adr/0037-store-gc.md)). Two things grow: the append-only log
+  keeps the old bytes of every overwritten key, and the per-configuration
+  build directories accumulate as triples and configurations are switched
+  — the larger number by an order of magnitude, and previously collected
+  by nothing.
+  - **Growth is reported by default.** A run that ends over budget says so
+    in one line. The budget is the live bytes themselves, so it follows
+    the graph instead of being a number that fits one repository.
+    `DOWEL_CACHE` picks `notify` (default) / `gc` / `off`; the default
+    reports rather than collects, because compaction rewrites a file and a
+    build should not pause for work its user did not ask for
+  - `gc` compacts the store and removes older format versions;
+    `--older-than=<days>` also removes build directories not *written* in
+    that long. Without a number it leaves them alone — "everything but the
+    current one" would delete the release tree of someone alternating
+    between two configurations daily
+  - The index is deleted **first** during compaction: offsets move, and an
+    index that survives a replaced log points at the right offsets in the
+    wrong file, which reads as plausible garbage. Deleting it first means a
+    crash leaves an empty or shorter store, never a wrong one
+  - Per-record ages are not recorded: evicting entries individually would
+    mean writing on every read to maintain a last-used time
 
 ### Probe facts (`dowel-store::facts`, `dowel-build::probe`)
 
@@ -857,17 +879,17 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (674 tests):
+Current breakdown (682 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 351 |
+| `unit-*` | per-crate unit tests | 355 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
 | `e2e` | compile real C and C++, run it, check the output | 232 |
-| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 24 |
+| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (70 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |

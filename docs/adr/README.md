@@ -43,3 +43,4 @@ was originally written in.
 | [0034](0034-closed-vocabulary.md) | The configuration vocabulary is closed; a project's own axes are features | Accepted |
 | [0035](0035-template-kind.md) | A template shares manifest text, not a graph edge; it expands into the block it came from | Accepted |
 | [0036](0036-prebuilt-distribution.md) | Prebuilt binaries come from release assets, verified by hash; the source build stays the one that proves its origin | Accepted |
+| [0037](0037-store-gc.md) | The store is collected by compaction when asked, never automatically, and has no size cap | Accepted |

@@ -208,6 +208,76 @@ impl Store {
         }))
     }
 
+    /// 索引が指していないバイト数。追記専用ゆえに溜まる死んだ領域である。
+    ///
+    /// 索引は鍵ごとに1つのレコードを持つ。それが名指す範囲の合計を、値ログの
+    /// 長さから引けばよい——読み出しは要らない。
+    pub fn dead_bytes(&self) -> u64 {
+        let live: u64 = self.records.iter().map(|r| r.len as u64).sum();
+        self.values_len.saturating_sub(live)
+    }
+
+    /// 生きているレコードだけを新しい値ログへ写す（[ADR-0037](../../../docs/adr/0037-store-gc.md)）。
+    ///
+    /// 落とせたバイト数を返す。書き手を取れない場合は `None`——他のプロセスが
+    /// 組んでいる最中に足元の値ログを差し替えることはしない。
+    ///
+    /// **索引を先に消す。** 位置は書き換わるので、索引と値ログは一緒に変わら
+    /// なければならないが、`rename` が原子的なのはファイル1つに対してである。
+    /// 索引が残ったまま値ログだけ入れ替わると、正しい位置で別のファイルを指す
+    /// ——読めてしまう出鱈目になる。先に消せば、途中で落ちても「空」か「短い
+    /// ままの古い状態」にしかならない。キャッシュなので、最悪は再計算である。
+    pub fn compact(root: &Path) -> std::io::Result<Option<u64>> {
+        let store = Store::open(root);
+        let Some(writer) = store.writer()? else { return Ok(None) };
+        let before = store.values_len;
+        let dir = store.dir.clone();
+
+        // 生きている値を読み出し、新しい位置を控える。
+        let mut packed: Vec<u8> = Vec::with_capacity(before as usize);
+        let mut records = Vec::with_capacity(store.records.len());
+        for r in &store.records {
+            let Ok(bytes) = store.value(*r) else { continue };
+            let mut moved = *r;
+            moved.offset = packed.len() as u64;
+            packed.extend_from_slice(&bytes);
+            records.push(moved);
+        }
+
+        let tmp = dir.join("values.tmp");
+        {
+            let mut f = File::create(&tmp)?;
+            f.write_all(&packed)?;
+            f.sync_data()?;
+        }
+        // 1. 索引を消す。この瞬間、ストアは空として読まれる。
+        let _ = std::fs::remove_file(dir.join(INDEX));
+        // 2. 値ログを差し替える。
+        std::fs::rename(&tmp, dir.join(VALUES))?;
+        // 3. 新しい位置で索引を書き直す。
+        let mut writer = writer;
+        writer.records = records;
+        writer.offset = packed.len() as u64;
+        writer.commit()?;
+
+        let freed = before.saturating_sub(packed.len() as u64);
+        log_debug!("store: compacted, freed {freed} bytes");
+        Ok(Some(freed))
+    }
+
+    /// 死んだ領域が予算を超えているか（[ADR-0037](../../../docs/adr/0037-store-gc.md)）。
+    ///
+    /// 予算は生きている量そのものである。木の規模に自動で追随するので、
+    /// 小さな木にも大きな木にも同じ判定が効く——固定の閾値は、片方には
+    /// 早すぎ、もう片方には遅すぎる。
+    ///
+    /// 生きている量が無い（＝空）ときは超過としない。0 バイトの倍は 0 で
+    /// あり、書き始めた瞬間に「超過」と言うことになる。
+    pub fn over_budget(&self) -> bool {
+        let live: u64 = self.records.iter().map(|r| r.len as u64).sum();
+        live > 0 && self.dead_bytes() > live
+    }
+
     /// 古い形式のストアを回収する。回収したディレクトリ数を返す。
     ///
     /// 現在の形式は残す。形式が変わると読めなくなるが、消さない限り残り続ける。

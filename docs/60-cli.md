@@ -556,17 +556,60 @@ The output is also intended as context for LLM agents
 
 ```
 dowel cache info
-dowel cache gc
+dowel cache gc [--older-than=<days>]
 ```
 
 | Subcommand | Meaning |
 |---|---|
-| `info` | report the size and record count of the on-disk store, and of the probe-fact database |
-| `gc` | remove stores and fact databases left by older formats |
+| `info` | report the store's size, record count, and dead bytes; every build directory with its size and age; and the probe-fact database |
+| `gc` | remove stores and fact databases left by older formats, then compact the current store. `--older-than=<days>` also removes build directories not written in that long |
 
 Neither reads the manifests: cleanup must work even when a manifest is
 broken. The store's contents and guarantees are described under "The store"
 below.
+
+Two things grow ([ADR-0037](adr/0037-store-gc.md)). The value log is
+append-only, so overwriting a key leaves the old bytes in place; `info`
+reports them as `dead`. The **build directories** are per configuration —
+one per (triple, configuration) pair — and switching between debug and
+release leaves the previous one behind with its objects in it. That is the
+larger number.
+
+**Growth is reported by default.** When a run ends and the store is over
+budget, one line says so and how to collect it:
+
+```
+note: the store holds 8402 bytes no longer reachable; `dowel cache gc` frees them
+note: set DOWEL_CACHE=gc to collect it automatically, or =off to stop saying this
+```
+
+The budget is the live bytes themselves: over budget means the dead exceed
+the live. A tree's live size is what that tree needs, so the threshold
+scales with the project rather than being a number that fits one
+repository.
+
+| `DOWEL_CACHE` | Behavior |
+|---|---|
+| `notify` (default) | report when over budget; collect nothing |
+| `gc` | report and compact in place |
+| `off` | say nothing |
+
+The default reports rather than collects because compaction rewrites a
+file, and a build that pauses to do so spends time its user did not ask
+for.
+
+`gc --older-than=<days>` removes build directories not **written** in that
+long — a configuration nobody has built in a month is one nobody is using,
+and its contents regenerate. Without a number, `gc` does not touch them:
+"everything but the current one" would delete the release tree of someone
+who alternates between two configurations daily.
+
+Per-record ages are not recorded. Evicting individual entries by age would
+mean writing on every read to maintain a last-used time, to manage what the
+whole-store budget already covers.
+
+`gc` takes the writer lock, so it does not run against a concurrent build;
+it says so rather than waiting.
 
 There are **two** caches, and `info` names both. The store is per-project
 (`.dowel/cache/`); the **probe facts** are per-user

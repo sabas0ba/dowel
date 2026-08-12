@@ -184,6 +184,8 @@ pub struct Options {
     /// `add --name <name>`
     pub dep_name: Option<String>,
     pub config: String,
+    /// `cache gc --older-than=<日数>`（ADR-0037）
+    pub older_than: Option<u64>,
     pub target: Option<String>,
     pub features: Vec<String>,
     pub default_features: bool,
@@ -222,6 +224,7 @@ impl Default for Options {
             rev: None,
             dep_name: None,
             config: "debug".into(),
+            older_than: None,
             target: None,
             features: Vec::new(),
             default_features: true,
@@ -306,6 +309,13 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             "--rev" => opts.rev = Some(take("--rev")?),
             "--name" => opts.dep_name = Some(take("--name")?),
             "--config" => opts.config = take("--config")?,
+            // `cache gc` の日数（ADR-0037）。触られていないビルド
+            // ディレクトリを、その日数で落とす。
+            "--older-than" => {
+                let v = take("--older-than")?;
+                opts.older_than =
+                    Some(v.parse().map_err(|_| format!("`--older-than` takes days (got `{v}`)"))?);
+            }
             "--target" => opts.target = Some(take("--target")?),
             "--features" => {
                 let v = take("--features")?;

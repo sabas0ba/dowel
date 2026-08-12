@@ -69,12 +69,22 @@ the required granularity.
 
 ## Q4. Store format details
 
-**Status**: skeleton only ([20-architecture.md](20-architecture.md) section 5).
+**Status**: decided.
 
-- Record structure and index layout
-- What goes into the fingerprint (what is hashed)
-- GC policy (generations / size cap / reachability)
-- Migration across version changes (when a format change discards the store)
+- Record structure and index layout — implemented: fixed-length records
+  (key hash, fingerprint, offset, length, durability) over an append-only
+  value log ([20-architecture.md](20-architecture.md) section 5)
+- What goes into the fingerprint — the value's bytes; a matching
+  fingerprint means the file is neither lexed, parsed, nor evaluated
+- GC policy — [ADR-0037](adr/0037-store-gc.md): growth is reported by
+  default and collected on request, with the budget following the graph
+  (over budget = dead bytes exceed live ones). `DOWEL_CACHE` picks
+  notify / gc / off, and `gc --older-than=<days>` collects build
+  directories by age
+- Migration across version changes — a format change moves `FORMAT`, the
+  new version starts empty in its own directory, and `gc` removes the old
+  one. Nothing converts an older format: misreading an old layout is worse
+  than recomputing
 
 ## Q6. What to do when `import` output is rejected
 

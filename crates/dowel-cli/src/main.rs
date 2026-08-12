@@ -58,7 +58,50 @@ fn main() -> ExitCode {
         }
     };
     probe.save();
+    // 溜まっていることを知らせる。既定は報せるだけで、片付けはしない
+    // （ADR-0037）。`cache info` を自分で叩かない限り気付けない状態が、
+    // 「黙って肥大化する」の正体だった。
+    cache_notice(&opts);
     code
+}
+
+/// キャッシュが予算を超えていたら1行述べる。`DOWEL_CACHE` が振る舞いを決める。
+///
+/// | 値 | 意味 |
+/// |---|---|
+/// | `notify`（既定） | 超えていれば報せる。片付けはしない |
+/// | `gc` | 報せて、その場で圧縮する |
+/// | `off` | 何もしない |
+///
+/// 予算は生きている量そのものであり、木の規模に自動で追随する。固定の
+/// 閾値は、小さな木には早すぎ、大きな木には遅すぎる。
+fn cache_notice(opts: &Options) {
+    let mode = std::env::var("DOWEL_CACHE").unwrap_or_default();
+    if mode == "off" {
+        return;
+    }
+    // 掃除そのものを頼まれた実行では言わない。今しがた片付けている。
+    if matches!(opts.command, Command::CacheGc | Command::CacheInfo) {
+        return;
+    }
+    let store = dowel_store::Store::open(&opts.directory);
+    if !store.over_budget() {
+        return;
+    }
+    let dead = store.dead_bytes();
+    if mode == "gc" {
+        match dowel_store::Store::compact(&opts.directory) {
+            Ok(Some(freed)) => eprintln!("note: compacted the store, freeing {freed} bytes"),
+            // 取れないのは誤りではない。次の実行が片付ける。
+            Ok(None) => {}
+            Err(e) => eprintln!("note: cannot compact the store: {e}"),
+        }
+        return;
+    }
+    eprintln!(
+        "note: the store holds {dead} bytes no longer reachable; `dowel cache gc` frees them"
+    );
+    eprintln!("note: set DOWEL_CACHE=gc to collect it automatically, or =off to stop saying this");
 }
 
 fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCode, String> {
@@ -89,6 +132,34 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
         let facts = dowel_store::facts::Facts::gc()
             .map_err(|e| format!("cannot clean the fact database: {e}"))?;
         eprintln!("removed {removed} store(s) and {facts} fact database(s) left by older formats");
+        // 現在の形式の中では、索引が指していない領域を落とす（ADR-0037）。
+        // 追記専用なので、鍵を上書きするたびに古いバイト列が残る。
+        match dowel_store::Store::compact(&opts.directory)
+            .map_err(|e| format!("cannot compact the store: {e}"))?
+        {
+            Some(freed) => eprintln!("compacted the store, freeing {freed} bytes"),
+            // 組んでいる最中に足元を差し替えることはしない。
+            None => eprintln!("another process holds the store; not compacting"),
+        }
+        // 実際に嵩むのは構成ごとのビルドディレクトリである。構成と三つ組を
+        // 切り替えるたびに1つ増え、使わなくなっても残る。日数を渡された
+        // ときだけ落とす——「最後に組んでから」であって、作られてからでは
+        // ない（ADR-0037）。
+        if let Some(days) = opts.older_than {
+            let mut freed = 0u64;
+            let mut removed = 0usize;
+            for d in build_plan::build_dirs(&opts.directory) {
+                if d.age_days < days {
+                    continue;
+                }
+                std::fs::remove_dir_all(&d.path)
+                    .map_err(|e| format!("cannot remove {}: {e}", d.path.display()))?;
+                eprintln!("removed {} ({} days, {} bytes)", d.id, d.age_days, d.bytes);
+                freed += d.bytes;
+                removed += 1;
+            }
+            eprintln!("removed {removed} build directory(ies), freeing {freed} bytes");
+        }
         return Ok(ExitCode::SUCCESS);
     }
     // 下書きの生成はマニフェストを要さない。読むのは CMake の reply である。
@@ -1304,8 +1375,19 @@ fn cache_info(root: &std::path::Path) -> Result<ExitCode, String> {
     println!("format     {}", dowel_store::FORMAT);
     println!("records    {}", store.len());
     println!("values     {values} bytes");
+    // 索引が指していない分。`cache gc` が落とせる量である（ADR-0037）。
+    println!("dead       {} bytes", store.dead_bytes());
     // 道具について確かめたことは、プロジェクトの外に置く（ADR-0028）。
     // 同じ表示に並べるのは、消えたときに探す先が2つあることを知らせるため。
+    // 実際に嵩むのはこちらである。構成ごとに1つ増え、使わなくなっても残る。
+    let dirs = build_plan::build_dirs(root);
+    if !dirs.is_empty() {
+        let total: u64 = dirs.iter().map(|d| d.bytes).sum();
+        println!("builds     {} bytes in {} configuration(s)", total, dirs.len());
+        for d in &dirs {
+            println!("  {:<40} {:>10} bytes  {} days", d.id, d.bytes, d.age_days);
+        }
+    }
     let facts = dowel_store::Facts::open();
     println!("facts      {}", dowel_store::facts::Facts::dir().display());
     println!("  format   {}", dowel_store::facts::FORMAT);
