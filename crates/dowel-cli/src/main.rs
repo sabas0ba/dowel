@@ -841,10 +841,26 @@ fn configure(
                 if let Some(style) = decl.style {
                     cfg.set_style(style);
                 }
+                // 道具一式を宣言していれば取ってくる（ADR-0044）。取れた根が
+                // その宣言の道具の基準点になる——探すのは機械の PATH では
+                // なく、固定した書庫の中である。
+                let root_dir = match &decl.source {
+                    Some(src) => {
+                        match dowel_model::fetch::ensure_toolchain(&src.url, &src.sha256, src.site)
+                        {
+                            Ok(dir) => Some(dir),
+                            Err(d) => {
+                                diags.push(*d);
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                };
                 // 道具の集合は表（dowel_eval::config::TOOLS）が決める。
                 for (name, _, _) in dowel_eval::config::TOOLS {
                     if let Some(t) = decl.tool(name) {
-                        cfg.set_tool(name, t.command.clone());
+                        cfg.set_tool(name, tool_command(&t.command, root_dir.as_deref()));
                     }
                 }
             }
@@ -961,6 +977,20 @@ fn default_targets(
             .collect());
     }
     Ok(out)
+}
+
+/// 道具の起動に使う綴り（[ADR-0044](../../docs/adr/0044-toolchain-acquisition.md)）。
+///
+/// 取ってきた道具一式が在れば、相対の綴りはその根から解く。絶対パスと、
+/// 区切りを持たない名前（`cc`）はそのままにする——前者は機械の中の場所を
+/// 指しており、後者は PATH を引く指定であって、どちらも書庫の中の話ではない。
+fn tool_command(command: &str, root: Option<&std::path::Path>) -> String {
+    let Some(root) = root else { return command.to_string() };
+    let path = std::path::Path::new(command);
+    if path.is_absolute() || path.components().count() < 2 {
+        return command.to_string();
+    }
+    root.join(path).display().to_string()
 }
 
 /// `install` の対象（[ADR-0041](../../docs/adr/0041-install.md)）。

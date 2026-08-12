@@ -216,6 +216,99 @@ pub fn ensure_archive(
     Ok(dir)
 }
 
+/// 取ってくる道具一式の置き場（[ADR-0044](../../../docs/adr/0044-toolchain-acquisition.md)）。
+///
+/// 木の中ではなく**利用者の**cache に置く。理屈はプローブ事実と同じ
+/// （[ADR-0028](../../../docs/adr/0028-probe-facts.md)）——同じ書庫は
+/// どの木でも同じバイトであり、木ごとに取り直すのは、最も安定したものを
+/// 最も揮発しやすい場所に置くことである。しかも道具一式は依存より桁が大きい。
+pub fn toolchain_dir(sha256: &str) -> PathBuf {
+    let base = std::env::var_os("DOWEL_TOOLCHAIN_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("dowel").join("toolchains").join(&sha256[..12])
+}
+
+/// 取得済みの道具一式。完了印が指紋と一致する場合にのみ返す。
+pub fn existing_toolchain(sha256: &str) -> Option<PathBuf> {
+    let dir = toolchain_dir(sha256);
+    std::fs::read_to_string(dir.join(MARKER)).is_ok_and(|s| s.trim() == sha256).then_some(dir)
+}
+
+/// 道具一式を取得して展開し、その根を返す。
+///
+/// 中身は書庫依存と同じ手順である（ADR-0029）。違うのは置き場だけで、
+/// 検証は展開の**前**、完了印を書いてから所定の場所へ移す。
+pub fn ensure_toolchain(url: &str, sha256: &str, site: Site) -> Result<PathBuf, Box<Diagnostic>> {
+    if let Some(dir) = existing_toolchain(sha256) {
+        log_debug!("the toolchain is already at {}", dir.display());
+        return Ok(dir);
+    }
+    let dir = toolchain_dir(sha256);
+    let fail = |e: String| {
+        Box::new(
+            Diagnostic::error("unfetchable-toolchain", format!("cannot fetch the toolchain: {e}"))
+                .at(site.file, site.span, "declared here")
+                .note(format!("tried `{url}`"))
+                .note("fetching runs `curl` (or `wget`) and `tar`; they must be on PATH")
+                .note(format!("it would be unpacked into {}", dir.display())),
+        )
+    };
+    fetch_into(&dir, url, sha256).map_err(fail)?;
+    Ok(dir)
+}
+
+/// 書庫を取り、検め、`dir` へ置く。途中で落ちた跡は残さない。
+fn fetch_into(dir: &Path, url: &str, sha256: &str) -> Result<(), String> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).map_err(|e| format!("cannot clear {}: {e}", dir.display()))?;
+    }
+    let parent = dir.parent().ok_or("the destination has no parent")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    let tmp = parent.join(format!(".tmp-{}", &sha256[..12]));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("cannot create a work area: {e}"))?;
+
+    let archive = tmp.join("archive");
+    let result = (|| -> Result<(), String> {
+        download(url, &archive)?;
+        // 検証は展開の**前**。展開は書庫の中身に道を決めさせる操作である。
+        let got = dowel_support::sha256::hex_of_file(&archive)
+            .map_err(|e| format!("cannot read what was downloaded: {e}"))?;
+        if got != sha256 {
+            return Err(format!(
+                "the archive does not match its declared hash\n  expected {sha256}\n  received {got}"
+            ));
+        }
+        let into = tmp.join("unpacked");
+        std::fs::create_dir_all(&into)
+            .map_err(|e| format!("cannot create {}: {e}", into.display()))?;
+        unpack(&archive, &into)?;
+        let root_dir = single_child(&into)?;
+        for entry in
+            std::fs::read_dir(&root_dir).map_err(|e| format!("cannot read the archive: {e}"))?
+        {
+            let entry = entry.map_err(|e| format!("cannot read the archive: {e}"))?;
+            let to = tmp.join(entry.file_name());
+            std::fs::rename(entry.path(), &to)
+                .map_err(|e| format!("cannot place {}: {e}", to.display()))?;
+        }
+        let _ = std::fs::remove_dir_all(&into);
+        let _ = std::fs::remove_file(&archive);
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(e);
+    }
+    std::fs::write(tmp.join(MARKER), format!("{sha256}\n"))
+        .map_err(|e| format!("cannot write the completion marker: {e}"))?;
+    std::fs::rename(&tmp, dir).map_err(|e| format!("cannot move it into place: {e}"))
+}
+
 /// 唯一の子ディレクトリ。書庫が包んでいる1階層を剥がすために引く。
 fn single_child(dir: &Path) -> Result<PathBuf, String> {
     let mut children = Vec::new();
@@ -235,21 +328,30 @@ fn download(url: &str, to: &Path) -> Result<(), String> {
     let attempts: [(&str, Vec<&str>); 2] = [
         // `--fail` が無いと、404 の本文を書庫として保存してしまう。
         ("curl", vec!["--fail", "--silent", "--show-error", "--location", url, "--output", &out]),
-        ("wget", vec!["--quiet", url, "-O", &out]),
+        // `--quiet` ではなく `--no-verbose`。前者は進捗と一緒に**誤りも**
+        // 黙らせるので、失敗の理由が空になる（issue #145 と同じ形）。
+        ("wget", vec!["--no-verbose", url, "-O", &out]),
     ];
-    let mut last = String::new();
+    // 理由は全ての試行ぶん集める。最後のものだけ残すと、実際に失敗した
+    // 道具ではなく、入っていない道具の名前が理由なしで出る（issue #145）。
+    let mut why = Vec::new();
     for (program, args) in attempts {
         match Command::new(program).args(&args).output() {
-            // 道具が無いだけなら次を試す。落とすのは最後の1つが失敗したとき。
-            Err(e) => last = format!("cannot run {program}: {e}"),
+            // 道具が無いだけなら次を試す。落とすのは全てが失敗したとき。
+            Err(e) => why.push(format!("cannot run {program}: {e}")),
             Ok(o) if o.status.success() => return Ok(()),
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
-                last = format!("{program} failed: {}", err.trim());
+                let err = err.trim();
+                why.push(if err.is_empty() {
+                    format!("{program} failed ({})", o.status)
+                } else {
+                    format!("{program} failed: {err}")
+                });
             }
         }
     }
-    Err(last)
+    Err(why.join("; "))
 }
 
 /// 書庫を展開する。形式の判別は `tar` に委ねる（`--auto-compress` の読み側）。

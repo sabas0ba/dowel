@@ -6577,3 +6577,113 @@ fn a_package_without_a_description_still_writes_a_valid_file() {
     // `bin` には書かない。組んで繋ぐ相手ではない。
     assert!(!prefix.join("lib/pkgconfig/app.pc").exists());
 }
+
+/// 取ってくる道具一式（[ADR-0044](../../../docs/adr/0044-toolchain-acquisition.md)）。
+///
+/// 本物のクロスコンパイラは置けないので、`cc` を包むだけの薄い道具を書庫に
+/// 詰める。確かめたいのは「宣言した書庫の中の道具で組んだか」であり、
+/// 中身が何であるかではない。
+fn toolchain_archive(p: &Project) -> (String, String) {
+    p.write_script("tc/bin/mycc", "#!/bin/sh\nexec cc \"$@\"\n");
+    p.write_script("tc/bin/myar", "#!/bin/sh\nexec ar \"$@\"\n");
+    let archive = p.path("toolchain.tar.gz");
+    let out = std::process::Command::new("tar")
+        .args(["-czf", &archive.display().to_string(), "-C", &p.path(".").display().to_string()])
+        .arg("tc")
+        .output()
+        .expect("cannot start tar");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let sha = dowel_support::sha256::hex_of_file(&archive).expect("cannot hash the archive");
+    (format!("file://{}", archive.display()), sha)
+}
+
+#[test]
+fn a_declared_toolchain_is_fetched_verified_and_used() {
+    // マニフェストも、ソースも、依存も固定されているのに、コンパイラだけは
+    // 機械に在るものだった。クロスビルドが再現するのは、object code を
+    // 決める入力を除いた全て、という状態だった（ADR-0044）。
+    let p = Project::new("toolchain-fetch");
+    let (url, sha) = toolchain_archive(&p);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"tc\"\nversion = \"0\"\n\n\
+             [toolchain]\nurl = \"{url}\"\nsha256 = \"{sha}\"\n\
+             c = \"bin/mycc\"\nar = \"bin/myar\"\n"
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "#include <stdio.h>\nint main(void) { printf(\"v=1\\n\"); return 0; }\n");
+
+    let cache = p.path("cache");
+    let env = [("DOWEL_TOOLCHAIN_DIR", cache.display().to_string())];
+    let envs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let r = p.run_env(".", &["build"], &envs);
+    r.success();
+    // 自分についての警告は出ない。比べるのは解いた後の綴りである。
+    assert!(!r.stderr.contains("toolchain-mismatch"), "stderr:\n{}", r.stderr);
+
+    // 使ったのは書庫の中の道具である。翻訳データベースがそれを述べる。
+    let db =
+        std::fs::read_to_string(build_dir(&p.path("."), "debug").join("compile_commands.json"))
+            .expect("no compile database");
+    assert!(db.contains("/dowel/toolchains/"), "{db}");
+    assert!(db.contains("mycc"), "{db}");
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "v=1\n");
+
+    // 木の中ではなく利用者の cache に置く。同じ書庫はどの木でも同じバイトで
+    // あり、木ごとに取り直すのは最も安定したものを最も揮発しやすい場所に
+    // 置くことである（ADR-0028 と同じ理屈）。
+    assert!(cache.join("dowel/toolchains").is_dir(), "not in the user cache");
+    assert!(!p.path(".dowel/deps").exists(), "it must not land in the tree");
+
+    // 2度目は取りに行かない。書庫を消しても組める。
+    std::fs::remove_file(p.path("toolchain.tar.gz")).expect("cannot remove the archive");
+    p.run_env(".", &["build"], &envs).success();
+}
+
+#[test]
+fn a_toolchain_archive_that_does_not_match_its_digest_stops_the_build() {
+    // 黙って PATH の道具へ落ちてはならない。落ちると、宣言と違うコンパイラが
+    // 宣言の後ろに隠れる——この決定が取り除こうとしているものそのものである。
+    let p = Project::new("toolchain-digest");
+    let (url, _) = toolchain_archive(&p);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"tc\"\nversion = \"0\"\n\n\
+             [toolchain]\nurl = \"{url}\"\nsha256 = \"{}\"\nc = \"bin/mycc\"\n",
+            "0".repeat(64)
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let cache = p.path("cache");
+    let env = cache.display().to_string();
+    let r = p.run_env(".", &["build"], &[("DOWEL_TOOLCHAIN_DIR", env.as_str())]);
+    r.failure();
+    r.stderr_contains("unfetchable-toolchain");
+    r.stderr_contains("does not match its declared hash");
+}
+
+#[test]
+fn a_toolchain_url_without_a_digest_is_refused() {
+    // URL は名前であり、名前の裏のバイトは変わりうる（ADR-0029 と同じ）。
+    let p = Project::new("toolchain-unpinned");
+    let (url, _) = toolchain_archive(&p);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"tc\"\nversion = \"0\"\n\n\
+             [toolchain]\nurl = \"{url}\"\nc = \"bin/mycc\"\n"
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unpinned-toolchain");
+    r.stderr_contains("the bytes behind a name can change");
+}

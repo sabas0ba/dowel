@@ -58,6 +58,21 @@ pub struct ToolchainDecl {
     /// 引数の綴り方（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)）。
     /// 宣言が無ければ三つ組から導く
     pub style: Option<dowel_eval::config::Style>,
+    /// 取ってくる道具一式（[ADR-0044](../../../docs/adr/0044-toolchain-acquisition.md)）。
+    /// 宣言が無ければ、道具は機械に既に在るものとして探す
+    pub source: Option<ToolchainSource>,
+}
+
+/// 取ってくる道具一式の出所（ADR-0044）。
+///
+/// 固定の形は書庫依存（[ADR-0029](../../../docs/adr/0029-tarball-dependencies.md)）
+/// と同じである——URL は名前であり、名前の裏のバイトは変わりうる。
+#[derive(Clone, Debug)]
+pub struct ToolchainSource {
+    pub url: String,
+    pub sha256: String,
+    /// `url` が書かれた位置
+    pub site: Site,
 }
 
 /// 1つの道具の宣言。
@@ -90,6 +105,9 @@ impl ToolchainDecl {
         }
         if self.style.is_none() {
             self.style = other.style;
+        }
+        if self.source.is_none() {
+            self.source = other.source.clone();
         }
         if self.site.is_none() {
             self.site = other.site;
@@ -485,6 +503,37 @@ pub fn read_toolchains(
                 }
             }
         }
+        // 取ってくる道具一式（ADR-0044）。`url` は `sha256` を要する——
+        // URL は名前であり、名前の裏のバイトは変わりうる（ADR-0029 と同じ）。
+        let url = t.entry("url").and_then(|e| e.value.as_str().map(|s| (s.to_string(), e.site)));
+        let sha = t.entry("sha256").and_then(|e| e.value.as_str().map(|s| (s.to_string(), e.site)));
+        match (url, sha) {
+            (Some((url, site)), Some((sha256, sha_site))) => {
+                if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    diags.push(
+                        Diagnostic::error(
+                            "unpinned-toolchain",
+                            format!("`sha256` of `{label}` is not 64 hexadecimal digits"),
+                        )
+                        .at(sha_site.file, sha_site.span, "this is not a sha256")
+                        .note("the digest is of the archive itself, not of the unpacked tree"),
+                    );
+                } else {
+                    decl.source = Some(ToolchainSource { url, sha256, site });
+                }
+            }
+            (Some((_, site)), None) => diags.push(
+                Diagnostic::error(
+                    "unpinned-toolchain",
+                    format!("`{label}` names a `url` but no `sha256`"),
+                )
+                .at(site.file, site.span, "declared here")
+                .note("a URL is a name, and the bytes behind a name can change")
+                .note("add `sha256 = \"...\"`, the digest of the archive"),
+            ),
+            // `sha256` だけは無害である。取りに行かない以上、何も検めない。
+            (None, _) => {}
+        }
         // 様式は道具ではない。名前ではなく綴り方を選ぶ宣言である（ADR-0027）。
         if let Some(e) = t.entry(STYLE_KEY) {
             match e.value.as_str().and_then(dowel_eval::config::Style::parse) {
@@ -518,6 +567,8 @@ pub fn read_toolchains(
         // `ar` が黙って書庫を作る。#50 が防ごうとした状態が戻る（issue #59）
         let mut known: Vec<&str> = dowel_eval::config::TOOLS.iter().map(|(n, _, _)| *n).collect();
         known.push(STYLE_KEY);
+        known.push("url");
+        known.push("sha256");
         for e in &t.entries {
             let name = e.key.join(".");
             if known.contains(&name.as_str()) {

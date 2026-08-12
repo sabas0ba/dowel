@@ -211,10 +211,23 @@ pub fn plan(
     // 宣言は、このビルドに対する要求ではない。
     for p in &sess.packages {
         let Some(decl) = p.toolchain_for(&cfg.target, is_host) else { continue };
+        // 取ってきた道具一式を宣言しているなら、比べるのは**解いた後**の
+        // 綴りである（ADR-0044）。宣言のままと突き合わせると、書庫の中を
+        // 指す宣言は必ず食い違って見える。
+        let root = decl
+            .source
+            .as_ref()
+            .and_then(|src| dowel_model::fetch::existing_toolchain(&src.sha256));
         for (name, _, _) in dowel_eval::config::TOOLS {
             let Some(t) = decl.tool(name) else { continue };
+            let asked = match (&root, Path::new(&t.command)) {
+                (Some(r), path) if !path.is_absolute() && path.components().count() >= 2 => {
+                    r.join(path).display().to_string()
+                }
+                _ => t.command.clone(),
+            };
             let used = cfg.tool(name);
-            if t.command != used {
+            if asked != used {
                 diags.push(
                     Diagnostic::warning(
                         "toolchain-mismatch",
@@ -223,7 +236,7 @@ pub fn plan(
                             p.name, t.command
                         ),
                     )
-                    .note("fetching and switching toolchains is Phase 5 (docs/90-roadmap.md)")
+                    .note("a package's toolchain does not override the build's (ADR-0031)")
                     .note("ABI label checking assumes a single pinned toolchain"),
                 );
             }

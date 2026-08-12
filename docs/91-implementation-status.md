@@ -656,6 +656,29 @@ changes, only the speed.
   artifacts under a foreign triple's name would report the configuration
   mistake one stage later (as a runner's `Invalid ELF image`, or not at all).
   Full toolchain *descriptions* (sysroots, probing) remain Phase 5
+- **A toolchain can be fetched and pinned**
+  ([ADR-0044](adr/0044-toolchain-acquisition.md)). `url` + `sha256` in a
+  toolchain table names an archive; the tools' relative paths are then
+  resolved against what is unpacked. Everything else in a cross build was
+  already pinned — the manifest, the sources, the dependencies — and the
+  compiler, which decides the object code, was whatever the machine had
+  under that name.
+  - `url` requires `sha256` (`unpinned-toolchain`), for ADR-0029's reason:
+    a URL is a name, and the bytes behind a name can change. A failed fetch
+    or a digest mismatch is `unfetchable-toolchain` and **stops the build**
+    — falling back to PATH would hide the machine's compiler behind a
+    declaration that says otherwise
+  - It is unpacked into the **user's** cache
+    (`$XDG_CACHE_HOME/dowel/toolchains/<hash12>/`), not the tree. ADR-0028's
+    reasoning, only stronger: the same archive is the same bytes in every
+    tree, and a toolchain is an order of magnitude larger than a dependency
+  - An absolute path and a bare name are left alone — those already mean a
+    place on this machine and a PATH lookup
+  - `toolchain-mismatch` now compares the **resolved** command. Comparing
+    the declaration against what the build uses made every package with a
+    fetched toolchain warn about itself
+  - The language server never fetches: it resolves against a toolchain that
+    is already unpacked, and otherwise leaves the command as written
 - Transfer for `[runner.<triple>]` (`transfer` / `remote_dir` / `host`):
   when the target machine cannot see the build machine's file system,
   artifacts are carried over before launch. Paths are not written in the
@@ -997,7 +1020,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (711 tests):
+Current breakdown (714 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1006,10 +1029,10 @@ Current breakdown (711 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 251 |
+| `e2e` | compile real C and C++, run it, check the output | 254 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (73 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (74 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
@@ -1075,7 +1098,7 @@ cannot be measured with the current fixtures; the scale fixture
 |---|---|
 | mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
-| the `toolchain` kind | Phase 4 |
+| the `toolchain` kind in `dowel.build` | still reserved. [ADR-0044](adr/0044-toolchain-acquisition.md) did not need it: the toolchain belongs to the build ([ADR-0031](adr/0031-toolchain-is-the-builds.md)), and `dowel.toml` is where the build is described |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
