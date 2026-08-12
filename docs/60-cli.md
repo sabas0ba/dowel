@@ -308,6 +308,12 @@ installed: /opt/myapp/lib/libcore.so.2
 - A versioned shared library brings its unversioned name as a symlink
   ([ADR-0040](adr/0040-shared-library-version.md)), and shared libraries a
   installed executable needs are copied too, including from other packages
+- Each installed `lib` also gets `lib/pkgconfig/<name>.pc`
+  ([ADR-0043](adr/0043-pkgconfig-generation.md)), so a consumer that knows
+  nothing about dowel can build against it:
+  `cc main.c $(pkg-config --cflags --libs core)`. Its contents are the
+  target's `public` block in another notation, and `prefix` is the real
+  prefix even under `--destdir`
 - Nothing is rebuilt: what was tested and what is shipped are the same bytes
 
 Installed executables find their libraries **relative to themselves**, so

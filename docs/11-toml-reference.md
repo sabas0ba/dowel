@@ -31,6 +31,7 @@ version = "0.3.1"
 |---|---|---|---|
 | `name` | string | yes | the package name, used in target references (`<package>:<target>`) and diagnostics. Missing: `missing-field`. Default while erroring: the directory name |
 | `version` | string | no | the package version. Readable from `dowel.build` as `pkg.version` ([12-build-reference.md](12-build-reference.md), [ADR-0020](adr/0020-package-constants.md)), so the value a library reports at run time comes from here rather than being written a second time in a header. Not yet used for resolving this package as someone else's dependency. Default `0.0.0` |
+| `description` | string | no | a one-line description of the package. Used as `Description:` in the pkg-config file `dowel install` writes ([ADR-0043](adr/0043-pkgconfig-generation.md)), which requires it; when absent the target name stands in, so a file is still produced and still validates |
 | `targets` | list of strings | no | the target triples this package is for. When declared, any other triple — the host included — is refused with `unsupported-target` before building. Undeclared (the default) means the package builds for any triple. This is deliberately separate from `[toolchain.<triple>]`: a package that builds for the host but swaps tools when cross-compiling declares toolchains without narrowing its targets |
 
 | `toolchains` | string | no | a file of shared toolchain declarations ([ADR-0033](adr/0033-shared-toolchain-file.md)), resolved relative to this `dowel.toml`. See below |

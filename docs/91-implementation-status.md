@@ -510,8 +510,22 @@ changes, only the speed.
     - Shared libraries from other packages in the link closure are copied
       too. That crosses the boundary ADR-0038 draws, and the alternative is
       an install that does not run
+  - **An installed library describes itself in pkg-config**
+    ([ADR-0043](adr/0043-pkgconfig-generation.md)):
+    `lib/pkgconfig/<name>.pc` is written from the target's `public` block —
+    `includes` becomes `-I${includedir}`, `defines` and `flags` the rest of
+    `Cflags`, `link_flags` join `Libs`. Nothing new is declared to get it,
+    and `prefix` is the real prefix even under `--destdir`. dowel already
+    read this notation ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and
+    could not write it, so a library could move to dowel only if every
+    consumer moved with it. `Requires` names only what is certainly present:
+    system dependencies, and dowel packages this same run installed —
+    a `Requires` pointing at a missing file makes pkg-config fail outright.
+    `[package] description` was added because pkg-config requires
+    `Description:`; absent, the target name stands in
   - Symbol versioning *inside* the library (version nodes in the script) is
-    not implemented, and neither are pkg-config or CMake package files.
+    not implemented, and neither are CMake package config files (CMake reads
+    pkg-config through `FindPkgConfig`, so the common case is covered).
     macOS's `-compatibility_version` is not set: it is a second,
     independently checked number that the one declaration does not decide
 - Per-language flags: `flags` applies to every language, `c_flags` /
@@ -968,7 +982,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (706 tests):
+Current breakdown (708 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -977,7 +991,7 @@ Current breakdown (706 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 249 |
+| `e2e` | compile real C and C++, run it, check the output | 251 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (73 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -1050,7 +1064,6 @@ cannot be measured with the current fixtures; the scale fixture
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
 | a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
-
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi`. Nothing verifies that a surface declaring `abi = "c"` really is `extern "C"` — the claim is narrower and more checkable than a language label, and is what an IDL or a header scan would confirm ([ADR-0019](adr/0019-c-abi-label.md)) |
 | computing an ABI label rather than reading a declared one | Phase 6. The **shape** is decided: a label is a set of components compared one by one ([ADR-0042](adr/0042-abi-label-components.md)), so a computed label can be matched against a declared one component by component. Two components exist (`libc`, `cxx_stdlib`); the rest of Q2's candidates — sanitizers, LTO, exception model, `_GLIBCXX_USE_CXX11_ABI`, MSVC runtime kind — each need their own evidence and domain |
 
