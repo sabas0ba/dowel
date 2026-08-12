@@ -385,6 +385,24 @@ pub fn runtime_search_path(cfg: &Config, dir: &Path) -> Vec<String> {
     }
 }
 
+/// 同じ探索路を、**自分自身からの相対**で言い直したもの
+/// （[ADR-0041](../../../docs/adr/0041-install.md)）。
+///
+/// ビルドディレクトリの絶対パスだけを記録した実行ファイルは、置き場所を
+/// 移した瞬間にライブラリを見失う。しかもビルド木が在る限り動いてしまう
+/// ので、壊れているのは配った先で分かる。
+///
+/// `rel` は、実行ファイルの置かれる場所から共有ライブラリの場所への相対で
+/// ある——`bin/` から見れば `../lib`、`lib/` の中同士なら `.`。
+pub fn relocatable_search_path(cfg: &Config, rel: &str) -> Vec<String> {
+    match dowel_eval::config::triple_os(&cfg.target) {
+        "windows" => Vec::new(),
+        // Mach-O の綴りは別である。`$ORIGIN` は解釈されない。
+        "macos" => vec![format!("-Wl,-rpath,@loader_path/{rel}")],
+        _ => vec![format!("-Wl,-rpath,$ORIGIN/{rel}")],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +593,18 @@ mod tests {
         );
         // Windows に rpath は無い。実行する側が環境で渡す。
         assert!(runtime_search_path(&for_target("x86_64-pc-windows-msvc"), dir).is_empty());
+
+        // 同じ探索路を自分自身からの相対で言い直したもの（ADR-0041）。
+        // 綴りは形式ごとに違う——Mach-O は `$ORIGIN` を解釈しない。
+        assert_eq!(
+            relocatable_search_path(&for_target("x86_64-unknown-linux-gnu"), "../lib"),
+            vec!["-Wl,-rpath,$ORIGIN/../lib"]
+        );
+        assert_eq!(
+            relocatable_search_path(&for_target("aarch64-apple-darwin"), "."),
+            vec!["-Wl,-rpath,@loader_path/."]
+        );
+        assert!(relocatable_search_path(&for_target("x86_64-pc-windows-msvc"), "../lib").is_empty());
         assert!(runtime_search_path(&for_target("x86_64-pc-windows-gnu"), dir).is_empty());
     }
 

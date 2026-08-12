@@ -461,10 +461,32 @@ changes, only the speed.
     reasoned about. The release is not the generation, so `[package]
     version` does not supply the number, and declaring nothing keeps the
     plain name. A negative number is `invalid-soversion`
-  - Symbol versioning *inside* the library (version nodes in the script)
-    and installation are not implemented. macOS's
-    `-compatibility_version` is not set: it is a second, independently
-    checked number that the one declaration does not decide
+  - **`dowel install --prefix=<dir>`** copies the products out of the build
+    tree ([ADR-0041](adr/0041-install.md)): `bin` into `bin/`, `lib` into
+    `lib/` with the unversioned name, and each library's own
+    `public.includes` into `include/`. `test` and `bench` are not
+    installed. Nothing is rebuilt, so what was tested and what ships are
+    the same bytes.
+    - The obstacle was the run-time search path: an absolute path into the
+      build tree keeps working while that tree exists, so the breakage
+      appears at the receiver. Every artifact linking a shared library now
+      also records one relative to itself (`$ORIGIN/../lib`,
+      `@loader_path` on macOS), which makes a copy sufficient — no
+      relinking, and no `patchelf` reading object formats
+    - That `$` is meaningful to ninja, to make, and to the shell running a
+      make recipe, so all three backends are checked. A missed quote links
+      fine and fails only after the artifact moves
+    - `--prefix` is required: `/usr/local` needs root, and a writable
+      default would be a directory nobody wants. `--destdir` prepends a
+      staging root, which works unchanged because the recorded paths are
+      relative
+    - Shared libraries from other packages in the link closure are copied
+      too. That crosses the boundary ADR-0038 draws, and the alternative is
+      an install that does not run
+  - Symbol versioning *inside* the library (version nodes in the script) is
+    not implemented, and neither are pkg-config or CMake package files.
+    macOS's `-compatibility_version` is not set: it is a second,
+    independently checked number that the one declaration does not decide
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language
 - The language standard is typed: `c_std` / `cxx_std` take a value from a
@@ -919,16 +941,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (694 tests):
+Current breakdown (700 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 359 |
+| `unit-*` | per-crate unit tests | 360 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 240 |
+| `e2e` | compile real C and C++, run it, check the output | 245 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (72 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

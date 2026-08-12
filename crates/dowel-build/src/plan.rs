@@ -559,6 +559,9 @@ pub fn plan(
                     .any(|t| t != tid && shared_targets.contains(&t))
                 {
                     flags.extend(toolstyle::runtime_search_path(cfg, &build_dir.join("lib")));
+                    // 置き場所を移しても辿れる言い方も併せて記録する
+                    // （ADR-0041）。共有ライブラリ同士は同じ場所に並ぶ。
+                    flags.extend(toolstyle::relocatable_search_path(cfg, "."));
                 }
                 let args = toolstyle::link_shared(cfg, &inputs_args, &flags, &out, &export_path);
 
@@ -714,6 +717,9 @@ pub fn plan(
                         && sess.target(t).package != sess.target(tid).package
                 }) {
                     flags.extend(toolstyle::runtime_search_path(cfg, &build_dir.join("lib")));
+                    // 実行ファイルは `bin/` に、ライブラリは `lib/` に並ぶ。
+                    // 両者の相対はビルド木でも入れた先でも同じである（ADR-0041）。
+                    flags.extend(toolstyle::relocatable_search_path(cfg, "../lib"));
                 }
                 let args = toolstyle::link(cfg, &inputs_args, &flags, &out);
 
@@ -1138,6 +1144,28 @@ pub fn supports_target(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
 
 fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Vec<String> {
     root_value(sess, tid, cfg, name).map(|v| flatten_strs(&v)).unwrap_or_default()
+}
+
+/// このターゲット自身が公開しているヘッダの置き場所
+/// （[ADR-0041](../../../docs/adr/0041-install.md)）。
+///
+/// 合成済みの翻訳環境ではなく、**自分の `public` ブロック**を読む。前者には
+/// 依存が伝播させたものが混ざっており、それは依存が配るものである。
+pub fn public_include_dirs(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<PathBuf> {
+    let target = sess.target(tid);
+    let Some(value) = target.public.get("includes") else { return Vec::new() };
+    let cfg = cfg.for_package(&sess.package(target.package).name);
+    let Some(value) = dowel_eval::specialize(value, &cfg) else { return Vec::new() };
+    // 解決できない基準は、翻訳の段で既に診断されている。
+    let mut ignored = Vec::new();
+    let mut out = Vec::new();
+    for item in flatten(&value) {
+        let Some(abs) = absolute_path(sess, &item, Path::new(""), &mut ignored) else { continue };
+        if !out.contains(&abs) {
+            out.push(abs);
+        }
+    }
+    out
 }
 
 /// 版付きの実体の隣に、版を持たない名前を置く

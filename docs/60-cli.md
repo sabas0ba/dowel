@@ -276,6 +276,48 @@ the target.
   own), and `launch_error` (it never started). `args` says which invocation
   of the binary this was
 
+## `dowel install`
+
+```
+dowel install [target...] [common options] [build options]
+              --prefix <dir> [--destdir <dir>]
+```
+
+Builds, then **copies** the products under `<prefix>`
+([ADR-0041](adr/0041-install.md)):
+
+```
+$ dowel install --prefix=/opt/myapp
+installed: /opt/myapp/bin/app
+installed: /opt/myapp/include/core.h
+installed: /opt/myapp/lib/libcore.so
+installed: /opt/myapp/lib/libcore.so.2
+```
+
+- `bin` targets land in `bin/`, `lib` targets in `lib/`. `test` and `bench`
+  are not installed — they check the thing rather than being it. Naming
+  targets overrides that default
+- A library brings the contents of its own `public.includes` directories
+  under `include/`. That block is the declaration that says a consumer
+  compiles against those directories
+- A versioned shared library brings its unversioned name as a symlink
+  ([ADR-0040](adr/0040-shared-library-version.md)), and shared libraries a
+  installed executable needs are copied too, including from other packages
+- Nothing is rebuilt: what was tested and what is shipped are the same bytes
+
+Installed executables find their libraries **relative to themselves**, so
+the prefix can be moved and the build tree deleted. This works because every
+artifact linking a shared library records `$ORIGIN/../lib` (`@loader_path`
+on macOS) beside the build-tree path.
+
+| Option | Meaning |
+|---|---|
+| `--prefix <dir>` | Where to install. **Required** — `/usr/local` needs root, and a writable default would be a directory nobody wants |
+| `--destdir <dir>` | Prepend this to every destination, for staging a package. `--prefix=/usr --destdir=/tmp/pkg` writes `/tmp/pkg/usr/...`. The recorded search paths are relative, so a staged tree and a final one behave the same |
+
+There is no uninstall and no record of what was written. Installing into an
+empty `--destdir` gives the file list.
+
 ## `dowel bench`
 
 ```

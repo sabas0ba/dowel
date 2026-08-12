@@ -9,6 +9,7 @@ pub mod dump;
 pub mod exec;
 pub mod exports;
 pub mod glob;
+pub mod install;
 pub mod migrate;
 pub mod plan;
 pub mod probe;

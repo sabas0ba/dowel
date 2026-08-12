@@ -24,6 +24,8 @@ Commands:
     check              Evaluate the manifests and report diagnostics. Does not build.
     build [target]     Build. With no target, builds every bin, test, and bench.
     test [target]      Build and run test targets. With no target, runs every test.
+    install [target]   Build, then copy the products under --prefix. With no target, installs
+                       every bin and lib of this package.
     bench [target]     Build bench targets and measure their wall-clock time.
     inspect [target]   Build, then run the tools declared in [<kind>.<name>.inspect] and
                        show what they report. With no target, inspects everything declared.
@@ -80,6 +82,10 @@ test options:
         --debug-failed       Open the failing test under the debugger instead
         --test-jobs <n>      Run this many tests at once (default: 1)
 
+install options:
+        --prefix <dir>       Where to install. Required; there is no default
+        --destdir <dir>      Prepend this to every destination, for staging a package
+
 bench options:
         --iterations <n>     Runs per benchmark (default: 10); min and median are reported
 
@@ -118,6 +124,10 @@ pub enum Command {
         targets: Vec<String>,
     },
     Test {
+        targets: Vec<String>,
+    },
+    /// 組んだものを prefix の下へ写す（[ADR-0041](../../../docs/adr/0041-install.md)）
+    Install {
         targets: Vec<String>,
     },
     /// 対象を組んで壁時計を計測する（ADR-0025）
@@ -186,6 +196,10 @@ pub struct Options {
     pub config: String,
     /// `cache gc --older-than=<日数>`（ADR-0037）
     pub older_than: Option<u64>,
+    /// `install --prefix=<dir>`。入れる先の根（ADR-0041）
+    pub prefix: Option<PathBuf>,
+    /// `install --destdir=<dir>`。段取り用に、先頭へ継ぐディレクトリ
+    pub destdir: Option<PathBuf>,
     pub target: Option<String>,
     pub features: Vec<String>,
     pub default_features: bool,
@@ -225,6 +239,8 @@ impl Default for Options {
             dep_name: None,
             config: "debug".into(),
             older_than: None,
+            prefix: None,
+            destdir: None,
             target: None,
             features: Vec::new(),
             default_features: true,
@@ -316,6 +332,10 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                 opts.older_than =
                     Some(v.parse().map_err(|_| format!("`--older-than` takes days (got `{v}`)"))?);
             }
+            // 入れる先（ADR-0041）。既定は持たない——`/usr/local` は
+            // 権限を要し、書ける既定は誰の役にも立たない。
+            "--prefix" => opts.prefix = Some(PathBuf::from(take("--prefix")?)),
+            "--destdir" => opts.destdir = Some(PathBuf::from(take("--destdir")?)),
             "--target" => opts.target = Some(take("--target")?),
             "--features" => {
                 let v = take("--features")?;
@@ -501,6 +521,14 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
                 );
             }
             Command::Test { targets: positional }
+        }
+        "install" => {
+            // 入れる先に既定は無い（ADR-0041）。`/usr/local` は権限を要し、
+            // 書ける既定は誰の役にも立たない。
+            if opts.prefix.is_none() {
+                return Err("`install` needs a destination: `dowel install --prefix=<dir>`".into());
+            }
+            Command::Install { targets: positional }
         }
         "bench" => Command::Bench { targets: positional },
         "inspect" => Command::Inspect { targets: positional },

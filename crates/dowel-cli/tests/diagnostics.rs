@@ -1072,6 +1072,11 @@ const UNCOVERED: &[(&str, &str)] = &[
         "needs a resolvable system package; the case harness cannot set PKG_CONFIG_PATH. \
          covered by the e2e with a .pc fixture",
     ),
+    (
+        "uninstallable-headers",
+        "raised by `dowel install`, whose `--prefix` is a path the case harness cannot spell \
+         (its arguments are static). covered by the e2e",
+    ),
 ];
 
 /// ソースに現れる安定コードを集める。
