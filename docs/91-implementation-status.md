@@ -865,10 +865,25 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   release — whoever can replace the tarball can replace the checksum. What
   separates the two paths is not the hash but what they prove: a source
   build shows the binary came from *this* commit, and nothing in a
-  published asset carries that. `install` says which path it took. Assets
-  are produced by `.github/workflows/release.yml`, whose naming is the
-  same decision written in a second place, so the e2e constructs the same
-  layout to keep them from drifting
+  published asset carries that. `install` says which path it took, and the
+  record keeps it: `origin` carries `from=asset` / `from=source` and the
+  verified `asset_sha256`, and `dowelup list` marks each version. Without
+  that, a version installed months ago cannot be told apart from one that
+  quietly fell back — and the fallback is silent by design, so "meant to
+  fetch, actually built" happens without anyone noticing (issue #146). The
+  path is not accumulated the way specifiers are: one file on disk arrived
+  one way, and re-installing an already-present sha keeps what is recorded.
+  Assets are produced by `.github/workflows/release.yml`, whose naming is
+  the same decision written in a second place, so the e2e constructs the
+  same layout to keep them from drifting
+- A failed fetch says why, naming the tool that actually ran. `wget` was
+  run with `--quiet`, which silences errors along with progress, so the
+  reason came out empty; and only the last attempt's reason was kept, so
+  the name printed could be a tool that is not even installed while the
+  real failure (curl's) was discarded (issue #145). Every attempt's reason
+  is now collected, and the reason the asset path was abandoned is repeated
+  if the source build then fails — otherwise the last words a user reads
+  are about `cargo` rather than about the asset
 
 ### Migration (`dowel-build`)
 
@@ -982,7 +997,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (708 tests):
+Current breakdown (711 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -996,7 +1011,7 @@ Current breakdown (708 tests):
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (73 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
-| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 7 |
+| `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
 | `startup` | startup-time measurement (informational; machine noise does not fail the run) | — |
 

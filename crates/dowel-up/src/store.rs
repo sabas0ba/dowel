@@ -68,11 +68,39 @@ impl Home {
 }
 
 #[derive(Debug)]
+/// この実体がどう届いたか（[ADR-0036](../../../docs/adr/0036-prebuilt-distribution.md)、
+/// issue #146）。
+///
+/// ADR-0036 は2つの経路の違いを信用の根に置いている——ソースからのビルドは
+/// 「そのコミットから出た」ことを示し、事前ビルドは「配られたバイトが公開者の
+/// 一覧と一致する」ことしか示さない。どちらであるかが残らなければ、入った
+/// バイナリについて何を言ってよいかが後から決まらない。
+pub enum Arrival {
+    /// 公開された資産。検めた digest を添える
+    Asset { sha256: String },
+    /// このコミットから組んだもの
+    Source,
+}
+
+impl Arrival {
+    fn name(&self) -> &'static str {
+        match self {
+            Arrival::Asset { .. } => "asset",
+            Arrival::Source => "source",
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Installed {
     pub sha: String,
     /// この sha を解決した指定子。入れた順。同じコミットを指す指定子は
     /// 複数ありうる（`stable` とそれが指すタグ）。
     pub specs: Vec<String>,
+    /// どう届いたか。`asset` か `source`。この記録より前に入れたものは空
+    pub from: Option<String>,
+    /// 資産から入れた場合の、検めた digest
+    pub asset_sha256: Option<String>,
 }
 
 /// インストール済みの一覧。`origin` と実体の双方が揃うものだけを返す。
@@ -86,7 +114,12 @@ pub fn installed(home: &Home) -> Vec<Installed> {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(home.origin(&sha)) else { continue };
-        out.push(Installed { sha, specs: fields(&text, "spec") });
+        out.push(Installed {
+            sha,
+            specs: fields(&text, "spec"),
+            from: fields(&text, "from").pop(),
+            asset_sha256: fields(&text, "asset_sha256").pop(),
+        });
     }
     out.sort_by(|a, b| a.sha.cmp(&b.sha));
     out
@@ -97,12 +130,19 @@ pub fn installed(home: &Home) -> Vec<Installed> {
 /// 同じコミットを別の指定子で入れ直すのは通常の操作である（`stable` は
 /// 最新の release タグそのものを指す）。最初の1つしか残さないと、
 /// install が成功した指定子で `dowel +<指定子>` が選べない（issue #39）。
-pub fn record_origin(home: &Home, sha: &str, spec: &str, url: &str) -> Result<(), String> {
+/// `arrival` が `None` なら、実体は入れ替えていない——既に在るものを別の
+/// 指定子で引き当てただけである。そのときは記録されている経路を保つ。
+/// 上書きすると、組んだものが「資産から来た」ことになりうる。
+pub fn record_origin(
+    home: &Home,
+    sha: &str,
+    spec: &str,
+    url: &str,
+    arrival: Option<&Arrival>,
+) -> Result<(), String> {
     let file = home.origin(sha);
-    let (mut specs, mut urls) = match std::fs::read_to_string(&file) {
-        Ok(text) => (fields(&text, "spec"), fields(&text, "url")),
-        Err(_) => (Vec::new(), Vec::new()),
-    };
+    let previous = std::fs::read_to_string(&file).unwrap_or_default();
+    let (mut specs, mut urls) = (fields(&previous, "spec"), fields(&previous, "url"));
     if !specs.iter().any(|s| s == spec) {
         specs.push(spec.to_string());
     }
@@ -115,6 +155,22 @@ pub fn record_origin(home: &Home, sha: &str, spec: &str, url: &str) -> Result<()
     }
     for u in &urls {
         text.push_str(&format!("url={u}\n"));
+    }
+    // 経路は積まない。ディスクに在る1つの実体は、1つの来かたで届いている。
+    match arrival {
+        Some(a) => {
+            text.push_str(&format!("from={}\n", a.name()));
+            if let Arrival::Asset { sha256 } = a {
+                text.push_str(&format!("asset_sha256={sha256}\n"));
+            }
+        }
+        None => {
+            for key in ["from", "asset_sha256"] {
+                for v in fields(&previous, key) {
+                    text.push_str(&format!("{key}={v}\n"));
+                }
+            }
+        }
     }
     std::fs::write(&file, text).map_err(|e| format!("cannot write {}: {e}", file.display()))
 }
@@ -262,10 +318,14 @@ mod tests {
             Installed {
                 sha: "aaa1111111111111111111111111111111111111".to_string(),
                 specs: vec!["nightly".to_string()],
+                from: None,
+                asset_sha256: None,
             },
             Installed {
                 sha: "aab2222222222222222222222222222222222222".to_string(),
                 specs: vec!["branch:feature".to_string()],
+                from: None,
+                asset_sha256: None,
             },
         ];
         assert_eq!(match_installed(&list, "aaa").unwrap().specs, ["nightly"]);
@@ -285,16 +345,33 @@ mod tests {
         let sha = "aaa1111111111111111111111111111111111111";
         std::fs::create_dir_all(home.version_dir(sha)).unwrap();
 
-        record_origin(&home, sha, "stable", "https://example.invalid/up").unwrap();
-        record_origin(&home, sha, "tag:v0.9.0", "https://example.invalid/up").unwrap();
+        let url = "https://example.invalid/up";
+        let asset = Arrival::Asset { sha256: "ff".repeat(32) };
+        record_origin(&home, sha, "stable", url, Some(&asset)).unwrap();
+        // 同じ実体を別の指定子で引き当てただけ。経路は保たれる（issue #146）。
+        record_origin(&home, sha, "tag:v0.9.0", url, None).unwrap();
         // 同じ指定子の入れ直しは重複させない。
-        record_origin(&home, sha, "stable", "https://example.invalid/up").unwrap();
+        record_origin(&home, sha, "stable", url, None).unwrap();
 
         let text = std::fs::read_to_string(home.origin(sha)).unwrap();
         assert_eq!(fields(&text, "spec"), ["stable", "tag:v0.9.0"]);
         assert_eq!(fields(&text, "url"), ["https://example.invalid/up"]);
+        // 経路は積まない。ディスクの1つの実体は1つの来かたで届いている。
+        assert_eq!(fields(&text, "from"), ["asset"]);
+        assert_eq!(fields(&text, "asset_sha256"), ["ff".repeat(32)]);
 
-        let list = vec![Installed { sha: sha.to_string(), specs: fields(&text, "spec") }];
+        // 実体を入れ替えれば、経路も入れ替わる。
+        record_origin(&home, sha, "stable", url, Some(&Arrival::Source)).unwrap();
+        let text = std::fs::read_to_string(home.origin(sha)).unwrap();
+        assert_eq!(fields(&text, "from"), ["source"]);
+        assert!(fields(&text, "asset_sha256").is_empty(), "{text}");
+
+        let list = vec![Installed {
+            sha: sha.to_string(),
+            specs: fields(&text, "spec"),
+            from: None,
+            asset_sha256: None,
+        }];
         assert!(match_installed(&list, "stable").is_ok());
         assert!(match_installed(&list, "tag:v0.9.0").is_ok());
     }

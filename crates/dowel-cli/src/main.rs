@@ -1611,7 +1611,13 @@ fn schema_dump() -> String {
     w.end_array();
 
     w.key("cfg").begin_object();
-    w.field_str("status", "provisional; under discussion as Q1 in docs/99-open-questions.md");
+    // 読むのは道具である。「暫定」と言われた語彙を当てにする理由は無いので、
+    // 決まったこと——閉じていること、どう増えるか——をそのまま述べる
+    // （ADR-0034、issue #143）。
+    w.field_str(
+        "status",
+        "closed; grows only by an ADR, one key at a time, with a domain (ADR-0034)",
+    );
     w.key("keys").begin_array();
     for (ns, name, domain, doc) in VOCABULARY {
         w.begin_object();

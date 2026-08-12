@@ -55,11 +55,13 @@ fn with_scheme(base: &str) -> String {
 /// 取れなかった理由。呼び出し側はこれを見てソースへ落ちる。
 pub struct Unavailable(pub String);
 
-/// 資産を取り、ハッシュを検め、開いて実行ファイルの場所を返す。
+/// 資産を取り、ハッシュを検め、開いて実行ファイルの場所と、検めた digest を
+/// 返す。digest を返すのは、後から「どの資産が入ったか」を突き合わせられる
+/// ようにするためである（issue #146）。
 ///
 /// 検証は**開く前**に行う。開くという操作は、書庫の中身に「どこへ置くか」
 /// を決めさせる操作である（ADR-0029 と同じ判断）。
-pub fn fetch(work: &Path, upstream: &str, tag: &str) -> Result<PathBuf, Unavailable> {
+pub fn fetch(work: &Path, upstream: &str, tag: &str) -> Result<(PathBuf, String), Unavailable> {
     let url = asset_url(upstream, tag);
     let archive = work.join(asset_name(tag));
     std::fs::create_dir_all(work)
@@ -97,7 +99,7 @@ pub fn fetch(work: &Path, upstream: &str, tag: &str) -> Result<PathBuf, Unavaila
     let binary = find_binary(&unpacked).ok_or_else(|| {
         Unavailable(format!("the asset contains no `dowel` binary ({})", unpacked.display()))
     })?;
-    Ok(binary)
+    Ok((binary, actual))
 }
 
 /// `<64桁> <名前>` でも、64桁だけでも読む。GNU の `sha256sum` は前者を書く。

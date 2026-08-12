@@ -131,7 +131,8 @@ pub fn install(home: &Home, url: &str, spec: &Spec, from_source: bool) -> Result
     if home.bin(&sha).is_file() {
         // 実体は再利用するが、この指定子で解決したという記録は残す。
         // 残さないと、成功した指定子で `+<指定子>` が選べない（issue #39）。
-        store::record_origin(home, &sha, &spec.to_string(), url)?;
+        // 実体は入れ替えていないので、どう届いたかの記録は保つ。
+        store::record_origin(home, &sha, &spec.to_string(), url, None)?;
         return Ok(Acquired { sha, already_installed: true });
     }
     let work = home.workdir(&sha);
@@ -144,13 +145,20 @@ pub fn install(home: &Home, url: &str, spec: &Spec, from_source: bool) -> Result
 
     // 事前ビルドが在るのは release タグだけである（ADR-0036）。タグを
     // 経由しない指定子は、そのままソースへ落ちる。
+    let mut abandoned: Option<String> = None;
     if !from_source {
         match &tag {
             Some(tag) => match prebuilt::fetch(&work, url, tag) {
-                Ok(binary) => {
+                Ok((binary, digest)) => {
                     place(home, &sha, &binary)?;
                     eprintln!("installed {sha} from a release asset (verified by sha256)");
-                    store::record_origin(home, &sha, &spec.to_string(), url)?;
+                    store::record_origin(
+                        home,
+                        &sha,
+                        &spec.to_string(),
+                        url,
+                        Some(&store::Arrival::Asset { sha256: digest }),
+                    )?;
                     let _ = std::fs::remove_dir_all(&work);
                     return Ok(Acquired { sha, already_installed: false });
                 }
@@ -160,11 +168,20 @@ pub fn install(home: &Home, url: &str, spec: &Spec, from_source: bool) -> Result
                 Err(prebuilt::Unavailable(why)) => {
                     let _ = std::fs::remove_dir_all(&work);
                     eprintln!("no usable release asset ({why}); building from source");
+                    abandoned = Some(why);
                 }
             },
             None => eprintln!("`{spec}` does not name a release; building from source"),
         }
     }
+
+    // 資産の経路を諦めた理由は、ここから先の失敗まで持ち越す。組む側が
+    // 落ちると最後に残る言葉は「cargo が無い」になり、利用者の実際の問題
+    // ——資産が取れなかったこと——がどこにも出ない（issue #145）。
+    let because = |e: String| match &abandoned {
+        Some(why) => format!("{e}\n  the release asset was not usable: {why}"),
+        None => e,
+    };
 
     eprintln!("checking out {sha}");
     let mirror = home.mirror();
@@ -175,7 +192,7 @@ pub fn install(home: &Home, url: &str, spec: &Spec, from_source: bool) -> Result
     // ロックがあれば従う（再現性）。無い版はそのままビルドする。
     let locked = work.join("Cargo.lock").is_file();
     eprintln!("building {sha} (cargo build --release{})", if locked { " --locked" } else { "" });
-    proc::cargo_build(&work, locked)?;
+    proc::cargo_build(&work, locked).map_err(because)?;
     let built = work.join("target").join("release").join("dowel");
     if !built.is_file() {
         return Err(format!(
@@ -185,7 +202,7 @@ pub fn install(home: &Home, url: &str, spec: &Spec, from_source: bool) -> Result
     }
     place(home, &sha, &built)?;
     eprintln!("installed {sha} built from source");
-    store::record_origin(home, &sha, &spec.to_string(), url)?;
+    store::record_origin(home, &sha, &spec.to_string(), url, Some(&store::Arrival::Source))?;
     // 成果物を置いた後の作業木は要らない。失敗した場合は調査のために残る。
     let _ = std::fs::remove_dir_all(&work);
     Ok(Acquired { sha, already_installed: false })

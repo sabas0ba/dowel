@@ -760,8 +760,9 @@ fn schema_dump_works_without_a_manifest() {
     r.stdout_contains("\"merge\": \"error_on_conflict\"");
     r.stdout_contains("\"name\": \"includes\"");
     r.stdout_contains("\"name\": \"cfg.opt\"");
-    // 語彙が暫定であることが出力自体から分かる。
-    r.stdout_contains("Q1");
+    // 語彙が閉じていることが出力自体から分かる（ADR-0034、issue #143）。
+    // 読むのは道具であり、「暫定」と言われた語彙を当てにする理由は無い。
+    r.stdout_contains("ADR-0034");
 }
 
 #[test]
@@ -4245,6 +4246,26 @@ fn the_target_vocabulary_is_in_the_schema_dump() {
     r.stdout_contains("\"none\"");
     // `host.*` は残る。
     r.stdout_contains("\"name\": \"host.os\"");
+
+    // 語彙が閉じていることは、機械の側にも要る情報である。「暫定」と
+    // 言われた語彙を当てにする理由は無い（ADR-0034、issue #143）。
+    r.stdout_contains("\"status\": \"closed;");
+    assert!(
+        !r.stdout.contains("provisional"),
+        "the schema still calls it provisional:\n{}",
+        r.stdout
+    );
+
+    // 人が読む側と食い違わない。診断も閉じていると述べている。
+    p.write("dowel.toml", "[package]\nname = \"x\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\nprivate.flags = [\"-x\" when cfg.sanitizer]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("the vocabulary is closed");
 }
 
 /// MSVC の様式（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)、

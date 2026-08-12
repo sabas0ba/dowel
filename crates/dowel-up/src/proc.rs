@@ -83,21 +83,33 @@ pub fn download(url: &str, to: &Path) -> Result<(), String> {
     let attempts: [(&str, Vec<&str>); 2] = [
         // `--fail` が無いと、404 の本文を書庫として保存してしまう。
         ("curl", vec!["--fail", "--silent", "--show-error", "--location", url, "--output", &out]),
-        ("wget", vec!["--quiet", url, "-O", &out]),
+        // `--quiet` ではなく `--no-verbose`。前者は進捗と一緒に**誤りも**
+        // 黙らせるので、失敗の理由が空になる（issue #145）。
+        ("wget", vec!["--no-verbose", url, "-O", &out]),
     ];
-    let mut last = String::new();
+    // 理由は全ての試行ぶん集める。最後のものだけ残すと、実際に失敗した
+    // 道具ではなく、入っていない道具の名前が理由なしで出ることになる。
+    let mut why = Vec::new();
     for (program, args) in attempts {
         match Command::new(program).args(&args).stdin(Stdio::null()).output() {
-            // 道具が無いだけなら次を試す。落とすのは最後の1つが失敗したとき。
-            Err(e) => last = format!("cannot run {program}: {e}"),
+            // 道具が無いだけなら次を試す。落とすのは全てが失敗したとき。
+            Err(e) => why.push(format!("cannot run {program}: {e}")),
             Ok(o) if o.status.success() => return Ok(()),
             Ok(o) => {
                 let _ = std::fs::remove_file(to);
-                last = format!("{program} failed: {}", String::from_utf8_lossy(&o.stderr).trim());
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                let stderr = stderr.trim();
+                // 何も言わずに終わる道具もある。終了状態しか無いなら、
+                // せめてそれを述べる——空の括弧は何も伝えない。
+                why.push(if stderr.is_empty() {
+                    format!("{program} failed ({})", o.status)
+                } else {
+                    format!("{program} failed: {stderr}")
+                });
             }
         }
     }
-    Err(last)
+    Err(why.join("; "))
 }
 
 /// 書庫を開く。`tar` へ委譲する。

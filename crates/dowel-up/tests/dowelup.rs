@@ -398,3 +398,88 @@ fn a_specifier_without_a_release_builds_from_source() {
     assert!(r.stderr.contains("does not name a release"), "stderr:\n{}", r.stderr);
     assert!(r.stderr.contains("built from source"), "stderr:\n{}", r.stderr);
 }
+
+#[test]
+fn the_record_says_which_way_each_version_arrived() {
+    // ADR-0036 は2つの経路の違いを信用の根に置いている。どちらであるかが
+    // 残らなければ、目の前のバイナリについて「そのコミットから組まれた」と
+    // 言ってよいのか「公開者を信用している」だけなのかが決まらない
+    // （issue #146）。
+    //
+    // 退避があるため、これは意図せず起きる。資産が無ければ黙って組む側へ
+    // 回るので、「取ったつもりが組んでいた」は普通に起きる。
+    let root = scratch("arrival");
+    let up = upstream(&root);
+    publish_asset(Path::new(&up.url), "v0.1.0", "prebuilt");
+    let home = root.join("home");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    dowelup(&home, &project, &["--upstream", &up.url, "install", "0.1.0"]).ok();
+    let origin = std::fs::read_to_string(home.join("versions").join(&up.c1).join("origin"))
+        .expect("no origin record");
+    assert!(origin.contains("from=asset"), "{origin}");
+    // 検めた digest も残す。後から突き合わせられる。
+    assert!(origin.lines().any(|l| l.starts_with("asset_sha256=")), "{origin}");
+
+    // 「何が入っているか」を尋ねる道具に、「どういう資格で入っているか」が出る。
+    let r = dowelup(&home, &project, &["list"]).ok();
+    assert!(r.stdout.contains("[asset]"), "stdout:\n{}", r.stdout);
+
+    // 同じ sha を別の指定子で引き当てても、実体は入れ替わらない。経路の
+    // 記録も入れ替わってはならない。
+    dowelup(&home, &project, &["--upstream", &up.url, "install", "stable"]).ok();
+    let origin =
+        std::fs::read_to_string(home.join("versions").join(&up.c1).join("origin")).unwrap();
+    assert!(origin.contains("from=asset"), "{origin}");
+    assert_eq!(origin.matches("from=").count(), 1, "the path is not accumulated:\n{origin}");
+}
+
+#[test]
+fn a_version_built_from_source_is_recorded_as_such() {
+    // 対になる検査。これが無いと、上は「常に asset と書く」でも通る。
+    let root = scratch("arrival-source");
+    let up = upstream(&root);
+    publish_asset(Path::new(&up.url), "v0.1.0", "prebuilt");
+    let home = root.join("home");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    dowelup(&home, &project, &["--upstream", &up.url, "--from-source", "install", "0.1.0"]).ok();
+    let origin =
+        std::fs::read_to_string(home.join("versions").join(&up.c1).join("origin")).unwrap();
+    assert!(origin.contains("from=source"), "{origin}");
+    // 資産の digest は、資産から来たときにだけ在る。
+    assert!(!origin.contains("asset_sha256="), "{origin}");
+
+    let r = dowelup(&home, &project, &["list"]).ok();
+    assert!(r.stdout.contains("[source]"), "stdout:\n{}", r.stdout);
+}
+
+#[test]
+fn a_failed_fetch_says_why_and_names_the_tool_that_ran() {
+    // 取得の失敗はこの機能で最も原因が広く、しかも利用者の機械の側にある
+    // 種類の失敗である——proxy、TLS、DNS、404、社内の遮断。理由の1行が
+    // あれば当たりが付き、無ければ何も分からない（issue #145）。
+    //
+    // しかも失敗は静かに退避する。cargo の無い機械では、最後に残る言葉が
+    // 「cargo が無い」になり、実際の問題を指さない。
+    let root = scratch("fetch-why");
+    let up = upstream(&root);
+    // 資産は publish しない。release タグは在るので、取得は試みて失敗する。
+    let home = root.join("home");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let r = dowelup(&home, &project, &["--upstream", &up.url, "install", "0.1.0"]).ok();
+    assert!(r.stderr.contains("no usable release asset"), "stderr:\n{}", r.stderr);
+    // 括弧の中が空でない。走らせた道具の名前と、その道具の言い分が入る。
+    assert!(
+        r.stderr.contains("curl failed:") || r.stderr.contains("cannot run curl"),
+        "the reason names no tool that ran:\n{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("failed: )"), "the reason is empty:\n{}", r.stderr);
+    // それでも入る。退避の判断そのものは変えていない。
+    assert!(r.stderr.contains("built from source"), "stderr:\n{}", r.stderr);
+}
