@@ -37,6 +37,12 @@ pub struct Plan {
     pub requested: Vec<TargetId>,
     /// ヘッダ依存の取り方（ADR-0027）。様式が決める
     pub deps: crate::toolstyle::Deps,
+    /// 計画に載った共有ライブラリ（[ADR-0038](../../../docs/adr/0038-shared-inside-its-package.md)）。
+    ///
+    /// 同じパッケージの中では書庫の方に繋ぐので、`.so` を要求する者が
+    /// 誰も居なくなりうる。配るために宣言したものが既定のビルドで出て
+    /// こないのは誤りなので、自身の出力として並べる（issue #64 と同じ判断）
+    pub shared_libraries: Vec<PathBuf>,
 }
 
 impl Plan {
@@ -60,6 +66,10 @@ impl Plan {
         for derived in self.derived.values() {
             out.extend(derived.iter().cloned());
         }
+        // 共有ライブラリは、誰も繋がなくても作る。宣言した目的が配ることに
+        // ある以上、「依存として引かれたか」で出来たり出来なかったりしては
+        // ならない（ADR-0038）。
+        out.extend(self.shared_libraries.iter().cloned());
         out
     }
 
@@ -251,12 +261,17 @@ pub fn plan(
         compile_commands: Vec::new(),
         requested: requested.to_vec(),
         deps: toolstyle::deps(cfg),
+        shared_libraries: Vec::new(),
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
     // ターゲット → 依存側がリンクに渡すもの。通常は成果物そのものだが、
     // MSVC の共有ライブラリでは DLL ではなく取り込み用の書庫である
     let mut link_inputs: BTreeMap<TargetId, PathBuf> = BTreeMap::new();
+    // 同じパッケージの中から繋ぐときの入力と、それを作るアクション
+    // （[ADR-0038](../../../docs/adr/0038-shared-inside-its-package.md)）。
+    // 共有ライブラリだけが `link_inputs` と違う値を持つ
+    let mut sibling_inputs: BTreeMap<TargetId, (PathBuf, ActionId)> = BTreeMap::new();
     // ターゲット → 自身のソースに C++ を含むか。リンカの選択が読む
     let mut has_cxx: BTreeMap<TargetId, bool> = BTreeMap::new();
     // C++ コンパイラの実在検査は C++ ソースが現れたときに1度だけ行う。
@@ -545,7 +560,38 @@ pub fn plan(
                         _ => out.clone(),
                     },
                 );
+                plan.shared_libraries.push(out.clone());
                 plan.artifacts.insert(tid, out);
+
+                // 同じパッケージの中では静的に繋ぐ（ADR-0038）。`exports` は
+                // 「一緒に書かれていないコード」に対する境界であり、兄弟の
+                // ターゲットは配る相手ではない——自分の検査が自分の面の外に
+                // 出るのは、境界の引き方が1段ずれている（issue #134）。
+                //
+                // 目的コードは既に位置独立なので、書庫は1回の `ar` で済む。
+                if !ar_toolchain_checked {
+                    ar_toolchain_checked = true;
+                    require_tool(&mut diags, cfg, root_toolchain, "ar", "archiver");
+                }
+                let archive =
+                    build_dir.join("lib").join(toolstyle::archive_name(cfg, &target.name));
+                let objs: Vec<String> = objects.iter().map(|o| o.display().to_string()).collect();
+                let args = toolstyle::archive(cfg, &archive, &objs);
+                let aid = ActionId(plan.actions.len());
+                plan.actions.push(Action {
+                    id: aid,
+                    kind: ActionKind::Archive,
+                    target: tid,
+                    program: cfg.tool("ar").to_string(),
+                    args,
+                    inputs: objects.clone(),
+                    outputs: vec![archive.clone()],
+                    depfile: None,
+                    description: format!("AR {}", rel_display(&build_dir, &archive)),
+                    deps: compile_ids.clone(),
+                });
+                log_trace!("  action[{}] {}", aid.0, plan.actions[aid.0].command_line());
+                sibling_inputs.insert(tid, (archive, aid));
             }
             TableKind::Lib => {
                 // 書庫作成器の実在検査は、書庫を作るときに1度だけ行う。
@@ -589,23 +635,33 @@ pub fn plan(
                 // である（ADR-0027）。
                 let linker = cfg.linker(link_needs_cxx).to_string();
                 // リンク順は依存元が先。静的ライブラリの解決順の要請による。
-                let libs: Vec<PathBuf> = graph
-                    .link_closure(tid)
-                    .into_iter()
-                    .filter(|t| *t != tid)
-                    .filter_map(|t| link_inputs.get(&t).cloned())
-                    .collect();
+                let mut libs: Vec<PathBuf> = Vec::new();
+                let mut extra_deps: Vec<ActionId> = Vec::new();
+                // 同じパッケージの共有ライブラリには、静的な書庫の方で繋ぐ
+                // （ADR-0038）。別のパッケージからは面越しに見る。
+                for t in graph.link_closure(tid).into_iter().filter(|t| *t != tid) {
+                    if let Some((path, aid)) =
+                        link_input(sess, tid, t, &link_inputs, &sibling_inputs)
+                    {
+                        libs.push(path);
+                        match aid {
+                            Some(a) => extra_deps.push(a),
+                            None => extra_deps.extend(producer.get(&t).copied()),
+                        }
+                    }
+                }
                 let mut inputs_args: Vec<String> =
                     objects.iter().map(|o| o.display().to_string()).collect();
                 inputs_args.extend(libs.iter().map(|l| l.display().to_string()));
                 let mut flags = link_flags.clone();
-                // 共有ライブラリに繋ぐなら、実行時にそれを見つける道を
-                // 焼き込む。soname と対で初めて効く（ADR-0030）。
-                if graph
-                    .link_closure(tid)
-                    .into_iter()
-                    .any(|t| t != tid && shared_targets.contains(&t))
-                {
+                // 実行時の探索路が要るのは、**面越しに**共有ライブラリへ
+                // 繋いだときだけである。同じパッケージのものは静的に取り
+                // 込んでいるので、走らせる先に `.so` は要らない。
+                if graph.link_closure(tid).into_iter().any(|t| {
+                    t != tid
+                        && shared_targets.contains(&t)
+                        && sess.target(t).package != sess.target(tid).package
+                }) {
                     flags.extend(toolstyle::runtime_search_path(cfg, &build_dir.join("lib")));
                 }
                 let args = toolstyle::link(cfg, &inputs_args, &flags, &out);
@@ -613,13 +669,7 @@ pub fn plan(
                 let mut inputs = objects.clone();
                 inputs.extend(libs.iter().cloned());
                 let mut deps = compile_ids.clone();
-                deps.extend(
-                    graph
-                        .link_closure(tid)
-                        .into_iter()
-                        .filter(|t| *t != tid)
-                        .filter_map(|t| producer.get(&t).copied()),
-                );
+                deps.extend(extra_deps);
 
                 let id = ActionId(plan.actions.len());
                 plan.actions.push(Action {
@@ -1001,6 +1051,27 @@ fn root_value(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Option
     let value = target.root.get(name)?;
     let cfg = cfg.for_package(&sess.package(target.package).name);
     dowel_eval::specialize(value, &cfg)
+}
+
+/// 依存にリンクするとき、どのファイルを渡すか
+/// （[ADR-0038](../../../docs/adr/0038-shared-inside-its-package.md)）。
+///
+/// 同じパッケージなら静的な書庫、別のパッケージなら成果物そのもの。
+/// `exports` は配る相手に対する境界であり、兄弟のターゲットは配る相手では
+/// ない——パッケージが配布の単位だからである。
+fn link_input(
+    sess: &Session,
+    from: TargetId,
+    to: TargetId,
+    link_inputs: &BTreeMap<TargetId, PathBuf>,
+    sibling_inputs: &BTreeMap<TargetId, (PathBuf, ActionId)>,
+) -> Option<(PathBuf, Option<ActionId>)> {
+    if sess.target(from).package == sess.target(to).package {
+        if let Some((path, aid)) = sibling_inputs.get(&to) {
+            return Some((path.clone(), Some(*aid)));
+        }
+    }
+    link_inputs.get(&to).map(|p| (p.clone(), None))
 }
 
 /// この目標が、この三つ組へ組まれるか（issue #126）。

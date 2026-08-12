@@ -531,7 +531,12 @@ What differs between the two sources:
   `includes`, and fragments, and it names in-project `dependencies`, which
   become `target(...)`. External `-l...` libraries become `link_flags`
 - **Meson** hands over one `parameters` array per target, so dowel does the
-  sorting (`-I` → `includes`, `-D` → `defines`, the rest → `flags`). Its
+  sorting: `-I` → `includes`, `-D` → `defines`, `-Wl,` / `-l` / `-L` →
+  `link_flags`, other flags → `flags`. **The array also carries link
+  inputs** — the archives a target linked, and the `ar` argument string of
+  a static library (`csrDT`). Those are not compile flags: `cc` would read
+  them as input files and the draft would not build, so they are dropped
+  and listed as comments naming what they were (issue #135). Its
   introspection does **not** say which targets link against which, so
   `deps` is left empty and has to be written by hand — guessing from output
   filenames would put wrong edges in a draft that is already unverified.

@@ -428,6 +428,18 @@ changes, only the speed.
     `dowel bench` prepend that directory to the child's `PATH` instead,
     after the declared `env` is applied so a case that sets `env` does not
     lose it
+  - **Within its own package the library links statically**
+    ([ADR-0038](adr/0038-shared-inside-its-package.md)): a shared library
+    also produces an archive, and sibling targets link that. `exports` is
+    a boundary toward code not written alongside it, and the package is
+    the unit of distribution — declaring `linkage = "shared"` used to stop
+    the library's own tests from linking, since internal names are not on
+    the surface (issue #134). Testing only the public surface cannot cover
+    what is behind it, which is why every system has this (CMake's
+    `OBJECT`, Meson's `objects:`, Cargo's in-crate tests). The objects are
+    compiled once; the archive costs one `ar` run. The shared object is
+    built even when nothing links it, since shipping it is the reason to
+    declare one
   - Symbol versioning and installation are not implemented, and nothing
     verifies that a name in `exports` exists
 - Per-language flags: `flags` applies to every language, `c_flags` /
@@ -805,7 +817,12 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   already sorted into `defines` / `includes` / fragments and names
   in-project `dependencies`, which become `target(...)`. Meson hands over
   one `parameters` array per target, so the sorting is dowel's (one rule,
-  shared by both readers), and its introspection does not say which targets
+  shared by both readers). That array mixes in **link inputs**: the
+  archives the target linked, and the `ar` argument string of a static
+  library (`csrDT`). Left in `flags` they reach the compiler as input
+  files and the draft does not build (issue #135), so `-Wl,` / `-l` / `-L`
+  move to `link_flags` and anything that is not a flag at all is dropped
+  and named in a comment. Its introspection does not say which targets
   link against which — `deps` is therefore left empty for Meson imports
   rather than guessed from output filenames, which would put wrong edges
   into a draft that is already unverified. Meson's generated sources are
@@ -879,16 +896,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (682 tests):
+Current breakdown (687 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 355 |
+| `unit-*` | per-crate unit tests | 357 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 232 |
+| `e2e` | compile real C and C++, run it, check the output | 235 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (70 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
