@@ -1953,6 +1953,16 @@ impl Session {
         label(&self.package(t.package).name, &t.name)
     }
 
+    /// 成果物を作る全ターゲット（issue #141）。
+    ///
+    /// 「全部を検査する」入口——`check`、`migrate verify`、言語サーバ——が
+    /// 読む一覧である。ここに雛型や実行ラッパを混ぜると、計画は名指しされた
+    /// と受け取り、`not-a-target` を出す。3箇所が各々 `sess.targets` を
+    /// そのまま数えていたので、3箇所とも同じ誤りを持っていた。
+    pub fn buildable_targets(&self) -> Vec<TargetId> {
+        self.targets.iter().filter(|t| t.kind.is_target()).map(|t| t.id).collect()
+    }
+
     /// `pkg:name` または `name` でターゲットを引く。
     /// 名前のみの指定は、一意に定まる場合に限り受け付ける。
     pub fn find_target(&self, spec: &str) -> Result<TargetId, String> {

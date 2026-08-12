@@ -420,7 +420,13 @@ changes, only the speed.
   no special case enters the merge algebra and `dowel why` still names the
   template's line. A template holds settings only (root properties are
   refused, which is also why templates do not use templates), produces no
-  artifact, and is `not-a-target` when named on the command line
+  artifact, and is `not-a-target` when named on the command line. Declaring
+  one is not: `check`, `migrate verify`, and the language server enumerate
+  the targets that produce an artifact, and each had been counting every
+  declared table instead — so the plan received the template as a request
+  and refused it, and a package that used a template could not pass `check`
+  at all (issue #141). One shared enumeration now serves all three.
+  `check` also refuses a target name outright rather than dropping it
 - Shared libraries: `[lib.<name>] linkage = "shared"`
   ([ADR-0030](adr/0030-shared-libraries.md)) links `lib<name>.so` /
   `lib<name>.dylib` / `<name>.dll` instead of an archive.
@@ -962,16 +968,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (704 tests):
+Current breakdown (706 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 361 |
+| `unit-*` | per-crate unit tests | 362 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 248 |
+| `e2e` | compile real C and C++, run it, check the output | 249 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (73 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

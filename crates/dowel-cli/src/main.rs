@@ -235,17 +235,18 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             // アクションは生成するだけで実行せず、何も書かない。
             //
             // 併合の診断（衝突・ABI 不一致）も compile_env を経由して出る。
-            // 対象は全ターゲット。到達しないライブラリも検査の対象である。
-            let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
+            // 対象は成果物を作る全ターゲット。到達しないライブラリも検査の
+            // 対象である。雛型は含めない——計画は「名指しされた」と受け取り、
+            // 何も名指ししていない `check` が `not-a-target` で落ちる
+            // （issue #141）。
+            let all = sess.buildable_targets();
             let (_, pdiags) = build_plan::plan(&sess, &g, &cfg, &all);
             sess.diagnostics.extend(pdiags);
             let failed = report(&sess, opts);
             if !failed {
-                eprintln!(
-                    "check passed: {} packages, {} targets",
-                    sess.packages.len(),
-                    sess.targets.len()
-                );
+                // 数えるのは成果物を作るものである。雛型を混ぜると、
+                // 「雛型は目標ではない」と述べている診断と食い違う。
+                eprintln!("check passed: {} packages, {} targets", sess.packages.len(), all.len());
             }
             Ok(exit_code(failed))
         }
@@ -258,7 +259,7 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
                 .map_err(|e| format!("cannot read the reference `{reference}`: {e}"))?;
             let entries = dowel_build::migrate::read_reference(&text)
                 .map_err(|e| format!("cannot use `{reference}`: {e}"))?;
-            let all: Vec<dowel_model::TargetId> = sess.targets.iter().map(|t| t.id).collect();
+            let all = sess.buildable_targets();
             let (p, pdiags) = build_plan::plan(&sess, &g, &cfg, &all);
             sess.diagnostics.extend(pdiags);
             if report(&sess, opts) {

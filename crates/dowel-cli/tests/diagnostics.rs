@@ -575,7 +575,8 @@ const CASES: &[Case] = &[
             "[bin.app]\nsources = glob(\"src/*.c\")\n\n[template.t]\n\n\
              [template.t.private]\nflags = [\"-DX\"]\n",
         )],
-        args: &["check", "--message-format=json", "t"],
+        // 名指しの経路である。`check` は目標を取らない
+        args: &["build", "--message-format=json", "t"],
     },
     Case {
         code: "missing-exports",

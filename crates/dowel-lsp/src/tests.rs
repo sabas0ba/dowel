@@ -487,3 +487,25 @@ fn a_conflict_in_a_dependency_is_reported_at_the_arriving_value() {
         .expect("the dependency's build file got a notification");
     assert_eq!(codes(last), ["merge-conflict"]);
 }
+
+#[test]
+fn a_template_does_not_show_up_as_an_error_in_the_editor() {
+    // 編集中ずっと赤いままになる形だった。`check` と同じ経路を通るので、
+    // 雛型を要求として計画へ渡していた（issue #141）。
+    // マニフェストも開く。開かないと1ファイルで決まる範囲に留まり、
+    // 計画段の経路——不具合の在った側——を通らない。
+    let out = exchange(&[
+        did_open("file:///w/dowel.toml", "[package]\nname = \"w\"\nversion = \"0\"\n"),
+        did_open(
+            "file:///w/dowel.build",
+            "[template.warn]\n\n\
+             [template.warn.private]\nflags = [\"-Wall\"]\n\n\
+             [bin.app]\nuse = [template(\"warn\")]\nsources = [glob(\"src/*.c\")]\n",
+        ),
+    ]);
+    let published: Vec<String> = out.iter().flat_map(codes).collect();
+    assert!(
+        !published.contains(&"not-a-target".to_string()),
+        "the editor should not mark a declared template: {published:?}"
+    );
+}
