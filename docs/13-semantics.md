@@ -132,6 +132,40 @@ Nested lists are flattened completely during merging — a `match` written as
 a list element produces a list-in-a-list when specialized, and one level of
 flattening would silently drop it downstream.
 
+### ABI label components
+
+An `abi` label may be a set of named components instead of one word
+([ADR-0042](adr/0042-abi-label-components.md)):
+
+```toml
+[lib.hashx.public]
+abi = { libc = "musl", cxx_stdlib = "libc++" }
+```
+
+Comparison is per component. Two labels conflict when they name the **same**
+component with different values; a component only one side names is not a
+constraint, and the merged label is the union of everything named. This is
+why the granularity is not fixed anywhere: a declaration that knows only its
+C runtime says only that, and it composes with one that also knows its C++
+standard library.
+
+The component names and their values are a closed vocabulary
+([ADR-0034](adr/0034-closed-vocabulary.md)); anything else is
+`unknown-abi-component`. Two exist today:
+
+| Component | Meaning | Values |
+|---|---|---|
+| `libc` | the C runtime this surface requires | `gnu` / `musl` / `msvc` / `apple` / `none` / `other` |
+| `cxx_stdlib` | the C++ standard library this surface requires | `libstdc++` / `libc++` / `msvc-stl` |
+
+`libc` is also checked against the build itself: a surface requiring `musl`
+built for a gnu triple is `abi-mismatch`, because comparing labels only asks
+who requires what and never asks what this build is. It is the one component
+dowel can read off the target triple (`target.env`).
+
+A label written as one word is still compared whole — it cannot be taken
+apart — so a word meeting a component set is `abi-mismatch`.
+
 ### The `c` ABI label
 
 An `abi` label may name a **boundary** instead of a language

@@ -1823,6 +1823,21 @@ impl TargetSink<'_> {
             }
         }
 
+        // ABI 札を成分で書いた場合、成分の名前と値も閉じた語彙である
+        // （ADR-0042）。綴りを誤った成分は、どちらの側も名指していない
+        // ことになり、比べられずに素通りする——制約を書いたつもりの記述が
+        // 何も制約しない。
+        if def.ty == dowel_eval::Type::AbiLabel {
+            if let dowel_eval::Data::Map(m) = &value.data {
+                for (component, item) in m {
+                    if let Some(d) = self.abi_component_diagnostic(component, item, site) {
+                        self.diagnostics.push(d);
+                        return;
+                    }
+                }
+            }
+        }
+
         let target = &mut self.targets[tid.0];
         if let Some(prev) = target.props(block).get(&name) {
             let prev_site = prev.prov.nearest_site();
@@ -1845,6 +1860,51 @@ impl TargetSink<'_> {
             value.display()
         );
         self.targets[tid.0].props_mut(block).insert(name, value);
+    }
+
+    /// ABI 札の1成分を語彙に照らす（ADR-0042）。
+    ///
+    /// 名前も値も閉じている。開いていると、綴りを誤った成分は「片方しか
+    /// 名指していない成分」として扱われ、比べられずに通る——制約を書いた
+    /// つもりの記述が、何も制約しない。
+    fn abi_component_diagnostic(
+        &self,
+        component: &str,
+        item: &Value,
+        site: Site,
+    ) -> Option<Diagnostic> {
+        use dowel_eval::schema::{abi_component, ABI_COMPONENTS};
+        let at = item.prov.nearest_site().unwrap_or(site);
+        let Some((_, _, domain)) = abi_component(component) else {
+            let known: Vec<&str> = ABI_COMPONENTS.iter().map(|(n, _, _)| *n).collect();
+            let mut d = Diagnostic::error(
+                "unknown-abi-component",
+                format!("`{component}` is not an `abi` component"),
+            )
+            // 位置は札の全体を指す。表の鍵は綴りを保っておらず、値だけを
+            // 指すと「知らない成分」と言いながら値に下線が引かれる。
+            .at(site.file, site.span, format!("`{component}` is written here"))
+            .note(format!("`abi` accepts: {}", known.join(", ")))
+            .note("the vocabulary is closed and grows one component at a time (ADR-0042)");
+            if let Some(c) = closest(component, known) {
+                d = d.note(format!("did you mean `{c}`?"));
+            }
+            return Some(d);
+        };
+        let text = item.as_str()?;
+        if domain.contains(&text) {
+            return None;
+        }
+        let mut d = Diagnostic::error(
+            "unknown-abi-component",
+            format!("`{text}` is not a value of the `abi` component `{component}`"),
+        )
+        .at(at.file, at.span, "not a known value")
+        .note(format!("`{component}` accepts: {}", domain.join(", ")));
+        if let Some(c) = closest(text, domain.iter().copied()) {
+            d = d.suggest(at.file, at.span, format!("\"{c}\""), format!("did you mean `{c}`?"));
+        }
+        Some(d)
     }
 }
 

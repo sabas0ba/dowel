@@ -25,8 +25,9 @@ pub enum Type {
     TargetRef,
     /// `template("name")`（[ADR-0035](../../../docs/adr/0035-template-kind.md)）
     TemplateRef,
-    /// ABI ラベル。`must_equal` で検証される。
-    /// 現時点では文字列で書く。算出は Phase 6（docs/90-roadmap.md）
+    /// ABI 札。`must_equal` で検証される。
+    /// 1つの文字列としても、成分の表としても書ける
+    /// （[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）
     AbiLabel,
     /// スカラ値（`Str` / `Int` / `Bool` のいずれか）。
     /// `defines` のように「値の種類を問わない」プロパティのための型
@@ -90,8 +91,11 @@ impl Type {
         }
         match (self, other) {
             (Type::Cfg(a), b) => a.accepts(b),
-            // ABI ラベルは現状スカラ文字列として書く。
+            // ABI 札は1つの語でも、成分の表でも書ける（ADR-0042）。
+            // 表の値は文字列に限る——成分は「何であるか」を名指す語であり、
+            // 数や真偽で書けるものは無い。
             (Type::AbiLabel, Type::Str) => true,
+            (Type::AbiLabel, Type::Map(v)) => matches!(**v, Type::Str | Type::Unknown),
             // Val はスカラを受ける。
             (Type::Val, Type::Str | Type::Int | Type::Bool | Type::Val) => true,
             // 語は文字列と道の双方を受ける。道は絶対パスへ展開される。

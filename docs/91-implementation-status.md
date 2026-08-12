@@ -244,6 +244,27 @@ changes, only the speed.
   the consumer to copy the library's label — at which point the label stops
   describing an ABI (issue #78). The exemption belongs to the ABI label
   vocabulary, not to `must_equal`, which still means equality everywhere else
+- **An `abi` label may be a set of components**, compared one by one
+  ([ADR-0042](adr/0042-abi-label-components.md)). Two labels conflict when
+  they name the same component with different values; a component only one
+  side names is not a constraint, and the merged label is the union. That is
+  the answer to Q2's dilemma — too coarse makes verification meaningless,
+  too fine breaks sharing — which existed only because the label was one
+  opaque token: with components, granularity is chosen per declaration
+  rather than once for everyone.
+  - Component names and values are a closed vocabulary
+    (ADR-0034's procedure); anything else is `unknown-abi-component`. Two
+    exist: `libc` (`gnu` / `musl` / `msvc` / `apple` / `none` / `other`) and
+    `cxx_stdlib` (`libstdc++` / `libc++` / `msvc-stl`)
+  - `libc` is read off the triple, so `target.env` joined the configuration
+    vocabulary — `target.os` does not answer this axis, since `linux-gnu`
+    and `linux-musl` are the same OS and two runtimes that do not link
+  - A declared `libc` is also checked **against the build**. Comparing
+    labels only asks who requires what, never what this build is; a surface
+    requiring `musl` built for a gnu triple links fine and fails at run time
+  - A label written as one word keeps its meaning and is compared whole.
+    A word and a component set cannot be compared, since a word cannot be
+    taken apart
 - Exhaustiveness checking of `match`: closed-domain `cfg` keys require full
   enumeration, and open-domain `cfg.target` requires `_`
 - The strictness of `dowel.toml` is imposed by validation, not by a separate
@@ -941,19 +962,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (700 tests):
+Current breakdown (704 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 360 |
+| `unit-*` | per-crate unit tests | 361 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 245 |
+| `e2e` | compile real C and C++, run it, check the output | 248 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (72 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (73 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 7 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
@@ -1025,7 +1046,7 @@ cannot be measured with the current fixtures; the scale fixture
 | a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
 
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi`. Nothing verifies that a surface declaring `abi = "c"` really is `extern "C"` — the claim is narrower and more checkable than a language label, and is what an IDL or a header scan would confirm ([ADR-0019](adr/0019-c-abi-label.md)) |
-| automatic composition of the ABI label from its components | Q2; `c_std` / `cxx_std` are now typed values the label can read ([ADR-0016](adr/0016-language-standard-property.md)), but which components make up the label, and at what granularity, is still open |
+| computing an ABI label rather than reading a declared one | Phase 6. The **shape** is decided: a label is a set of components compared one by one ([ADR-0042](adr/0042-abi-label-components.md)), so a computed label can be matched against a declared one component by component. Two components exist (`libc`, `cxx_stdlib`); the rest of Q2's candidates — sanitizers, LTO, exception model, `_GLIBCXX_USE_CXX11_ABI`, MSVC runtime kind — each need their own evidence and domain |
 
 ## Divergences from the design documents
 

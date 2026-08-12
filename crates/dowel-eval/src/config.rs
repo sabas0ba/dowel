@@ -289,6 +289,7 @@ impl Config {
             // で既に与えられている（ADR-0026）。
             (Ns::Target, "os") => Some(CfgValue::Str(triple_os(&self.target).to_string())),
             (Ns::Target, "arch") => Some(CfgValue::Str(triple_arch(&self.target).to_string())),
+            (Ns::Target, "env") => Some(CfgValue::Str(triple_env(&self.target).to_string())),
             (Ns::Tc, name) => self.tools.get(name).map(|t| CfgValue::Str(t.clone())),
             // 機能はパッケージに属する。`feature.x` は「このパッケージで
             // x が有効か」であり、他のパッケージの `x` では真にならない。
@@ -353,6 +354,12 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
         "arch",
         Domain::Finite(TARGET_ARCHES),
         "architecture being built for, read off the target triple",
+    ),
+    (
+        "target",
+        "env",
+        Domain::Finite(TARGET_ENVS),
+        "C runtime being built against, read off the target triple",
     ),
     ("feature", "*", Domain::Bool, "feature flag declared in [features] of dowel.toml"),
     ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
@@ -444,6 +451,14 @@ pub const TARGET_OSES: &[&str] = &["linux", "macos", "windows", "none", "other"]
 /// 対象の構成の値域。同じ理由で `other` を持つ。
 pub const TARGET_ARCHES: &[&str] = &["x86_64", "x86", "aarch64", "arm", "riscv64", "other"];
 
+/// 対象の C ランタイムの値域
+/// （[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
+///
+/// `target.os` が答えない軸である——`linux-gnu` と `linux-musl` は同じ OS で
+/// あって、繋がらない2つの実行環境である。`none` はランタイムを名乗らない
+/// 三つ組、`other` は写像先の無いものを受ける。
+pub const TARGET_ENVS: &[&str] = &["gnu", "musl", "msvc", "apple", "none", "other"];
+
 /// 三つ組から対象の OS を読む。
 ///
 /// 綴りは三つ組のものではなく語彙のものにする（`darwin` ではなく `macos`）。
@@ -489,6 +504,33 @@ pub fn triple_arch(triple: &str) -> &'static str {
     }
 }
 
+/// 三つ組から対象の C ランタイムを読む（ADR-0042）。
+///
+/// 位置では決められない。`x86_64-unknown-linux-musl` は4要素、
+/// `aarch64-apple-darwin` は3要素でランタイムを名乗らない。名乗らないものは
+/// OS が決めている——Apple の platform に libc の選択は無い。
+pub fn triple_env(triple: &str) -> &'static str {
+    for p in triple.split('-') {
+        // `gnueabihf` も `musleabi` も、繋がるかどうかを決める語は頭にある。
+        if p.starts_with("gnu") {
+            return "gnu";
+        }
+        if p.starts_with("musl") {
+            return "musl";
+        }
+        if p == "msvc" {
+            return "msvc";
+        }
+    }
+    match triple_os(triple) {
+        // Apple の platform は libc を選ばせない。三つ組が黙っているのは
+        // 選択肢が無いからであって、不明だからではない。
+        "macos" => "apple",
+        "none" => "none",
+        _ => "other",
+    }
+}
+
 /// ホストのターゲットトリプル。
 ///
 /// 暫定的に OS と arch から組み立てる。ツールチェーンに問い合わせて確定させるのは
@@ -528,6 +570,21 @@ mod tests {
         assert_eq!(triple_arch("armv7-unknown-linux-gnueabihf"), "arm");
         assert_eq!(triple_arch("thumbv7em-none-eabihf"), "arm");
         assert_eq!(triple_arch("s390x-unknown-linux-gnu"), "other");
+
+        // C ランタイムは OS が答えない軸である（ADR-0042）。同じ `linux` の
+        // 下で、繋がらない2つが並ぶ。
+        assert_eq!(triple_env("x86_64-unknown-linux-gnu"), "gnu");
+        assert_eq!(triple_env("x86_64-unknown-linux-musl"), "musl");
+        assert_eq!(triple_env("x86_64-pc-windows-msvc"), "msvc");
+        assert_eq!(triple_env("x86_64-pc-windows-gnu"), "gnu");
+        // 接尾辞が付いても、繋がるかどうかを決める語は頭にある。
+        assert_eq!(triple_env("armv7-unknown-linux-gnueabihf"), "gnu");
+        assert_eq!(triple_env("armv7-unknown-linux-musleabi"), "musl");
+        // Apple の platform は libc を選ばせない。黙っているのは選択肢が
+        // 無いからであって、不明だからではない。
+        assert_eq!(triple_env("aarch64-apple-darwin"), "apple");
+        assert_eq!(triple_env("thumbv7em-none-eabihf"), "none");
+        assert_eq!(triple_env("x86_64-unknown-freebsd"), "other");
     }
 
     #[test]
@@ -549,6 +606,7 @@ mod tests {
                 TARGET_ARCHES.contains(&triple_arch(t)),
                 "`{t}` gave an arch outside the domain"
             );
+            assert!(TARGET_ENVS.contains(&triple_env(t)), "`{t}` gave an env outside the domain");
         }
     }
 

@@ -262,7 +262,7 @@ affects this target only. (The precise formulas are in
 | `cxx_std` | `Str` | `max` | the C++ standard: `c++98` `c++03` `c++11` `c++14` `c++17` `c++20` `c++23` `c++26`. Becomes `-std=` for C++ sources |
 | `link_flags` | `List<Str \| Path>` | `append` | link flags, order-preserving. A `Path` element expands to its absolute path, which is how a linker script inside the package is named (`["-T", file("ld/app.ld")]`) — the link runs in the build directory, so a relative string would not reach it. Unlike the translation properties, these follow the **link closure** even across `private` edges — a static archive cannot carry its own link requirements ([13-semantics.md](13-semantics.md)) |
 | `deps` | `List<DepRef \| TargetRef>` | `append` | edges: `dep("name")` is a package dependency declared in `dowel.toml`; `target("name")` is a target in the same package |
-| `abi` | `AbiLabel` | `must_equal` | ABI label. Every target linked together must declare the same value or the build fails (`abi-mismatch`) before linking. The value `c` is special: it names the **C ABI boundary** rather than a language, matches any label, and never replaces one ([ADR-0019](adr/0019-c-abi-label.md)). Currently a hand-written string; automatic computation is planned |
+| `abi` | `AbiLabel` | `must_equal` | ABI label, written as one word or as a set of components. Targets linked together must not contradict each other, or the build fails (`abi-mismatch`) before linking. Components are compared one by one, so a component only one side names is not a constraint ([ADR-0042](adr/0042-abi-label-components.md)). The word `c` names the **C ABI boundary** rather than a language, matches any label, and never replaces one ([ADR-0019](adr/0019-c-abi-label.md)). Labels are hand-written; automatic computation is planned |
 
 Unknown properties fail with `unknown-property` and an edit-distance
 suggestion; wrong types with `type-mismatch`. `c_std` / `cxx_std` also have
@@ -557,6 +557,7 @@ declares the rest. An unknown key says so and names the alternative.
 | `cfg.target` | open | the target triple (selected by `--target`); `match` on it requires a `_` arm |
 | `target.os` | finite | `linux`, `macos`, `windows`, `none` (bare metal), `other` — the OS **being built for**, read off the triple |
 | `target.arch` | finite | `x86_64`, `x86`, `aarch64`, `arm`, `riscv64`, `other` — the architecture being built for |
+| `target.env` | finite | `gnu`, `musl`, `msvc`, `apple`, `none`, `other` — the C runtime being built against, also read off the triple. `target.os` does not answer this: `linux-gnu` and `linux-musl` are the same OS and two runtimes that do not link ([ADR-0042](adr/0042-abi-label-components.md)) |
 | `host.os` | finite | `linux`, `macos`, `windows` — the machine **doing the building** |
 | `host.arch` | finite | `x86_64`, `aarch64`, `riscv64` |
 | `feature.<name>` | boolean | feature flags declared in `[features]` of `dowel.toml`; undeclared names are diagnosed with a suggestion |

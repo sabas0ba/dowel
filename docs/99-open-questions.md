@@ -19,11 +19,11 @@ configuration identity that does not depend on which toolchain was
 selected. A project's own axes go in `[features]`, which is the second
 layer: dowel declares what it knows, the package declares the rest.
 
-**Which further dimensions belong in it is Q2's question.** The candidates
-— standard library, CRT kind, `_GLIBCXX_USE_CXX11_ABI`, sanitizers, LTO,
-exception model — are exactly the candidate components of the ABI label.
-Adding them before knowing which ones the label needs, and at what
-granularity, would fix the granularity by accident.
+Which further dimensions belong in it is settled the same way, one key per
+ADR. `target.env` joined for the ABI label's `libc` component
+([ADR-0042](adr/0042-abi-label-components.md)); the rest — standard library,
+CRT kind, `_GLIBCXX_USE_CXX11_ABI`, sanitizers, LTO, exception model — wait
+for their own evidence.
 
 ### The vocabulary
 
@@ -34,7 +34,7 @@ The live version is available from `dowel schema dump`.
 | `cfg` | `opt` | `debug` / `release` |
 | `cfg` | `target` | target triple (free-form string) |
 | `host` | `os` / `arch` | build host values |
-| `target` | `os` / `arch` | derived from the target triple; finite ([ADR-0026](adr/0026-target-os-arch.md)) |
+| `target` | `os` / `arch` / `env` | derived from the target triple; finite ([ADR-0026](adr/0026-target-os-arch.md), [ADR-0042](adr/0042-abi-label-components.md)) |
 | `feature` | `<name>` | boolean (only names declared in `[features]` of `dowel.toml`) |
 | `tc` | `c` | identifier of the selected C toolchain |
 | `tc` | `cxx` | identifier of the selected C++ toolchain |
@@ -50,22 +50,6 @@ One domain question is left open rather than settled: whether `cfg.opt`
 should hold more than `debug` / `release` (`relwithdebinfo` and friends).
 Extending a domain is a smaller question than extending the vocabulary,
 and no one has asked for it.
-
-## Q2. ABI label composition
-
-**Status**: deferred. Depends on the outcome of Q1.
-
-The counterpart of Conan's `package_id`. Granularity dominates the design.
-
-- **Too coarse** → verification becomes meaningless (the vcpkg triplet limit)
-- **Too fine** → cache hit rates collapse
-
-Candidate components: toolchain ID, C++ standard version, standard library
-implementation, `_GLIBCXX_USE_CXX11_ABI`, MSVC runtime kind, sanitizers, LTO,
-exception model, floating-point model.
-
-The Phase 0 verification (how many real mismatches are detected) will indicate
-the required granularity.
 
 ## Q4. Store format details
 
