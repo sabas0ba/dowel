@@ -450,7 +450,21 @@ changes, only the speed.
     `-Wl,-u` nor `--no-undefined` turns a missing export into an error
     (measured). A symbol lister that is not on `PATH` skips the check
     rather than failing the build
-  - Symbol versioning and installation are not implemented
+  - **`soversion` declares the ABI generation**
+    ([ADR-0040](adr/0040-shared-library-version.md)) and enters the name:
+    `libcore.so.2`, `libcore.2.dylib`, `libcore-2.dll`. The soname comes
+    from the output's file name, so consumers record the versioned one —
+    which is the point, since a name recorded at link time cannot be
+    corrected afterward. The unversioned name is placed beside it as a
+    symlink; without it `-lcore` finds the archive that sits in the same
+    directory (ADR-0038) and links statically, measured rather than
+    reasoned about. The release is not the generation, so `[package]
+    version` does not supply the number, and declaring nothing keeps the
+    plain name. A negative number is `invalid-soversion`
+  - Symbol versioning *inside* the library (version nodes in the script)
+    and installation are not implemented. macOS's
+    `-compatibility_version` is not set: it is a second, independently
+    checked number that the one declaration does not decide
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` follow it and reach only their own language
 - The language standard is typed: `c_std` / `cxx_std` take a value from a
@@ -905,19 +919,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (690 tests):
+Current breakdown (694 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 358 |
+| `unit-*` | per-crate unit tests | 359 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 237 |
+| `e2e` | compile real C and C++, run it, check the output | 240 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (71 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (72 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 7 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |

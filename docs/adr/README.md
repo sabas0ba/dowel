@@ -46,3 +46,4 @@ was originally written in.
 | [0037](0037-store-gc.md) | The store is collected by compaction when asked, never automatically, and has no size cap | Accepted |
 | [0038](0038-shared-inside-its-package.md) | A shared library's exported surface is a boundary toward its consumers; inside its own package it links statically | Accepted |
 | [0039](0039-exports-are-checked.md) | `exports` is checked against the library that was built, by asking it | Accepted |
+| [0040](0040-shared-library-version.md) | A shared library's ABI generation is declared, and it names the file | Accepted |

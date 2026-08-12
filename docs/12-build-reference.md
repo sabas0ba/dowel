@@ -90,6 +90,7 @@ set.
 | `targets` | `List<Str>` | `append` | triples this target is built for. Empty means every triple. Same spelling as `[package] targets`, narrower reach |
 | `linkage` | `Str` | `replace` | how a `lib` is linked: `static` (the default) or `shared`. Ignored by other kinds |
 | `exports` | `List<Str>` | `append` | the symbols a shared library exports. Required when `linkage = "shared"` |
+| `soversion` | `Int` | `replace` | the ABI generation of a shared library. Enters the file name and the soname ([ADR-0040](adr/0040-shared-library-version.md)). Absent means the library carries no version |
 
 #### Sharing settings between targets
 
@@ -184,6 +185,28 @@ declared it. A misspelling is otherwise silent: the wrong name is simply
 absent from the dynamic symbol table, and the failure appears in someone
 else's build as an undefined reference. If the symbol lister is not
 available the check is skipped, and the build succeeds as before.
+
+**`soversion` declares the ABI generation**
+([ADR-0040](adr/0040-shared-library-version.md)):
+
+```
+[lib.core]
+sources   = glob("src/*.c")
+linkage   = "shared"
+soversion = 2
+exports   = ["core_open", "core_close"]
+```
+
+The library becomes `libcore.so.2` — `libcore.2.dylib` on macOS,
+`libcore-2.dll` on Windows — and consumers record that name, so two
+generations can sit in one directory. The unversioned `libcore.so` is placed
+beside it as a symlink, which is what `-lcore` resolves through.
+
+The number is the ABI generation, not the release: it changes when the
+interface stops being compatible. That is why `[package] version` does not
+supply it — a patch release would otherwise relink every consumer. dowel
+does not decide when the number must change; the author does. Declaring
+nothing keeps the plain name, and a negative number is `invalid-soversion`.
 
 **Within its own package, a shared library is linked statically**
 ([ADR-0038](adr/0038-shared-inside-its-package.md)). `exports` is a

@@ -6014,3 +6014,106 @@ fn a_correct_export_list_says_nothing() {
     r.success();
     assert!(!r.stderr.contains("unexported-symbol"), "stderr:\n{}", r.stderr);
 }
+
+#[test]
+fn a_declared_soversion_names_the_library_and_what_consumers_record() {
+    // 版を書くと、実体の名前と soname の両方がそれになる（ADR-0040）。
+    // 使う側が記録するのは soname であり、版を持たない名前を記録した
+    // 実行ファイルは、次の世代が同じ名前で置かれた時点で黙って壊れる。
+    let p = Project::new("soversion");
+    p.write("core/dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\n\
+         sources   = [file(\"src/core.c\")]\n\
+         linkage   = \"shared\"\n\
+         soversion = 2\n\
+         exports   = [\"core_open\"]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("core/include/core.h", "#pragma once\nint core_open(void);\n");
+    p.write("core/src/core.c", "int core_open(void) { return 42; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"core\"\npath = \"../core\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"core.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", core_open()); return 0; }\n",
+    );
+
+    p.run("app", &["build"]).success();
+    let out = build_dir(&p.path("app"), "debug");
+    let versioned = out.join("lib/libcore.so.2");
+    assert!(versioned.is_file(), "no versioned library at {}", versioned.display());
+    assert!(!out.join("lib/libcore.so").is_file() || out.join("lib/libcore.so").is_symlink());
+
+    // 版を持たない名前は実体の隣に置かれ、実体を指す。`-lcore` が
+    // 見つけるのはこの名前である。
+    let alias = out.join("lib/libcore.so");
+    let points_at = std::fs::read_link(&alias).expect("no unversioned name beside the library");
+    assert_eq!(points_at, std::path::Path::new("libcore.so.2"), "{points_at:?}");
+
+    // 使う側が記録した名前を、出来上がったものから読む。
+    let bin = std::fs::read(out.join("bin/app")).expect("cannot read the executable");
+    assert!(
+        bin.windows(13).any(|w| w == b"libcore.so.2\0"),
+        "the executable does not record the versioned name"
+    );
+    assert_eq!(run_artifact(&out.join("bin/app")), "v=42\n");
+
+    // 版を持たない名前を消しても走る。記録されているのは実体の名前で
+    // あって、別名ではない。
+    std::fs::remove_file(&alias).expect("cannot remove the unversioned name");
+    assert_eq!(run_artifact(&out.join("bin/app")), "v=42\n");
+}
+
+#[test]
+fn without_a_soversion_the_library_keeps_its_plain_name() {
+    // 対になる検査。版は書いた者にだけ付く——既定で番号を振ると、dowel が
+    // 何も確かめていない数を名前に押し込むことになる（ADR-0040）。
+    let p = Project::new("soversion-absent");
+    p.write("dowel.toml", "[package]\nname = \"plain\"\nversion = \"1.2.3\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\"]\n",
+    );
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    p.run(".", &["build", "core"]).success();
+    let lib_dir = build_dir(&p.path("."), "debug").join("lib");
+    assert!(lib_dir.join("libcore.so").is_file(), "the plain name is the artifact");
+    assert!(!lib_dir.join("libcore.so").is_symlink(), "and it is not a link to something else");
+    // パッケージの版は名前に入らない。配布の版と ABI の世代は別物である。
+    assert!(!lib_dir.join("libcore.so.1").exists(), "the package version is not the ABI's");
+}
+
+#[test]
+fn a_negative_soversion_is_refused_where_it_is_written() {
+    let p = Project::new("soversion-negative");
+    p.write("dowel.toml", "[package]\nname = \"neg\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources   = [file(\"src/core.c\")]\n\
+         linkage   = \"shared\"\n\
+         soversion = -1\n\
+         exports   = [\"core_open\"]\n",
+    );
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    let r = p.run(".", &["build", "core"]);
+    r.failure();
+    r.stderr_contains("invalid-soversion");
+    r.stderr_contains("dowel.build");
+}

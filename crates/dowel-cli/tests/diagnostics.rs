@@ -587,6 +587,16 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "invalid-soversion",
+        why: "an ABI generation cannot be negative (ADR-0040)",
+        files: &[(
+            "app/dowel.build",
+            "[lib.core]\nsources = [file(\"src/main.c\")]\nlinkage = \"shared\"\n\
+             soversion = -1\nexports = [\"main\"]\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unexported-symbol",
         why: "`exports` names a symbol the built library does not export (ADR-0039)",
         files: &[

@@ -293,6 +293,13 @@ pub fn root_props() -> Vec<PropDef> {
             doc: "symbols a shared library exports. becomes a version script, symbol list, or .def",
             domain: None,
         },
+        PropDef {
+            name: "soversion",
+            ty: Type::Int,
+            merge: Merge::Replace,
+            doc: "the ABI generation of a shared library. names the file and the soname (ADR-0040)",
+            domain: None,
+        },
     ]
 }
 
