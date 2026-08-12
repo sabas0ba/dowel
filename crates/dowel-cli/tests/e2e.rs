@@ -5960,3 +5960,57 @@ fn a_consumer_in_another_package_still_sees_only_the_surface() {
     );
     p.run("app", &["build"]).failure();
 }
+
+#[test]
+fn a_misspelled_export_is_caught_where_it_is_declared() {
+    // `exports` の誤字はビルドを通り、誤った名前はただ動的記号表に現れない。
+    // 失敗は**他人のビルド**で、ヘッダに見えている関数への undefined
+    // reference として出る（ADR-0039）。
+    //
+    // リンカには頼めない——共有ライブラリは未定義記号を持ちうるので、
+    // `-Wl,-u` も `--no-undefined` も欠けた記号を誤りにしない。出来上がった
+    // ものに聞くしかない。
+    let p = Project::new("exports-typo");
+    p.write("dowel.toml", "[package]\nname = \"exports-typo\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\", \"core_opne\"]\n",
+    );
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    let r = p.run(".", &["build", "core"]);
+    r.failure();
+    r.stderr_contains("unexported-symbol");
+    r.stderr_contains("core_opne");
+    // 近い名前が在れば挙げる。誤字の直し先はたいていそこにある。
+    r.stderr_contains("does export `core_open`");
+    // なぜ黙っていたかを述べる。
+    r.stderr_contains("until a consumer fails to link");
+}
+
+#[test]
+fn a_correct_export_list_says_nothing() {
+    // 対になる検査。これが無いと、上の検査は「常に落ちる」でも通る。
+    let p = Project::new("exports-correct");
+    p.write("dowel.toml", "[package]\nname = \"exports-correct\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\", \"core_close\"]\n",
+    );
+    p.write(
+        "src/core.c",
+        "int core_internal(void) { return 1; }\n\
+         int core_open(void) { return core_internal() + 41; }\n\
+         int core_close(void) { return 0; }\n",
+    );
+
+    let r = p.run(".", &["build", "core"]);
+    r.success();
+    assert!(!r.stderr.contains("unexported-symbol"), "stderr:\n{}", r.stderr);
+}

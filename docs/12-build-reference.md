@@ -176,6 +176,15 @@ Names are written as the linker sees them. For C that is the function name;
 for C++ it is the mangled name. dowel does not mangle, and adds only the
 uniform `_` prefix Mach-O requires.
 
+**The list is checked against the library that was built**
+([ADR-0039](adr/0039-exports-are-checked.md)). After the build dowel asks
+the toolchain's symbol lister what the library exports. A name in `exports`
+that is not in the answer is `unexported-symbol`, reported at the line that
+declared it. A misspelling is otherwise silent: the wrong name is simply
+absent from the dynamic symbol table, and the failure appears in someone
+else's build as an undefined reference. If the symbol lister is not
+available the check is skipped, and the build succeeds as before.
+
 **Within its own package, a shared library is linked statically**
 ([ADR-0038](adr/0038-shared-inside-its-package.md)). `exports` is a
 boundary toward code that was not written alongside it, and a package is

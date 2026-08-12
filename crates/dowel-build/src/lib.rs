@@ -7,6 +7,7 @@ pub mod compdb;
 pub mod debug;
 pub mod dump;
 pub mod exec;
+pub mod exports;
 pub mod glob;
 pub mod migrate;
 pub mod plan;

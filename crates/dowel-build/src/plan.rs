@@ -24,6 +24,15 @@ pub struct CompileCommand {
     pub output: PathBuf,
 }
 
+/// 1つの共有ライブラリについて、宣言された面。
+pub struct DeclaredExports {
+    pub target: TargetId,
+    pub library: PathBuf,
+    pub names: Vec<String>,
+    /// `exports` が書かれた位置。診断が指す先
+    pub site: dowel_eval::value::Site,
+}
+
 pub struct Plan {
     pub build_dir: PathBuf,
     pub actions: Vec<Action>,
@@ -43,6 +52,10 @@ pub struct Plan {
     /// 誰も居なくなりうる。配るために宣言したものが既定のビルドで出て
     /// こないのは誤りなので、自身の出力として並べる（issue #64 と同じ判断）
     pub shared_libraries: Vec<PathBuf>,
+    /// 宣言した面と、それを持つはずの成果物
+    /// （[ADR-0039](../../../docs/adr/0039-exports-are-checked.md)）。
+    /// ビルドの後、出来上がったものに聞いて突き合わせる
+    pub declared_exports: Vec<DeclaredExports>,
 }
 
 impl Plan {
@@ -262,6 +275,7 @@ pub fn plan(
         requested: requested.to_vec(),
         deps: toolstyle::deps(cfg),
         shared_libraries: Vec::new(),
+        declared_exports: Vec::new(),
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
@@ -561,6 +575,12 @@ pub fn plan(
                     },
                 );
                 plan.shared_libraries.push(out.clone());
+                plan.declared_exports.push(DeclaredExports {
+                    target: tid,
+                    library: out.clone(),
+                    names: exports.clone(),
+                    site: target.site,
+                });
                 plan.artifacts.insert(tid, out);
 
                 // 同じパッケージの中では静的に繋ぐ（ADR-0038）。`exports` は
