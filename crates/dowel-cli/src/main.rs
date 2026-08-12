@@ -330,6 +330,43 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             Ok(ExitCode::SUCCESS)
         }
 
+        Command::Install { targets } => {
+            // 入れるのは組んだものである。作り直しではないので、検査した
+            // 対象と配った対象が同じバイト列になる（ADR-0041）。
+            let requested = install_targets(&sess, &cfg, targets)?;
+            if requested.is_empty() {
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+                eprintln!("nothing to install. this package declares no `bin` or `lib`");
+                return Ok(ExitCode::SUCCESS);
+            }
+            let backend = building_backend(opts, "dowel install", probe)?;
+            let Some(p) = build(&mut sess, &g, &cfg, opts, &requested, &*backend)? else {
+                return Ok(ExitCode::FAILURE);
+            };
+            let prefix = opts.prefix.clone().ok_or("`install` needs `--prefix=<dir>`")?;
+            let (items, diags) = dowel_build::install::entries(
+                &sess,
+                &p,
+                &cfg,
+                &prefix,
+                opts.destdir.as_deref(),
+                &requested,
+            );
+            if !diags.is_empty() {
+                sess.diagnostics.extend(diags);
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+            }
+            dowel_build::install::perform(&items)?;
+            for item in &items {
+                eprintln!("installed: {}", item.destination().display());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
         Command::Inspect { targets } => {
             // 検査は成果物を作らない。作らないため増分の対象にならず、
             // `build` の既定にも入らない——最新かどうかを判定する出力が無い。
@@ -923,6 +960,28 @@ fn default_targets(
             .collect());
     }
     Ok(out)
+}
+
+/// `install` の対象（[ADR-0041](../../docs/adr/0041-install.md)）。
+///
+/// 指定がなければ、この木のパッケージの `bin` と `lib` である。`test` と
+/// `bench` は入れない——物を確かめる道具であって、配る物ではない。
+fn install_targets(
+    sess: &Session,
+    cfg: &Config,
+    requested: &[String],
+) -> Result<Vec<dowel_model::TargetId>, String> {
+    if !requested.is_empty() {
+        return requested.iter().map(|s| sess.find_target(s)).collect();
+    }
+    use dowel_eval::schema::TableKind;
+    Ok(sess
+        .targets
+        .iter()
+        .filter(|t| in_root_package(t) && build_plan::supports_target(sess, t.id, cfg))
+        .filter(|t| matches!(t.kind, TableKind::Bin | TableKind::Lib))
+        .map(|t| t.id)
+        .collect())
 }
 
 /// `inspect` の対象。指定がなければ、検査を宣言している全ターゲット。

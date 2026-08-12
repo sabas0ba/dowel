@@ -6117,3 +6117,185 @@ fn a_negative_soversion_is_refused_where_it_is_written() {
     r.stderr_contains("invalid-soversion");
     r.stderr_contains("dowel.build");
 }
+
+#[test]
+fn install_copies_the_products_and_they_run_without_the_build_tree() {
+    // 共有ライブラリを宣言する目的は配ることであり、配る手段が無ければ
+    // 宣言は途中で終わっている（ADR-0041）。
+    //
+    // 肝は実行時の探索路である。ビルドディレクトリの絶対パスだけを記録
+    // した実行ファイルは、ビルド木が在る限り動いてしまうので、壊れて
+    // いることが配った先で分かる。
+    let p = Project::new("install");
+    p.write("core/dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\n\
+         sources   = [file(\"src/core.c\")]\n\
+         linkage   = \"shared\"\n\
+         soversion = 3\n\
+         exports   = [\"core_open\"]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("core/include/core.h", "#pragma once\nint core_open(void);\n");
+    p.write("core/include/core/detail.h", "#pragma once\n");
+    p.write("core/src/core.c", "int core_open(void) { return 42; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"core\"\npath = \"../core\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\n\n\
+         [test.smoke]\nsources = [file(\"src/main.c\")]\n\n\
+         [test.smoke.private]\ndeps = [dep(\"core\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"core.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", core_open()); return 0; }\n",
+    );
+
+    let prefix = p.path("out");
+    let r = p.run("app", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+
+    assert!(prefix.join("bin/app").is_file(), "the executable is installed");
+    assert!(prefix.join("lib/libcore.so.3").is_file(), "the library it needs comes along");
+    // 版を持たない名前も添える。`-lcore` が見つけるのはこの名前である。
+    assert!(prefix.join("lib/libcore.so").is_symlink(), "the unversioned name is placed too");
+    // 検査は物を確かめる道具であって、配る物ではない。
+    assert!(!prefix.join("bin/smoke").exists(), "a test is not installed");
+
+    // ビルド木を消してから走らせる。ここが本題である。
+    std::fs::remove_dir_all(p.path("app/.dowel")).expect("cannot remove the build tree");
+    assert_eq!(run_artifact(&prefix.join("bin/app")), "v=42\n");
+}
+
+#[test]
+fn installing_a_library_brings_the_headers_it_publishes() {
+    // `public.includes` は「使う側の探索路に載る」と述べた宣言である。
+    // そこから辿れるものは既に面であり、写すのは推測ではない（ADR-0041）。
+    let p = Project::new("install-headers");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("include/core.h", "#pragma once\nint core_open(void);\n");
+    p.write("include/core/detail.h", "#pragma once\n");
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    // `--destdir` は先頭に付くだけである。段取り用のディレクトリへ入れて
+    // から `prefix` へ移しても、同じものが動く。
+    let staged = p.path("staged");
+    let r =
+        p.run(".", &["install", "--prefix=/usr/local", &format!("--destdir={}", staged.display())]);
+    r.success();
+
+    assert!(staged.join("usr/local/lib/libcore.a").is_file(), "the archive is installed");
+    assert!(staged.join("usr/local/include/core.h").is_file(), "the published header");
+    assert!(staged.join("usr/local/include/core/detail.h").is_file(), "and the tree under it");
+    // prefix の根は段取り用のディレクトリの下に継がれる。継がないと、
+    // 段取りのつもりが本物の `/usr/local` になる。
+    assert!(!std::path::Path::new("/usr/local/lib/libcore.a").exists());
+}
+
+#[test]
+fn install_without_a_destination_says_which_flag_it_needs() {
+    // 入れる先に既定は無い。`/usr/local` は権限を要し、書ける既定は
+    // 誰の役にも立たない（ADR-0041）。
+    let p = Project::new("install-no-prefix");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["install"]);
+    r.failure();
+    r.stderr_contains("--prefix");
+}
+
+#[test]
+fn the_relative_search_path_survives_every_backend() {
+    // `$ORIGIN` は make のレシピを通ると危ない。make が `$` を食い、残りを
+    // シェルが変数として展開して空にする——実行ファイルは組め、ビルド木の
+    // 中では動き、移した先でだけ壊れる（ADR-0041）。
+    //
+    // 通り道が3つある以上、3つとも通す。
+    let p = Project::new("relocatable-backends");
+    p.write("core/dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "core/dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         exports = [\"core_open\"]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("core/include/core.h", "#pragma once\nint core_open(void);\n");
+    p.write("core/src/core.c", "int core_open(void) { return 42; }\n");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"core\"\npath = \"../core\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"core\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"core.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", core_open()); return 0; }\n",
+    );
+
+    for backend in ["ninja", "direct", "make"] {
+        let _ = std::fs::remove_dir_all(p.path("app/.dowel"));
+        let prefix = p.path(&format!("out-{backend}"));
+        p.run(
+            "app",
+            &[
+                "install",
+                &format!("--backend={backend}"),
+                &format!("--prefix={}", prefix.display()),
+            ],
+        )
+        .success();
+        // 記録された綴りをそのまま見る。走らせるだけでは、ビルド木が
+        // 残っている限り絶対パスの方で解決してしまう。
+        let bin = std::fs::read(prefix.join("bin/app")).expect("cannot read the executable");
+        let text = String::from_utf8_lossy(&bin);
+        assert!(
+            text.contains("$ORIGIN/../lib"),
+            "`{backend}` did not record a relative search path"
+        );
+        std::fs::remove_dir_all(p.path("app/.dowel")).expect("cannot remove the build tree");
+        assert_eq!(run_artifact(&prefix.join("bin/app")), "v=42\n", "backend `{backend}`");
+    }
+}
+
+#[test]
+fn a_published_include_path_that_is_not_a_directory_is_reported_when_installing() {
+    // 入れる先にヘッダが来ないことは、入れた側では気づけない——使う側の
+    // ビルドが `core.h` を見つけられなくなって初めて分かる（ADR-0041）。
+    let p = Project::new("install-bad-includes");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"nowhere\")]\n",
+    );
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    r.stderr_contains("uninstallable-headers");
+    r.stderr_contains("nowhere");
+    // 警告であって失敗ではない。ライブラリ自身は入る。
+    assert!(prefix.join("lib/libcore.a").is_file(), "the library is still installed");
+}

@@ -227,12 +227,23 @@ position-independent output.
 
 Binaries that link a shared library record a run-time search path pointing
 at the build tree's `lib/` directory, so they run from the build tree
-without help. Windows has no such mechanism, so `dowel test` and `dowel
-bench` put that directory on `PATH` for the child process instead; a
-Windows executable started by hand from the build tree will not find its
-DLLs.
+without help. They also record one **relative to themselves**
+(`$ORIGIN/../lib`, `@loader_path/../lib` on macOS), which is what lets
+`dowel install` copy rather than relink
+([ADR-0041](adr/0041-install.md)) — the installed executable finds its
+libraries wherever the prefix ends up. Windows has neither mechanism, so
+`dowel test` and `dowel bench` put that directory on `PATH` for the child
+process instead; a Windows executable started by hand from the build tree
+will not find its DLLs.
 
-Symbol versioning (`libcore.so.1`) and installation are not implemented.
+`dowel install --prefix=<dir>` copies the products out of the build tree:
+`bin` targets into `bin/`, `lib` targets into `lib/` with their unversioned
+name, and each library's own `public.includes` into `include/`. See
+[60-cli.md](60-cli.md).
+
+Symbol versioning *inside* the library — version nodes in the generated
+script, so one file carries two generations of a symbol — is not
+implemented.
 
 ### `[<kind>.<name>.public]` and `[<kind>.<name>.private]`
 
