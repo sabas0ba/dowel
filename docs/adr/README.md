@@ -54,3 +54,4 @@ was originally written in.
 | [0045](0045-offline.md) | Offline is a mode the build is told to be in, not a state it happens to be in | Accepted |
 | [0046](0046-transfer-once.md) | An artifact is transferred once per destination, and a run that could not start is what sends it again | Accepted |
 | [0047](0047-sysroot.md) | `sysroot()` is a path base, declared once beside the tools that need it | Accepted |
+| [0048](0048-assembly.md) | Assembly is a third language, not C that happens to assemble | Accepted |

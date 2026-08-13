@@ -6964,3 +6964,107 @@ fn a_fetched_toolchains_sysroot_is_found_inside_it() {
     let cache = p.path("cache").display().to_string();
     p.run_env(".", &["build"], &[("DOWEL_TOOLCHAIN_DIR", cache.as_str())]).success();
 }
+
+/// アセンブリを持つ木（[ADR-0048](../../../docs/adr/0048-assembly.md)）。
+///
+/// `.s` は前処理を通らず、`.S` は通る。両方置くのは、依存ファイルの扱いが
+/// そこで分かれるためである。
+fn project_with_assembly(name: &str) -> Project {
+    let p = Project::new(name);
+    p.write("dowel.toml", "[package]\nname = \"asm\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\"), file(\"src/add.s\"), file(\"src/mul.S\")]\n\n\
+         [bin.app.private]\nc_std = \"c17\"\nc_flags = [\"-Wall\"]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint asm_add(int, int);\nint asm_mul(int, int);\n\
+         int main(void) { printf(\"%d %d\\n\", asm_add(2, 3), asm_mul(2, 3)); return 0; }\n",
+    );
+    p.write(
+        "src/add.s",
+        "\t.text\n\t.globl asm_add\nasm_add:\n\tmovl %edi, %eax\n\taddl %esi, %eax\n\tret\n",
+    );
+    p.write(
+        "src/mul.S",
+        "#include \"mul.h\"\n\t.text\n\t.globl NAME\nNAME:\n\tmovl %edi, %eax\n\timull %esi, %eax\n\tret\n",
+    );
+    p.write("src/mul.h", "#define NAME asm_mul\n");
+    p
+}
+
+#[test]
+fn assembly_sources_are_their_own_language() {
+    // アセンブリは C の driver が組み立てるが、C ではない。`-std=c17` を
+    // 手書きのアセンブリに渡すのは、言語を取り違えているだけである
+    // （ADR-0048）。
+    //
+    // ホストが x86-64 でなければ、この綴りは組めない。
+    if std::env::consts::ARCH != "x86_64" {
+        return;
+    }
+    let p = project_with_assembly("assembly");
+    let r = p.run(".", &["build"]);
+    r.success();
+    // 進行の表示が言語を述べる。`CC` と読めると、C の旗が掛かっていない
+    // ことが説明できない。
+    r.stderr_contains("AS ");
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "5 6\n");
+
+    let db =
+        std::fs::read_to_string(build_dir(&p.path("."), "debug").join("compile_commands.json"))
+            .expect("no compile database");
+    for line in db.lines() {
+        let _ = line;
+    }
+    // 翻訳データベースの中で、アセンブリの行に C の旗が無いこと。
+    let asm_args: Vec<&str> = db
+        .split("\"file\":")
+        .filter(|chunk| chunk.contains("add.s") || chunk.contains("mul.S"))
+        .collect();
+    assert!(!asm_args.is_empty(), "the assembly sources are not in the compile database:\n{db}");
+    let whole = asm_args.join("");
+    assert!(!whole.contains("-std=c17"), "a C standard reached the assembler:\n{whole}");
+    // 実行可能スタックの印を付ける。手書きのアセンブリには誰も付けない。
+    assert!(db.contains("-Wa,--noexecstack"), "{db}");
+}
+
+#[test]
+fn a_preprocessed_assembly_source_rebuilds_when_its_header_changes() {
+    // `.S` は前処理を通るので依存が在る。`.s` には無く、依存ファイルを
+    // 頼んでも書かれない——宣言した出力が出ないことになる（ADR-0048）。
+    if std::env::consts::ARCH != "x86_64" {
+        return;
+    }
+    let p = project_with_assembly("assembly-deps");
+    p.run(".", &["build"]).success();
+    let out = build_dir(&p.path("."), "debug");
+    assert!(out.join("obj/asm/app/src_mul.S.o.d").is_file(), "`.S` should have a depfile");
+    assert!(!out.join("obj/asm/app/src_add.s.o.d").exists(), "`.s` has no depfile to write");
+
+    // ヘッダを差し替えると、`.S` は組み直る。依存が繋がっている証拠である。
+    p.write("src/mul.h", "#define NAME asm_mul\n#define UNUSED 1\n");
+    let r = p.run(".", &["build"]);
+    r.success();
+    assert!(r.stderr.contains("src_mul.S.o"), "the header change did not reach it:\n{}", r.stderr);
+}
+
+#[test]
+fn every_backend_builds_assembly() {
+    // 依存ファイルを持たないコンパイルは、バックエンドごとに扱いが違う。
+    // ninja は規則の `$depfile` を辺が束縛しないと循環として断る。
+    if std::env::consts::ARCH != "x86_64" {
+        return;
+    }
+    for backend in ["ninja", "direct", "make"] {
+        let p = project_with_assembly(&format!("assembly-{backend}"));
+        let r = p.run(".", &["build", &format!("--backend={backend}")]);
+        r.success();
+        assert_eq!(
+            run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")),
+            "5 6\n",
+            "backend `{backend}`"
+        );
+    }
+}
