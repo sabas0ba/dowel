@@ -286,6 +286,11 @@ the target.
 - A case killed by a signal fails, including one that declared
   `should_fail`: what that declares is a nonzero **exit**, and a crash is not
   one (issue #88). The line says which signal it was
+- An artifact is **transferred once per destination**
+  ([ADR-0046](adr/0046-transfer-once.md)). The fingerprint of what was sent
+  is recorded in the build directory; a run that could not start drops it, so
+  the next one sends again. Artifacts are left on the target machine — the
+  alternative undoes the skip
 - `--message-format=json` emits one `test-result` line per case on stdout.
   The target and the case are separate fields, so nothing downstream has to
   split a string to group results by target (issue #100):
