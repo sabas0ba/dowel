@@ -10,8 +10,8 @@ easy to write into the wrong file; without that, `missing-runner` would
 insist a declaration is absent while the reader is looking at it
 (issue #74). `[policy]` stays accepted: it is reserved and documented as not
 yet acted on. Unknown **keys** inside `[package]` are still ignored (`edition`
-and `[toolchain] sysroot` from the design examples are reserved the same
-way); `[toolchain]` is the exception, where a misspelled key would silently
+from the design examples is reserved the same way; `[toolchain] sysroot` is
+now read — [ADR-0047](adr/0047-sysroot.md)); `[toolchain]` is the exception, where a misspelled key would silently
 fall back to a default.
 
 `dowel.toml` must stay strict TOML: function calls, `match`, postfix `when`,
@@ -55,6 +55,7 @@ cxx = "aarch64-linux-gnu-g++"
 | Key | Type | Behavior |
 |---|---|---|
 | `url` | string | an archive holding the toolchain ([ADR-0044](adr/0044-toolchain-acquisition.md)). Requires `sha256`. Fetched once into `$XDG_CACHE_HOME/dowel/toolchains/<hash12>/` — the **user's** cache, not the tree, because the same archive is the same bytes everywhere and a toolchain is far larger than a dependency. Later runs touch no network. A failing fetch or a digest mismatch is `unfetchable-toolchain`, and the build stops rather than falling back to PATH |
+| `sysroot` | string | the toolchain's sysroot, the base for `sysroot()` in `flags` and `link_flags` ([ADR-0047](adr/0047-sysroot.md)). A relative path is resolved against a fetched toolchain's root — unlike the tools, a bare name is *not* a PATH lookup, because a sysroot never is. Writing `sysroot()` with none declared is `missing-sysroot` |
 | `sha256` | string | required with `url`: **64 hexadecimal digits**, the digest of the archive itself. Anything else is `unpinned-toolchain` — a URL is a name, and the bytes behind a name can change. Verified **before** unpacking |
 | `style` | string | how dowel spells the arguments **it** assembles: `gnu` or `msvc` ([ADR-0027](adr/0027-toolchain-style.md)). Derived from the triple when absent (`*-msvc` → `msvc`), and this key overrides that derivation. It also decides the tools' defaults, so a project declaring nothing gets a coherent set. An unknown value is `invalid-value` |
 | `c` | string | the C compiler command, default `cc` (`cl` under the MSVC style) for host builds. It must be on PATH at plan time (a value containing a path separator is probed as a path). When the table declares `url`, a relative path is resolved against the unpacked toolchain's root; an absolute path and a bare name are left alone, since those already mean a place on this machine and a PATH lookup ([ADR-0044](adr/0044-toolchain-acquisition.md)). Missing from PATH: `missing-toolchain`. Required in `[toolchain.<triple>]`: missing there is `missing-field` |

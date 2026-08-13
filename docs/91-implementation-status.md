@@ -679,6 +679,20 @@ changes, only the speed.
     fetched toolchain warn about itself
   - The language server never fetches: it resolves against a toolchain that
     is already unpacked, and otherwise leaves the command as written
+  - **`[toolchain] sysroot` and the `sysroot()` function**
+    ([ADR-0047](adr/0047-sysroot.md)). `PathBase::Sysroot` existed in the
+    value type and every path that reached it was refused; for a cross build
+    the target's headers and libraries live in the sysroot, so a tree either
+    hardcoded an absolute path — the thing pinning was for — or picked up
+    the host's headers and failed later in the compiler's words.
+    `sysroot()` is the one builtin taking no argument, since the root itself
+    is the common case; `sysroot("usr/include")` names a path under it. A
+    relative declaration resolves against a fetched toolchain, and unlike a
+    tool a bare name resolves too — a sysroot is never a PATH lookup.
+    `flags` / `c_flags` / `cxx_flags` joined `link_flags` as `List<Word>`,
+    so `["-I", sysroot("usr/include")]` reaches the compile line without the
+    string concatenation the language does not have. Writing it with none
+    declared is `missing-sysroot`; there is no default
 - **Offline is a mode, not an accident** ([ADR-0045](adr/0045-offline.md)).
   Every acquisition already wrote a completion marker and reused it, so a
   fully-fetched tree built without the network — by accident. Nothing said
@@ -1053,7 +1067,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (718 tests):
+Current breakdown (721 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1062,10 +1076,10 @@ Current breakdown (718 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 258 |
+| `e2e` | compile real C and C++, run it, check the output | 261 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (74 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (75 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
@@ -1148,5 +1162,5 @@ Whether to amend the documents is decided separately.
 | the consequence in [ADR-0003](adr/0003-manifest-split.md) | "there will be two parsers" | one parser; `dowel.toml` strictness is imposed by validation | the ADR's rationale (third-party tools read it without a custom parser) is equally satisfied by validation, and a single tree keeps provenance and diagnostics paths simpler |
 | types | `defines : Map<Ident, Val>` | `Val` implemented as a type | the document's notation was adopted as-is |
 | `abi` | ABI labels are computed | currently a hand-written string | computation is Phase 6; only the `must_equal` path is wired up |
-| [30-devexp.md](30-devexp.md) section 1 | `args = ["-L", sysroot()]` | `args : List<Str>`; `sysroot()` cannot be written | sysroot-based paths are Phase 4 (`unimplemented-path-base`); strings work first, widening to `List<Val>` when bases land |
+| [30-devexp.md](30-devexp.md) section 1 | `args = ["-L", sysroot()]` in a `[runner]` | `sysroot()` is written in `flags` / `c_flags` / `cxx_flags` / `link_flags`, which are `List<Word>` ([ADR-0047](adr/0047-sysroot.md)); a runner's `args` is still `List<Str>` | the sysroot's use is on the compile and link lines, and that is where `Word` already was. A runner's `args` is a command line for a program on the build machine; widening it needs the runner's own package as a path base, which is a separate question |
 | [50-development.md](50-development.md) section 3 | CI runs in a `--network none` container built from dotfiles | GitHub Actions runners (staying so for now) | the path for evaluating the dotfiles flake from this repository's CI is not set up, and there is no present need. The checks are defined solely in `scripts/verify.sh`, so a migration later swaps only the workflow's internals |

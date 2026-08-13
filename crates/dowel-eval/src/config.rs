@@ -60,6 +60,9 @@ pub struct Config {
     tools: BTreeMap<String, String>,
     /// 引数の綴り方（ADR-0027）。三つ組から導き、`[toolchain] style` が上書きする
     pub style: Style,
+    /// ツールチェーンの sysroot（[ADR-0047](../../../docs/adr/0047-sysroot.md)）。
+    /// `sysroot()` の基準点。宣言が無ければ持たない
+    sysroot: Option<String>,
     /// ホストの三つ組。「対象がホストと同じか」の判定がこれを読む。
     ///
     /// 既定は OS と構成から組み立てた近似だが、C コンパイラに `-dumpmachine`
@@ -183,6 +186,7 @@ impl Config {
     pub fn for_target(target: String) -> Config {
         let style = triple_style(&target);
         Config {
+            sysroot: None,
             opt: Opt::Debug,
             target,
             host_os: host_os().to_string(),
@@ -259,6 +263,16 @@ impl Config {
     }
 
     /// 道具のコマンドを差し替える。`[toolchain]` の宣言の写しに使う。
+    /// ツールチェーンの sysroot（[ADR-0047](../../../docs/adr/0047-sysroot.md)）。
+    /// 宣言が無ければ持たない——既定を置くと、指していない場所を指す。
+    pub fn set_sysroot(&mut self, path: Option<String>) {
+        self.sysroot = path;
+    }
+
+    pub fn sysroot(&self) -> Option<&str> {
+        self.sysroot.as_deref()
+    }
+
     pub fn set_tool(&mut self, name: &str, command: String) {
         self.tools.insert(name.to_string(), command);
     }

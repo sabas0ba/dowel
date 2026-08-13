@@ -366,7 +366,16 @@ impl<'a> Evaluator<'a> {
             return Value::error(prov);
         }
 
-        // いずれの関数も引数は文字列1つ。
+        // sysroot だけが引数を省ける。`sysroot()` は根そのものを指す
+        // （[ADR-0047](../../../docs/adr/0047-sysroot.md)）。
+        if name == "sysroot" && args.is_empty() {
+            return Value {
+                ty: Type::Path,
+                data: Data::Path(PathValue { base: PathBase::Sysroot, rel: String::new() }),
+                prov,
+            };
+        }
+        // 他の関数はいずれも引数が文字列1つ。
         if args.len() != 1 {
             self.err(
                 node.span,
@@ -394,6 +403,11 @@ impl<'a> Evaluator<'a> {
             "dir" | "file" => Value {
                 ty: Type::Path,
                 data: Data::Path(PathValue { base: PathBase::Package, rel: normalize_rel(&arg) }),
+                prov,
+            },
+            "sysroot" => Value {
+                ty: Type::Path,
+                data: Data::Path(PathValue { base: PathBase::Sysroot, rel: normalize_rel(&arg) }),
                 prov,
             },
             "dep" => Value { ty: Type::DepRef, data: Data::Dep(arg), prov },
