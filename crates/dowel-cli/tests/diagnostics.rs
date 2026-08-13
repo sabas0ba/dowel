@@ -598,6 +598,16 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "missing-sysroot",
+        why: "`sysroot()` is written but no sysroot is declared (ADR-0047)",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+             [bin.app.private]\nflags = [\"-I\", sysroot()]\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unknown-abi-component",
         why: "an `abi` component outside the closed vocabulary (ADR-0042)",
         files: &[(
@@ -1077,7 +1087,6 @@ fn covered_codes() -> Vec<&'static str> {
 /// 理由を書けないものは、事例を書けるということである。
 const UNCOVERED: &[(&str, &str)] = &[
     ("toolchain-mismatch", "`[toolchain]` selection is Phase 5; the warning has no real trigger"),
-    ("unimplemented-path-base", "`sysroot` paths are Phase 4"),
     ("empty-dependency", "`[[dependencies]]` with no entry at all is rejected by the parser first"),
     ("unreadable-build", "requires a `dowel.build` that exists but cannot be read (permissions)"),
     (

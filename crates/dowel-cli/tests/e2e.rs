@@ -6858,3 +6858,109 @@ fn a_run_that_cannot_start_makes_the_next_one_transfer_again() {
     p.run(".", &["test"]).success();
     assert_eq!(sent(), 2, "the record should be back");
 }
+
+#[test]
+fn sysroot_paths_resolve_against_the_declared_sysroot() {
+    // `docs/30-devexp.md` 1節は `args = ["-L", sysroot()]` を載せていたが、
+    // `sysroot()` は書けなかった（ADR-0047）。文書に在って実装に無い。
+    //
+    // 文字列連結を持たないので、`-I` と道を並べて書ける形が要る。
+    // `link_flags` が先に通った道である（issue #70）。
+    let p = Project::new("sysroot");
+    let root = p.path("fake-sysroot");
+    std::fs::create_dir_all(root.join("usr/include")).unwrap();
+    p.write("fake-sysroot/usr/include/sysroot_header.h", "#define FROM_SYSROOT 1\n");
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"sr\"\nversion = \"0\"\n\n\
+             [toolchain]\nsysroot = \"{}\"\n",
+            root.display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-I\", sysroot(\"usr/include\")]\n",
+    );
+    // sysroot の中のヘッダを読めなければ組めない。解けたことが結果に出る。
+    p.write(
+        "src/main.c",
+        "#include <sysroot_header.h>\n\
+         #if !FROM_SYSROOT\n#error the sysroot include path did not resolve\n#endif\n\
+         int main(void) { return 0; }\n",
+    );
+
+    p.run(".", &["build"]).success();
+    let db =
+        std::fs::read_to_string(build_dir(&p.path("."), "debug").join("compile_commands.json"))
+            .expect("no compile database");
+    assert!(db.contains(&root.join("usr/include").display().to_string()), "{db}");
+
+    // 引数の無い `sysroot()` は根そのものを指す。継いだ末尾の区切りは付かない。
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-I\", sysroot(\"usr/include\"), \"-I\", sysroot()]\n",
+    );
+    p.run(".", &["build"]).success();
+    let db =
+        std::fs::read_to_string(build_dir(&p.path("."), "debug").join("compile_commands.json"))
+            .unwrap();
+    assert!(db.contains(&format!("\"{}\"", root.display())), "{db}");
+}
+
+#[test]
+fn a_sysroot_path_without_a_declaration_is_refused() {
+    // 既定に落とさない。落とすと、指していない場所を指した命令が組み上がり、
+    // 誤りはコンパイラの言葉で返ってくる（ADR-0047）。
+    let p = Project::new("sysroot-missing");
+    p.write("dowel.toml", "[package]\nname = \"sr\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nlink_flags = [\"-L\", sysroot(\"usr/lib\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("missing-sysroot");
+    r.stderr_contains("declare `sysroot");
+}
+
+#[test]
+fn a_fetched_toolchains_sysroot_is_found_inside_it() {
+    // 相対の sysroot は、取ってきた道具一式の根から解く（ADR-0044 と同じ
+    // 規則）。クロスの sysroot は、ふつうその中に在る。
+    let p = Project::new("sysroot-fetched");
+    let (url, sha) = toolchain_archive(&p);
+    p.write("tc/sysroot/usr/include/tc_header.h", "#define FROM_TC 1\n");
+    // 書庫を作り直す（ヘッダを含めるため）。
+    let (url, sha) = {
+        let _ = (url, sha);
+        toolchain_archive(&p)
+    };
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"sr\"\nversion = \"0\"\n\n\
+             [toolchain]\nurl = \"{url}\"\nsha256 = \"{sha}\"\n\
+             c = \"bin/mycc\"\nsysroot = \"sysroot\"\n"
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-I\", sysroot(\"usr/include\")]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <tc_header.h>\n\
+         #if !FROM_TC\n#error the fetched sysroot did not resolve\n#endif\n\
+         int main(void) { return 0; }\n",
+    );
+
+    let cache = p.path("cache").display().to_string();
+    p.run_env(".", &["build"], &[("DOWEL_TOOLCHAIN_DIR", cache.as_str())]).success();
+}

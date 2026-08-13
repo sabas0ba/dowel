@@ -61,6 +61,9 @@ pub struct ToolchainDecl {
     /// 取ってくる道具一式（[ADR-0044](../../../docs/adr/0044-toolchain-acquisition.md)）。
     /// 宣言が無ければ、道具は機械に既に在るものとして探す
     pub source: Option<ToolchainSource>,
+    /// sysroot（[ADR-0047](../../../docs/adr/0047-sysroot.md)）。
+    /// `sysroot()` の基準点。相対なら取ってきた道具一式の根から解く
+    pub sysroot: Option<String>,
 }
 
 /// 取ってくる道具一式の出所（ADR-0044）。
@@ -108,6 +111,9 @@ impl ToolchainDecl {
         }
         if self.source.is_none() {
             self.source = other.source.clone();
+        }
+        if self.sysroot.is_none() {
+            self.sysroot = other.sysroot.clone();
         }
         if self.site.is_none() {
             self.site = other.site;
@@ -534,6 +540,13 @@ pub fn read_toolchains(
             // `sha256` だけは無害である。取りに行かない以上、何も検めない。
             (None, _) => {}
         }
+        // sysroot（ADR-0047）。道具ではないので `TOOLS` の表には無い。
+        if let Some(e) = t.entry("sysroot") {
+            match e.value.as_str() {
+                Some(s) => decl.sysroot = Some(s.to_string()),
+                None => type_err(diags, e.site, &format!("{label}.sysroot"), "a string"),
+            }
+        }
         // 様式は道具ではない。名前ではなく綴り方を選ぶ宣言である（ADR-0027）。
         if let Some(e) = t.entry(STYLE_KEY) {
             match e.value.as_str().and_then(dowel_eval::config::Style::parse) {
@@ -569,6 +582,7 @@ pub fn read_toolchains(
         known.push(STYLE_KEY);
         known.push("url");
         known.push("sha256");
+        known.push("sysroot");
         for e in &t.entries {
             let name = e.key.join(".");
             if known.contains(&name.as_str()) {

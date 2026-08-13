@@ -379,16 +379,16 @@ pub fn plan(
             continue;
         }
 
-        let includes = collect_includes(sess, &env, &build_dir, &mut diags);
+        let includes = collect_includes(sess, &env, cfg, &build_dir, &mut diags);
         let defines = collect_defines(&env);
-        let flags = collect_flags(&env, "flags");
+        let flags = collect_flags(sess, &env, cfg, &build_dir, "flags", &mut diags);
         // 言語標準は型付きのプロパティであり、`-std=` はここで組み立てる。
         // 言語別のフラグより前に置く。`c_flags = ["-std=gnu11"]` のような
         // 方言の指定が後に来て勝つようにするため（後勝ちは -std の慣習）
         let mut c_flags = std_flag(&env, "c_std").into_iter().collect::<Vec<_>>();
-        c_flags.extend(collect_flags(&env, "c_flags"));
+        c_flags.extend(collect_flags(sess, &env, cfg, &build_dir, "c_flags", &mut diags));
         let mut cxx_flags = std_flag(&env, "cxx_std").into_iter().collect::<Vec<_>>();
-        cxx_flags.extend(collect_flags(&env, "cxx_flags"));
+        cxx_flags.extend(collect_flags(sess, &env, cfg, &build_dir, "cxx_flags", &mut diags));
         // `link_flags` だけは compile_env からではなく、リンク閉包から集める。
         // `private` はリンクの到達可能性を制御しない（issue #56、下の
         // `closure_link_flags`）。
@@ -914,7 +914,7 @@ fn closure_link_flags(
                 // 道は絶対パスへ展開する。リンクの作業ディレクトリは
                 // ビルドディレクトリであり、パッケージの中のリンカスクリプトを
                 // 相対で指しても届かない（issue #70）。
-                if let Some(abs) = absolute_path(sess, &item, build_dir, diags) {
+                if let Some(abs) = absolute_path(sess, &item, &cfg, build_dir, diags) {
                     out.push(abs.display().to_string());
                 } else if let Some(s) = item.as_str() {
                     out.push(s.to_string());
@@ -1014,13 +1014,14 @@ fn collect_sources(
 fn collect_includes(
     sess: &Session,
     env: &dowel_model::PropMap,
+    cfg: &Config,
     build_dir: &Path,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<PathBuf> {
     let Some(value) = env.get("includes") else { return Vec::new() };
     let mut out = Vec::new();
     for item in flatten(value) {
-        let Some(abs) = absolute_path(sess, &item, build_dir, diags) else { continue };
+        let Some(abs) = absolute_path(sess, &item, cfg, build_dir, diags) else { continue };
         if !out.contains(&abs) {
             out.push(abs);
         }
@@ -1035,6 +1036,7 @@ fn collect_includes(
 fn absolute_path(
     sess: &Session,
     item: &Value,
+    cfg: &Config,
     build_dir: &Path,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<PathBuf> {
@@ -1058,17 +1060,34 @@ fn absolute_path(
             }
         }
         PathBase::BuildDir => build_dir.to_path_buf(),
-        PathBase::Sysroot => {
-            diags.push(
-                Diagnostic::error(
-                    "unimplemented-path-base",
-                    "sysroot-relative paths are not implemented",
+        // sysroot（ADR-0047）。宣言が無ければ既定に落とさない——落とすと、
+        // 指していない場所を指した命令が組み上がり、誤りはコンパイラの
+        // 言葉で返ってくる。
+        PathBase::Sysroot => match cfg.sysroot() {
+            Some(root) => PathBuf::from(root),
+            None => {
+                let mut d = Diagnostic::error(
+                    "missing-sysroot",
+                    "`sysroot()` is written but no sysroot is declared",
                 )
-                .note("toolchain descriptions are Phase 5 (docs/90-roadmap.md)"),
-            );
-            return None;
-        }
+                .note(format!(
+                    "declare `sysroot = \"...\"` in `[toolchain.{}]` of dowel.toml",
+                    cfg.target
+                ))
+                .note("a relative path is resolved against a fetched toolchain (ADR-0044)");
+                if let Some(s) = item.prov.nearest_site() {
+                    d = d.at(s.file, s.span, "written here");
+                }
+                diags.push(d);
+                return None;
+            }
+        },
     };
+    // `sysroot()` のように相対が空なら、基準点そのものである。継ぐと
+    // 末尾に区切りが付き、`-I <root>/` という見え方になる。
+    if p.rel.is_empty() {
+        return Some(base);
+    }
     Some(base.join(&p.rel))
 }
 
@@ -1237,7 +1256,9 @@ pub fn public_include_dirs(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<P
     let mut ignored = Vec::new();
     let mut out = Vec::new();
     for item in flatten(&value) {
-        let Some(abs) = absolute_path(sess, &item, Path::new(""), &mut ignored) else { continue };
+        let Some(abs) = absolute_path(sess, &item, &cfg, Path::new(""), &mut ignored) else {
+            continue;
+        };
         if !out.contains(&abs) {
             out.push(abs);
         }
@@ -1294,9 +1315,30 @@ fn std_flag(env: &dowel_model::PropMap, name: &str) -> Option<String> {
     env.get(name).and_then(|v| v.as_str()).map(|s| format!("-std={s}"))
 }
 
-fn collect_flags(env: &dowel_model::PropMap, name: &str) -> Vec<String> {
+/// 翻訳の旗。`Path` の要素は絶対パスへ展開する
+/// （[ADR-0047](../../../docs/adr/0047-sysroot.md)）。
+///
+/// `link_flags` と同じ扱いである。`-I` と `sysroot()` を並べて書ける形が
+/// 要るのは、文字列連結を持たないためで、そこは `link_flags` が先に
+/// 通った道である（issue #70）。
+fn collect_flags(
+    sess: &Session,
+    env: &dowel_model::PropMap,
+    cfg: &Config,
+    build_dir: &Path,
+    name: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> Vec<String> {
     let Some(value) = env.get(name) else { return Vec::new() };
-    flatten_strs(value)
+    let mut out = Vec::new();
+    for item in flatten(value) {
+        if let Some(abs) = absolute_path(sess, &item, cfg, build_dir, diags) {
+            out.push(abs.display().to_string());
+        } else if let Some(s) = item.as_str() {
+            out.push(s.to_string());
+        }
+    }
+    out
 }
 
 /// 具体化済みの値から文字列の列を取り出す。入れ子は最後まで解く。

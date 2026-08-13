@@ -889,6 +889,18 @@ fn configure(
                         cfg.set_tool(name, tool_command(&t.command, root_dir.as_deref()));
                     }
                 }
+                // sysroot も同じ規則で解く（ADR-0047）。取ってきた一式の中に
+                // 在るのが普通で、絶対パスなら機械の中の場所を指している。
+                // 道具とは規則が違う。区切りを持たない名前も、取ってきた
+                // 一式の根から解く——sysroot は PATH を引く指定ではないので、
+                // `sysroot = "sysroot"` は「その中の `sysroot/`」である。
+                cfg.set_sysroot(decl.sysroot.as_ref().map(|s| {
+                    let path = std::path::Path::new(s);
+                    match &root_dir {
+                        Some(r) if !path.is_absolute() => r.join(path).display().to_string(),
+                        _ => s.clone(),
+                    }
+                }));
             }
             None => {
                 let declared: Vec<&str> = root.toolchains.keys().map(|s| s.as_str()).collect();

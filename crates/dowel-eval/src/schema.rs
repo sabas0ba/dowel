@@ -590,21 +590,21 @@ pub fn block_props() -> Vec<PropDef> {
         },
         PropDef {
             name: "flags",
-            ty: list(Type::Str),
+            ty: list(Type::Word),
             merge: Merge::Append,
-            doc: "compile flags for every language. order preserving",
+            doc: "compile flags for every language, order preserving. a `Path` element expands to its absolute path",
             domain: None,
         },
         PropDef {
             name: "c_flags",
-            ty: list(Type::Str),
+            ty: list(Type::Word),
             merge: Merge::Append,
             doc: "compile flags for C sources only, after `flags`. order preserving",
             domain: None,
         },
         PropDef {
             name: "cxx_flags",
-            ty: list(Type::Str),
+            ty: list(Type::Word),
             merge: Merge::Append,
             doc: "compile flags for C++ sources only, after `flags`. order preserving",
             domain: None,
@@ -655,6 +655,7 @@ pub const FUNCTIONS: &[(&str, &str, &str)] = &[
     ("glob", "(Str) -> List<Path>", "files matching the pattern; expanded at plan time"),
     ("dir", "(Str) -> Path", "a directory relative to the package root"),
     ("file", "(Str) -> Path", "a file relative to the package root"),
+    ("sysroot", "([Str]) -> Path", "the toolchain's sysroot, or a path under it (ADR-0047)"),
     ("dep", "(Str) -> DepRef", "a reference to a dependency declared in dowel.toml"),
     ("target", "(Str) -> TargetRef", "a reference to a target in the same package"),
     (

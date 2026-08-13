@@ -521,8 +521,7 @@ Runner values may use `match` / `when` like any other property.
 
 ## 4. Functions
 
-Callable in value position. There are exactly five; unknown names fail with
-a suggestion.
+Callable in value position; unknown names fail with a suggestion.
 
 | Function | Signature | Meaning |
 |---|---|---|
@@ -531,11 +530,18 @@ a suggestion.
 | `file(path)` | `(Str) -> Path` | a file, relative to the same root |
 | `dep(name)` | `(Str) -> DepRef` | reference to a dependency declared in this package's `dowel.toml`. An undeclared name is `undeclared-dependency` |
 | `target(name)` | `(Str) -> TargetRef` | reference to another target in the same package |
+| `template(name)` | `(Str) -> TemplateRef` | reference to a `[template.<name>]` in the same file ([ADR-0035](adr/0035-template-kind.md)) |
+| `sysroot([path])` | `([Str]) -> Path` | the toolchain's sysroot, or a path under it ([ADR-0047](adr/0047-sysroot.md)). The one function that takes no argument, since the root itself is the common case. Declared as `[toolchain] sysroot`; writing it with none declared is `missing-sysroot` |
 
-`Path` is a distinct type from `Str`: paths always carry their base point
-(the declaring package's root), and the language has no string concatenation
-with which to build one. A plain string where a path is expected is a type
-error.
+`Path` is a distinct type from `Str`: paths always carry their base point —
+the declaring package's root, the build directory, or the sysroot — and the
+language has no string concatenation with which to build one. A plain string
+where a path is expected is a type error.
+
+That is also why `flags`, `c_flags`, `cxx_flags`, and `link_flags` are
+`List<Word>`: an element may be a `Str` or a `Path`, and a `Path` expands to
+its absolute spelling. `["-I", sysroot("usr/include")]` is two words, which
+is how a path reaches a command line without concatenation (issue #70).
 
 ## 5. Configuration references and conditionals
 
