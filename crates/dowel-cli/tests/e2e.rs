@@ -6687,3 +6687,95 @@ fn a_toolchain_url_without_a_digest_is_refused() {
     r.stderr_contains("unpinned-toolchain");
     r.stderr_contains("the bytes behind a name can change");
 }
+
+/// git 依存を1つ持つ木。取得の経路を通す検査が使う。
+fn project_with_a_git_dependency(name: &str) -> (Project, String) {
+    let p = Project::new(name);
+    p.write("dep/dowel.toml", "[package]\nname = \"dep\"\nversion = \"0\"\n");
+    p.write("dep/dowel.build", "[lib.dep]\nsources = [file(\"src/dep.c\")]\n");
+    p.write("dep/src/dep.c", "int dep_answer(void) { return 42; }\n");
+    let dep = p.path("dep");
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dep)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .expect("cannot start git");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "."]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "x"]);
+    let rev = git(&["rev-parse", "HEAD"]);
+
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+             [[dependencies]]\nname = \"dep\"\ngit = \"{}\"\nrev = \"{rev}\"\n",
+            dep.display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [dep(\"dep\")]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint dep_answer(void);\n\
+         int main(void) { printf(\"v=%d\\n\", dep_answer()); return 0; }\n",
+    );
+    (p, rev)
+}
+
+#[test]
+fn offline_refuses_what_is_missing_and_fetch_makes_the_tree_ready() {
+    // 取得済みの木は網へ行かずに組める——偶然に。何もそう述べず、何も
+    // 確かめず、そうでなくなったことも報せない（ADR-0045）。
+    let (p, _) = project_with_a_git_dependency("offline");
+
+    // 何も取っていない状態で断る。理由は「取れなかった」ではなく
+    // 「取っていない」であり、直し方も違う。
+    let r = p.run(".", &["build", "--offline"]);
+    r.failure();
+    r.stderr_contains("needs-fetch");
+    r.stderr_contains("dowel fetch");
+    // 網の失敗として出してはならない。何も試していない。
+    assert!(!r.stderr.contains("unfetchable-dependency"), "stderr:\n{}", r.stderr);
+
+    // 取ってくるだけで、組まない。
+    let r = p.run(".", &["fetch"]);
+    r.success();
+    r.stderr_contains("ready: dep");
+    assert!(!build_dir_exists(&p.path(".")), "`fetch` must not build");
+
+    // これで網を切っても組める。
+    let r = p.run(".", &["build", "--offline"]);
+    r.success();
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "v=42\n");
+
+    // 環境変数でも同じ。容器や CI では、命令ごとに旗を書き足すより漏れない。
+    p.run_env(".", &["build"], &[("DOWEL_OFFLINE", "1")]).success();
+}
+
+/// ビルドディレクトリが1つでも在るか。`fetch` が組んでいないことを見る。
+fn build_dir_exists(project_dir: &std::path::Path) -> bool {
+    std::fs::read_dir(project_dir.join(".dowel/build")).is_ok_and(|mut d| d.next().is_some())
+}
+
+#[test]
+fn fetch_takes_no_target_and_says_so() {
+    let p = Project::new("fetch-args");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    let r = p.run(".", &["fetch", "app"]);
+    r.failure();
+    r.stderr_contains("`fetch` takes no target");
+}

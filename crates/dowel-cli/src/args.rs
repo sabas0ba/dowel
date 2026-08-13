@@ -22,6 +22,7 @@ Commands:
     add <path>         Create a lib package in a subdirectory and declare it as a path dependency.
                        With --git <url>, declare a pinned git dependency instead.
     check              Evaluate the manifests and report diagnostics. Does not build.
+    fetch              Acquire every dependency and toolchain the build needs, then stop.
     build [target]     Build. With no target, builds every bin, test, and bench.
     test [target]      Build and run test targets. With no target, runs every test.
     install [target]   Build, then copy the products under --prefix. With no target, installs
@@ -55,6 +56,7 @@ Common options:
         --log-level <level>  off|error|warn|info|debug|trace (or the DOWEL_LOG variable)
         --log-format <fmt>   text | json
         --color <when>       auto | always | never
+        --offline            Do not touch the network; use only what is already fetched
     -h, --help               Show this help
     -V, --version            Show the version
 
@@ -120,6 +122,8 @@ pub enum Command {
         path: Option<String>,
     },
     Check,
+    /// 依存と道具一式を取得して止まる（[ADR-0045](../../../docs/adr/0045-offline.md)）
+    Fetch,
     Build {
         targets: Vec<String>,
     },
@@ -200,6 +204,8 @@ pub struct Options {
     pub prefix: Option<PathBuf>,
     /// `install --destdir=<dir>`。段取り用に、先頭へ継ぐディレクトリ
     pub destdir: Option<PathBuf>,
+    /// `--offline`。網へ触れない（ADR-0045）
+    pub offline: bool,
     pub target: Option<String>,
     pub features: Vec<String>,
     pub default_features: bool,
@@ -241,6 +247,7 @@ impl Default for Options {
             older_than: None,
             prefix: None,
             destdir: None,
+            offline: false,
             target: None,
             features: Vec::new(),
             default_features: true,
@@ -336,6 +343,10 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             // 権限を要し、書ける既定は誰の役にも立たない。
             "--prefix" => opts.prefix = Some(PathBuf::from(take("--prefix")?)),
             "--destdir" => opts.destdir = Some(PathBuf::from(take("--destdir")?)),
+            // 網へ行かない（ADR-0045）。環境変数でも与えられる——CI や
+            // 隔離した容器では、命令ごとに旗を書き足すより環境で決める方が
+            // 漏れない。
+            "--offline" => opts.offline = true,
             "--target" => opts.target = Some(take("--target")?),
             "--features" => {
                 let v = take("--features")?;
@@ -514,6 +525,13 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
         // `check` は目標を取らない。全ターゲットを検査する入口であり、
         // 渡された名前を黙って捨てると、絞ったつもりの利用者が全体の
         // 結果を読むことになる（issue #141）。
+        "fetch" if !positional.is_empty() => {
+            return Err(format!(
+                "`fetch` takes no target (got `{}`); it acquires everything the build needs",
+                positional.join(" ")
+            ))
+        }
+        "fetch" => Command::Fetch,
         "check" if !positional.is_empty() => {
             return Err(format!(
                 "`check` takes no target (got `{}`); it checks everything",

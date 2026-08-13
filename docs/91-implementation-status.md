@@ -679,6 +679,24 @@ changes, only the speed.
     fetched toolchain warn about itself
   - The language server never fetches: it resolves against a toolchain that
     is already unpacked, and otherwise leaves the command as written
+- **Offline is a mode, not an accident** ([ADR-0045](adr/0045-offline.md)).
+  Every acquisition already wrote a completion marker and reused it, so a
+  fully-fetched tree built without the network — by accident. Nothing said
+  so, nothing checked it, and a missing input read as curl's exit status
+  rather than as "this has not been fetched".
+  - `--offline` (or `DOWEL_OFFLINE=1`) forbids acquisition and reports
+    `needs-fetch` for anything absent, naming where it would come from and
+    that `dowel fetch` is the way to get it. A separate code from
+    `unfetchable-*`: nothing was tried, and the fix is different
+  - `dowel fetch` acquires dependencies and the toolchain and **stops**, so
+    "ready to go offline" is visible rather than inferred
+  - The mode is process-wide, set once from argv like the logging level.
+    Threading it through each fetch function would mean wiring up every new
+    acquisition path, and the one that is forgotten is the one that reaches
+    the network
+  - `pkg-config` is unaffected: it starts a local process and reads local
+    files, and offline is about the network. Nothing sandboxes the
+    compiler either — the guarantee covers what dowel does
 - Transfer for `[runner.<triple>]` (`transfer` / `remote_dir` / `host`):
   when the target machine cannot see the build machine's file system,
   artifacts are carried over before launch. Paths are not written in the
@@ -1020,7 +1038,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (714 tests):
+Current breakdown (716 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1029,7 +1047,7 @@ Current breakdown (714 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 254 |
+| `e2e` | compile real C and C++, run it, check the output | 256 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (74 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

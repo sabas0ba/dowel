@@ -19,6 +19,7 @@ use dowel_eval::Site;
 use dowel_support::{log_debug, Diagnostic};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const MARKER: &str = ".dowel-rev";
 
@@ -51,6 +52,9 @@ pub fn ensure(
     if let Some(dir) = existing(root, name, rev) {
         log_debug!("git dependency `{name}` is already at {}", dir.display());
         return Ok(dir);
+    }
+    if offline() {
+        return Err(refuse_offline(&format!("git dependency `{name}`"), url, site));
     }
     let dir = checkout_dir(root, name, rev);
 
@@ -132,6 +136,34 @@ pub fn existing_archive(root: &Path, name: &str, sha256: &str) -> Option<PathBuf
 /// `curl`、無ければ `wget`。展開は `tar`。**検証だけは自前で行う**——
 /// 取ってきたものを検める手続きが環境によって在ったり無かったりするのは、
 /// 固定の意味を薄める（ADR-0029）。
+/// 網へ行かない（[ADR-0045](../../../docs/adr/0045-offline.md)）。
+///
+/// 記録の水準と同じく、argv から1度だけ決まる過程全体の状態である。
+/// 取得の関数それぞれに配線すると、通り道を1つ足すたびに配線が要る——
+/// そして配線を忘れた道だけが、`--offline` を無視して網へ出る。
+static OFFLINE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_offline(on: bool) {
+    OFFLINE.store(on, Ordering::Relaxed);
+}
+
+pub fn offline() -> bool {
+    OFFLINE.load(Ordering::Relaxed)
+}
+
+/// 取りに行けないことを述べる。
+///
+/// `unfetchable-*` とは別のコードにする。原因が違い、直し方も違う——
+/// あちらは URL か網の問題で、こちらは「まだ取っていない」である。
+fn refuse_offline(what: &str, url: &str, site: Site) -> Box<Diagnostic> {
+    Box::new(
+        Diagnostic::error("needs-fetch", format!("{what} is not fetched, and `--offline` is set"))
+            .at(site.file, site.span, "declared here")
+            .note(format!("it would come from `{url}`"))
+            .note("run `dowel fetch` once with the network, then build offline"),
+    )
+}
+
 pub fn ensure_archive(
     root: &Path,
     name: &str,
@@ -142,6 +174,9 @@ pub fn ensure_archive(
     if let Some(dir) = existing_archive(root, name, sha256) {
         log_debug!("archive dependency `{name}` is already at {}", dir.display());
         return Ok(dir);
+    }
+    if offline() {
+        return Err(refuse_offline(&format!("archive dependency `{name}`"), url, site));
     }
     let dir = archive_dir(root, name, sha256);
 
@@ -245,6 +280,9 @@ pub fn ensure_toolchain(url: &str, sha256: &str, site: Site) -> Result<PathBuf, 
     if let Some(dir) = existing_toolchain(sha256) {
         log_debug!("the toolchain is already at {}", dir.display());
         return Ok(dir);
+    }
+    if offline() {
+        return Err(refuse_offline("the toolchain", url, site));
     }
     let dir = toolchain_dir(sha256);
     let fail = |e: String| {
