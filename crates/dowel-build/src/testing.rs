@@ -16,6 +16,7 @@ use crate::plan::Plan;
 use dowel_eval::{Config, Data, Value};
 use dowel_model::{Session, TargetId};
 use dowel_support::{log_debug, log_trace};
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -403,6 +404,10 @@ pub struct Job {
     /// 起動前に走らせる転送コマンド。対象機がビルド機の
     /// ファイルシステムを見られない場合にのみ入る
     pub transfer: Option<(String, Vec<String>)>,
+    /// 「何をどこへ送ったか」の記録の置き場
+    /// （[ADR-0046](../../../docs/adr/0046-transfer-once.md)）。
+    /// 転送を宣言している場合にのみ入る
+    pub transfer_record: Option<PathBuf>,
     /// 実行ファイル自身に事例を列挙させる宣言（ADR-0023）。
     /// これがある仕事は「まだ事例が分かっていない1件」であり、
     /// [`discover`] が本当の仕事の列に展開する
@@ -450,6 +455,9 @@ pub fn plan_jobs(
             None => (String::new(), Vec::new()),
         };
         let transfer = binary.as_ref().and_then(|b| launcher.transfer_command(b));
+        // 記録は構成ごとのビルドディレクトリに置く。構成が変われば成果物も
+        // 変わり、記録も一緒に消えるべきものである。
+        let transfer_record = transfer.as_ref().map(|_| plan.build_dir.join(TRANSFER_RECORD));
         // 作業ディレクトリはパッケージルート。テストが読む固定資産の相対パスが、
         // マニフェストに書いたものと同じ基準で解決されるようにする。
         let cwd = sess.package(sess.target(tid).package).root.clone();
@@ -467,6 +475,7 @@ pub fn plan_jobs(
             should_fail: false,
             labels: Vec::new(),
             transfer: transfer.clone(),
+            transfer_record: transfer_record.clone(),
             harness: None,
         };
         // ハーネスの宣言があれば、事例はまだ分かっていない。ここでは
@@ -740,9 +749,67 @@ pub fn run(planned: &[Job], opts: &RunOptions) -> Vec<Outcome> {
     collected.into_iter().map(|(_, o)| o).collect()
 }
 
+/// 「何をどこへ送ったか」の記録のファイル名。
+const TRANSFER_RECORD: &str = "transfers";
+
+/// この転送の鍵。命令の全体である。
+///
+/// 送り先だけでは足りない——同じ成果物を2つの宛先へ送るのは2つの転送で
+/// あり、送り方が違えば結果も違いうる。
+fn transfer_key(program: &str, args: &[String]) -> String {
+    format!("{program} {}", args.join(" "))
+}
+
+/// 記録を読む。鍵 → 送った中身の指紋。
+fn read_transfers(file: &Path) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Ok(text) = std::fs::read_to_string(file) else { return out };
+    for line in text.lines() {
+        if let Some((sha, key)) = line.split_once('\t') {
+            out.insert(key.to_string(), sha.to_string());
+        }
+    }
+    out
+}
+
+fn write_transfers(file: &Path, map: &BTreeMap<String, String>) {
+    let text: String = map.iter().map(|(k, v)| format!("{v}\t{k}\n")).collect();
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(file, text);
+}
+
+/// この仕事の記録を落とす（ADR-0046）。
+///
+/// 起動できなかったときに呼ぶ。対象機の側で消された・置き換えられたことは
+/// こちらからは見えないので、**起動の失敗を、送り直す合図として使う**。
+pub(crate) fn forget_transfer(job: &Job) {
+    let (Some(file), Some((program, args))) = (&job.transfer_record, &job.transfer) else {
+        return;
+    };
+    let mut map = read_transfers(file);
+    if map.remove(&transfer_key(program, args)).is_some() {
+        log_debug!("forgetting the transfer record for {}", job.label());
+        write_transfers(file, &map);
+    }
+}
+
 /// 成果物を対象機へ転送する。失敗した理由をそのまま返す。
+///
+/// 同じ中身を同じ宛先へ既に送っていれば、送らない（ADR-0046）。実機や
+/// シリアル越しの転送は実行そのものより長いことがあり、変わっていない
+/// ものを毎回運ぶ理由が無い。
 pub(crate) fn transfer(job: &Job) -> Result<(), String> {
     let Some((program, args)) = &job.transfer else { return Ok(()) };
+    let key = transfer_key(program, args);
+    let digest = job.binary.as_ref().and_then(|b| dowel_support::sha256::hex_of_file(b).ok());
+    if let (Some(file), Some(digest)) = (&job.transfer_record, &digest) {
+        if read_transfers(file).get(&key).is_some_and(|seen| seen == digest) {
+            log_debug!("the artifact for {} is already on the target", job.label());
+            return Ok(());
+        }
+    }
     log_debug!("transferring the artifact for {}", job.label());
     log_trace!("  {program} {}", args.join(" "));
     let out = Command::new(program)
@@ -750,6 +817,13 @@ pub(crate) fn transfer(job: &Job) -> Result<(), String> {
         .output()
         .map_err(|e| format!("cannot start `{program}`: {e}"))?;
     if out.status.success() {
+        // 送ったものを憶える。指紋が採れなかった場合は憶えない——
+        // 次も送るだけで、誤って飛ばすことはない。
+        if let (Some(file), Some(digest)) = (&job.transfer_record, &digest) {
+            let mut map = read_transfers(file);
+            map.insert(key, digest.clone());
+            write_transfers(file, &map);
+        }
         return Ok(());
     }
     // 転送の失敗はテストの失敗ではない。理由をそのまま見せる。
@@ -821,7 +895,13 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
                 ..Outcome::of(job)
             }
         }
-        Err(e) => Outcome { duration_ms, ..failed(e.to_string()) },
+        // 起動できなかった。対象機で消された・置き換えられたことは、
+        // こちらからは見えない——見えるのはこの失敗だけなので、これを
+        // 送り直す合図として使う（ADR-0046）。
+        Err(e) => {
+            forget_transfer(job);
+            Outcome { duration_ms, ..failed(e.to_string()) }
+        }
     }
 }
 

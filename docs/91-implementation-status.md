@@ -701,7 +701,22 @@ changes, only the speed.
   when the target machine cannot see the build machine's file system,
   artifacts are carried over before launch. Paths are not written in the
   manifest; the implementation appends them
-  ([ADR-0008](adr/0008-runner-transfer.md))
+  ([ADR-0008](adr/0008-runner-transfer.md)).
+  - **The same bytes are sent once per destination**
+    ([ADR-0046](adr/0046-transfer-once.md)). Over SSH to a board, or a
+    serial link, the copy is frequently longer than the test — and dowel was
+    careful not to recompile what had not changed, then re-sent the result
+    every run. `<build-dir>/transfers` records the artifact's fingerprint
+    against the transfer's full command line; the command line is the key
+    because two destinations are two transfers
+  - **A run that could not start drops the record**, so the next one sends
+    again. dowel cannot see the target machine and so cannot know it was
+    wiped; the launch failing is the only evidence available, and using it
+    makes the skip self-healing
+  - **Artifacts are left behind on purpose.** Cleaning them up would undo
+    the skip — the two cannot both be defaults. The record lives in the
+    build directory, so `cache gc --older-than` or removing `.dowel/build`
+    resets the assumption; there is no separate switch
 - `[runner.<triple>]` — an execution wrapper per target triple.
   `dowel test --target=<triple>` launches through the wrapper transparently.
   If the triple differs from the host and no runner is declared, launch is
@@ -1038,7 +1053,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (716 tests):
+Current breakdown (718 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1047,7 +1062,7 @@ Current breakdown (716 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 256 |
+| `e2e` | compile real C and C++, run it, check the output | 258 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (74 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
@@ -1118,7 +1133,7 @@ cannot be measured with the current fixtures; the scale fixture
 | making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
 | the `toolchain` kind in `dowel.build` | still reserved. [ADR-0044](adr/0044-toolchain-acquisition.md) did not need it: the toolchain belongs to the build ([ADR-0031](adr/0031-toolchain-is-the-builds.md)), and `dowel.toml` is where the build is described |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
-| cleaning up artifacts left on target machines; skipping redundant transfers | Phase 4; transfers run every time |
+| cleaning up artifacts left on target machines | deliberately not done ([ADR-0046](adr/0046-transfer-once.md)): it would undo the transfer skip, and the two cannot both be defaults. If wanted, it is an explicit command whose cost is that the next run transfers again |
 | a native registry | Phase 5; the sources that exist are `path` / `git` / `url` (archive, [ADR-0029](adr/0029-tarball-dependencies.md)) and `version`, which delegates to pkg-config ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) with `dowel.lock` recording its resolutions — a dowel-run registry, if ever wanted, is a separate future decision |
 | automatic ABI label computation | Phase 6; today only `must_equal` verification of a hand-written `abi`. Nothing verifies that a surface declaring `abi = "c"` really is `extern "C"` — the claim is narrower and more checkable than a language label, and is what an IDL or a header scan would confirm ([ADR-0019](adr/0019-c-abi-label.md)) |
 | computing an ABI label rather than reading a declared one | Phase 6. The **shape** is decided: a label is a set of components compared one by one ([ADR-0042](adr/0042-abi-label-components.md)), so a computed label can be matched against a declared one component by component. Two components exist (`libc`, `cxx_stdlib`); the rest of Q2's candidates — sanitizers, LTO, exception model, `_GLIBCXX_USE_CXX11_ABI`, MSVC runtime kind — each need their own evidence and domain |

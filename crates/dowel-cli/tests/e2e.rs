@@ -6779,3 +6779,82 @@ fn fetch_takes_no_target_and_says_so() {
     r.failure();
     r.stderr_contains("`fetch` takes no target");
 }
+
+/// 転送を数える木（[ADR-0046](../../../docs/adr/0046-transfer-once.md)）。
+///
+/// 数えるのは**転送が走った回数**である。転送先の実体を見ると、
+/// 「送らなかった」と「送って消えた」が同じ状態に潰れる。
+fn counting_transfer_project(name: &str, launcher: &str) -> (Project, std::path::PathBuf) {
+    let triple = host_triple();
+    let p = Project::new(name);
+    let staged = p.path("staged");
+    std::fs::create_dir_all(&staged).unwrap();
+    let log = p.path("transfers.log");
+    p.write_script(
+        "bin/copy",
+        &format!("#!/bin/sh\necho sent >> {}\nexec cp \"$@\"\n", log.display()),
+    );
+    p.write("dowel.toml", "[package]\nname = \"r\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        &format!(
+            "[test.moved]\nsources = glob(\"*.c\")\n\n\
+             [runner.{triple}]\n\
+             transfer   = [\"{}\"]\n\
+             remote_dir = \"{}\"\n\
+             command    = \"{launcher}\"\n",
+            p.path("bin/copy").display(),
+            staged.display()
+        ),
+    );
+    p.write("moved.c", "int main(void) { return 0; }\n");
+    (p, log)
+}
+
+#[test]
+fn an_unchanged_artifact_is_not_transferred_twice() {
+    // 実機やシリアル越しの転送は、実行そのものより長いことがある。
+    // 変わっていないものを毎回運ぶ理由は無い（ADR-0046）。
+    let (p, log) = counting_transfer_project("transfer-once", "env");
+    let sent = || std::fs::read_to_string(&log).map(|t| t.lines().count()).unwrap_or(0);
+
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 1, "the first run must transfer");
+
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 1, "an unchanged artifact was sent again");
+
+    // 中身が変われば送る。指紋が記録と食い違う。注釈では変わらない——
+    // 記録しているのは成果物のバイト列であって、原文ではない。
+    p.write("moved.c", "int main(void) { volatile int x = 7; (void)x; return 0; }\n");
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 2, "a changed artifact must be sent");
+}
+
+#[test]
+fn a_run_that_cannot_start_makes_the_next_one_transfer_again() {
+    // 対象機の側で消された・置き換えられたことは、こちらからは見えない。
+    // 見えるのは起動の失敗だけなので、それを送り直す合図に使う（ADR-0046）。
+    let (p, log) = counting_transfer_project("transfer-forget", "");
+    let launcher = p.path("bin/launcher");
+    // 起動する道具が無い。転送は済み、走らせる側で起動に失敗する。
+    p.write(
+        "dowel.build",
+        &std::fs::read_to_string(p.path("dowel.build"))
+            .unwrap()
+            .replace("command    = \"\"", &format!("command    = \"{}\"", launcher.display())),
+    );
+    let sent = || std::fs::read_to_string(&log).map(|t| t.lines().count()).unwrap_or(0);
+
+    p.run(".", &["test"]).failure();
+    assert_eq!(sent(), 1, "the transfer itself should have run");
+
+    // 起動できるようにする。記録が落ちているので、中身が同じでも送り直す。
+    p.write_script("bin/launcher", "#!/bin/sh\nexec \"$@\"\n");
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 2, "a run that could not start must drop the record");
+
+    // その次は、また送らない。記録が戻っている。
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 2, "the record should be back");
+}
