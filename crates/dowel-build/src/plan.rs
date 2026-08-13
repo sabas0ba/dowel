@@ -387,6 +387,7 @@ pub fn plan(
         // 方言の指定が後に来て勝つようにするため（後勝ちは -std の慣習）
         let mut c_flags = std_flag(&env, "c_std").into_iter().collect::<Vec<_>>();
         c_flags.extend(collect_flags(sess, &env, cfg, &build_dir, "c_flags", &mut diags));
+        let asm_flags = collect_flags(sess, &env, cfg, &build_dir, "asm_flags", &mut diags);
         let mut cxx_flags = std_flag(&env, "cxx_std").into_iter().collect::<Vec<_>>();
         cxx_flags.extend(collect_flags(sess, &env, cfg, &build_dir, "cxx_flags", &mut diags));
         // `link_flags` だけは compile_env からではなく、リンク閉包から集める。
@@ -432,22 +433,45 @@ pub fn plan(
             // 言語は拡張子で決まる。`cc` は driver であり `.cpp` のコンパイル
             // 自体は通すが、C++ として組むには標準ライブラリと ABI の前提が
             // 揃った driver（`tc.cxx`）を使う必要がある
-            let (compiler, tool) =
-                if is_cxx(src) { (cfg.tool("cxx"), "CXX") } else { (cfg.tool("c"), "CC") };
+            let lang = language(src);
+            let (compiler, tool) = match lang {
+                Language::Cxx => (cfg.tool("cxx"), "CXX"),
+                // アセンブリも C の driver に渡す。driver が gas を呼ぶので、
+                // 別の道具を宣言させる理由が無い（ADR-0048）。
+                Language::Asm => (cfg.tool("c"), "AS"),
+                Language::C => (cfg.tool("c"), "CC"),
+            };
             let obj = object_path(&build_dir, &pkg.name, &target.name, &pkg.root, src, cfg);
             // 依存の記録は必ず1つの `.d` に落ちる。MSVC はコンパイラに
             // 書かせず、実行する側が `/showIncludes` の出力を畳んで書く
             // （ADR-0027）——読む側の機構を様式ごとに増やさないためである。
             let depfile = obj.with_extension(format!("{}.d", toolstyle::object_extension(cfg)));
+            // 前処理を通らないアセンブリに依存は無い。`-MD` を渡しても
+            // 何も書かれず、宣言した出力が出ないことになる（ADR-0048）。
+            let wants_depfile = lang != Language::Asm || is_preprocessed_asm(src);
             let mut args: Vec<String> = Vec::new();
             args.extend(toolstyle::default_compile_flags(cfg));
             if position_independent.contains(&tid) {
                 args.extend(toolstyle::shared_object_flags(cfg));
             }
+            if lang == Language::Asm {
+                args.extend(toolstyle::assemble_flags(cfg));
+            }
             args.extend(flags.iter().cloned());
             // 言語別のフラグは共通の `flags` の後。後勝ちの慣習により、
-            // 言語別の指定が共通の指定を上書きできる向きにする
-            args.extend(if is_cxx(src) { &cxx_flags } else { &c_flags }.iter().cloned());
+            // 言語別の指定が共通の指定を上書きできる向きにする。
+            //
+            // アセンブリに `c_flags` は掛けない。`-std=c17` を手書きの
+            // アセンブリに渡すのは、言語を取り違えているだけである（ADR-0048）。
+            args.extend(
+                match lang {
+                    Language::Cxx => &cxx_flags,
+                    Language::Asm => &asm_flags,
+                    Language::C => &c_flags,
+                }
+                .iter()
+                .cloned(),
+            );
             for inc in &includes {
                 args.push(toolstyle::include(cfg, inc));
             }
@@ -455,7 +479,12 @@ pub fn plan(
                 args.push(toolstyle::define(cfg, k, v));
             }
             // 入出力と依存の綴りは様式が決める（ADR-0027）。
-            args.extend(toolstyle::compile_io(cfg, src, &obj, &depfile));
+            args.extend(toolstyle::compile_io(
+                cfg,
+                src,
+                &obj,
+                wants_depfile.then_some(depfile.as_path()),
+            ));
 
             let id = ActionId(plan.actions.len());
             plan.actions.push(Action {
@@ -466,7 +495,7 @@ pub fn plan(
                 args: args.clone(),
                 inputs: vec![src.clone()],
                 outputs: vec![obj.clone()],
-                depfile: Some(depfile),
+                depfile: wants_depfile.then_some(depfile),
                 description: format!("{tool} {}", rel_display(&build_dir, &obj)),
                 deps: Vec::new(),
             });
@@ -840,6 +869,38 @@ fn count(plan: &Plan, kind: ActionKind) -> usize {
 
 /// 構成から来る既定のフラグ。マニフェストの `flags` より前に置き、
 /// 記述側が後から上書きできるようにする。
+/// ソース1つの言語（[ADR-0048](../../../docs/adr/0048-assembly.md)）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Language {
+    C,
+    Cxx,
+    /// アセンブリ。C の driver が組み立てるが、C ではない
+    Asm,
+}
+
+/// アセンブリとして扱われる拡張子。
+///
+/// `.S` は前処理を通り、`.s` は通らない。C の driver はどちらも受けるが、
+/// 依存を書くのは前者だけである。`.asm` は入れない——あれは MASM や NASM の
+/// 構文であって、gas の driver は受け取れない。
+const ASM_EXTENSIONS: &[&str] = &["s", "S"];
+
+/// 前処理を通るアセンブリか。依存ファイルを頼めるのはこちらだけである。
+fn is_preprocessed_asm(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("S")
+}
+
+fn language(path: &Path) -> Language {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if CXX_EXTENSIONS.contains(&ext) {
+        Language::Cxx
+    } else if ASM_EXTENSIONS.contains(&ext) {
+        Language::Asm
+    } else {
+        Language::C
+    }
+}
+
 /// C++ として扱われる拡張子。
 ///
 /// `cc` も `c++` も driver であり拡張子で言語を判別するが、選択の結果は

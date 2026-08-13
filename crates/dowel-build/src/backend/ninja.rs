@@ -98,8 +98,14 @@ pub fn generate(g: &BuildGraph) -> String {
         out.push_str(&format!("  cmd = {}\n", value(&step.command_line())));
         out.push_str(&format!("  desc = {}\n", value(&step.description)));
         if step.kind == ActionKind::Compile && g.deps == Deps::Depfile {
-            if let Some(d) = &step.depfile {
-                out.push_str(&format!("  depfile = {}\n", value(&d.display().to_string())));
+            match &step.depfile {
+                Some(d) => {
+                    out.push_str(&format!("  depfile = {}\n", value(&d.display().to_string())))
+                }
+                // 束縛を書かないと `$depfile` は規則の側の同名を指し、
+                // ninja が循環として断る。空は「依存ファイル無し」である
+                // （[ADR-0048](../../../docs/adr/0048-assembly.md)）。
+                None => out.push_str("  depfile =\n"),
             }
         }
         out.push('\n');

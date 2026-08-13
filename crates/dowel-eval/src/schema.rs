@@ -610,6 +610,13 @@ pub fn block_props() -> Vec<PropDef> {
             domain: None,
         },
         PropDef {
+            name: "asm_flags",
+            ty: list(Type::Word),
+            merge: Merge::Append,
+            doc: "flags for assembly sources only, after `flags`. `c_flags` does not reach them",
+            domain: None,
+        },
+        PropDef {
             name: "link_flags",
             ty: list(Type::Word),
             merge: Merge::Append,

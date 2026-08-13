@@ -76,17 +76,26 @@ pub fn deps(cfg: &Config) -> Deps {
 ///
 /// 位置引数の順は様式が決める。GNU は `-c <入力> -o <出力>`、MSVC は
 /// `/c <入力> /Fo:<出力>` である。
-pub fn compile_io(cfg: &Config, src: &Path, obj: &Path, depfile: &Path) -> Vec<String> {
+pub fn compile_io(cfg: &Config, src: &Path, obj: &Path, depfile: Option<&Path>) -> Vec<String> {
     match cfg.style {
-        Style::Gnu => vec![
-            "-MD".into(),
-            "-MF".into(),
-            depfile.display().to_string(),
-            "-c".into(),
-            src.display().to_string(),
-            "-o".into(),
-            obj.display().to_string(),
-        ],
+        Style::Gnu => {
+            let mut args = Vec::new();
+            // 依存を書かせない場合がある。前処理を通らないアセンブリが
+            // それで、`-MD` を渡してもコンパイラは何も書かない——宣言した
+            // 出力が出ないことになる（[ADR-0048](../../../docs/adr/0048-assembly.md)）。
+            if let Some(d) = depfile {
+                args.push("-MD".into());
+                args.push("-MF".into());
+                args.push(d.display().to_string());
+            }
+            args.extend([
+                "-c".into(),
+                src.display().to_string(),
+                "-o".into(),
+                obj.display().to_string(),
+            ]);
+            args
+        }
         Style::Msvc => vec![
             "/nologo".into(),
             "/showIncludes".into(),
@@ -218,6 +227,22 @@ pub fn export_file_extension(form: ExportForm) -> &'static str {
         ExportForm::VersionScript => "map",
         ExportForm::SymbolList => "symbols",
         ExportForm::ModuleDefinition => "def",
+    }
+}
+
+/// アセンブリを組み立てるときの追加（ADR-0048）。
+///
+/// `.note.GNU-stack` を持たない目的ファイルは、リンカに「実行可能スタックが
+/// 要る」と読まれる。C のコンパイラは自分の出力に印を付けるが、手書きの
+/// アセンブリには誰も付けない——`-fPIC` と同じで、出来上がるものの正しさが
+/// 掛かっている引数なので dowel が組み立てる（ADR-0030 と同じ判断）。
+///
+/// 本当に実行可能スタックが要る稀な場合は `asm_flags` で言い直せる。
+pub fn assemble_flags(cfg: &Config) -> Vec<String> {
+    match cfg.style {
+        Style::Gnu => vec!["-Wa,--noexecstack".into()],
+        // MSVC の `ml` は別の道具であり、この印は ELF のものである。
+        Style::Msvc => Vec::new(),
     }
 }
 
@@ -432,14 +457,14 @@ mod tests {
         // `/MD` は MSVC で「動的 CRT をリンクする」を意味する。依存の
         // 書き出しを頼んだ旗が ABI を選ぶ旗になってはならない（issue #113）。
         let msvc = cfg(Style::Msvc);
-        let args = compile_io(&msvc, Path::new("a.c"), Path::new("a.obj"), Path::new("a.d"));
+        let args = compile_io(&msvc, Path::new("a.c"), Path::new("a.obj"), Some(Path::new("a.d")));
         assert!(!args.iter().any(|a| a == "-MD" || a == "/MD"), "{args:?}");
         assert!(args.iter().any(|a| a == "/showIncludes"), "{args:?}");
         assert_eq!(deps(&msvc), Deps::ShowIncludes);
 
         // GNU 側は従来どおり depfile を書かせる。
         let gnu = cfg(Style::Gnu);
-        let args = compile_io(&gnu, Path::new("a.c"), Path::new("a.o"), Path::new("a.o.d"));
+        let args = compile_io(&gnu, Path::new("a.c"), Path::new("a.o"), Some(Path::new("a.o.d")));
         assert!(args.iter().any(|a| a == "-MD"), "{args:?}");
         assert_eq!(deps(&gnu), Deps::Depfile);
     }
@@ -574,6 +599,23 @@ mod tests {
         assert!(!has_link_name_alias(&msvc));
         assert!(!has_link_name_alias(&mingw));
         assert_eq!(shared_library_link_name(&linux, "core"), "libcore.so");
+    }
+
+    #[test]
+    fn assembly_gets_the_stack_note_and_can_skip_the_depfile() {
+        // 手書きのアセンブリには誰も `.note.GNU-stack` を付けない。
+        // 付かない目的ファイルは「実行可能スタックが要る」と読まれる
+        // （ADR-0048）。
+        let gnu = for_target("x86_64-unknown-linux-gnu");
+        assert_eq!(assemble_flags(&gnu), vec!["-Wa,--noexecstack"]);
+        // この印は ELF のものである。MSVC の `ml` は別の道具である。
+        assert!(assemble_flags(&for_target("x86_64-pc-windows-msvc")).is_empty());
+
+        // 依存を頼まない形が要る。前処理を通らない `.s` に依存は無く、
+        // `-MD` を渡してもコンパイラは何も書かない。
+        let args = compile_io(&gnu, Path::new("a.s"), Path::new("a.o"), None);
+        assert!(!args.iter().any(|a| a == "-MD"), "{args:?}");
+        assert!(args.contains(&"-c".to_string()), "{args:?}");
     }
 
     #[test]

@@ -529,7 +529,30 @@ changes, only the speed.
     macOS's `-compatibility_version` is not set: it is a second,
     independently checked number that the one declaration does not decide
 - Per-language flags: `flags` applies to every language, `c_flags` /
-  `cxx_flags` follow it and reach only their own language
+  `cxx_flags` / `asm_flags` follow it and reach only their own language
+- **Assembly is a third language** ([ADR-0048](adr/0048-assembly.md)).
+  `.s` and `.S` select it; everything else that is not C++ is still C.
+  Passing `foo.s` to `cc` did assemble it, so it looked like it already
+  worked — measuring what came out found three things wrong.
+  - `-std=c17` and `-Wall` were reaching the assembler, because assembly was
+    "not C++, therefore C". `asm_flags` is its own, and `c_flags` / `c_std`
+    stop at C
+  - The objects had no `.note.GNU-stack`, so the linker warned that an
+    executable stack was implied — and said the warning will become an
+    error. The C compiler marks its own output; nothing marks hand-written
+    assembly, so dowel passes `-Wa,--noexecstack`. Same category as `-fPIC`
+    for a shared library: the correctness of the output depends on it
+  - `-MD -MF` was passed to `.s` and no `.d` was ever written — a declared
+    output that does not appear, the shape of bug that makes an incremental
+    build never converge. Only `.S` goes through the preprocessor, so only
+    `.S` asks for one
+  - Expressing "no depfile" needed a ninja fix: its rule says
+    `depfile = $depfile`, and an edge that leaves the variable unbound makes
+    ninja resolve it to itself and refuse the file as a cycle. The other two
+    backends already coped, which is why the test covers all three
+  - The build still uses `[toolchain] c` to assemble — the driver runs the
+    assembler. Choosing `nasm` is not expressible, and `.asm` is
+    deliberately not recognized: that syntax the C driver cannot accept
 - The language standard is typed: `c_std` / `cxx_std` take a value from a
   closed, ordered vocabulary and merge with the `max` rule, so the highest
   standard in the closure wins ([ADR-0016](adr/0016-language-standard-property.md)).
@@ -1067,16 +1090,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (721 tests):
+Current breakdown (725 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 362 |
+| `unit-*` | per-crate unit tests | 363 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C and C++, run it, check the output | 261 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 264 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (75 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
