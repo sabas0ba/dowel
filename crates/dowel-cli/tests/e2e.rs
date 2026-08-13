@@ -7068,3 +7068,116 @@ fn every_backend_builds_assembly() {
         );
     }
 }
+
+/// 他のビルドシステムが作った静的ライブラリを模す
+/// （[ADR-0049](../../../docs/adr/0049-prebuilt-libraries.md)）。
+///
+/// cargo も zig も go も置けないので、`cc` と `ar` で同じ形のものを作る。
+/// 確かめたいのは「dowel が組まなかった書庫に繋げるか」であって、
+/// それを誰が作ったかではない。
+fn prebuilt_archive(p: &Project) {
+    p.write("vendor/engine.c", "int engine_answer(void) { return 42; }\n");
+    p.write("vendor/include/engine.h", "#pragma once\nint engine_answer(void);\n");
+    let dir = p.path("vendor");
+    let run = |program: &str, args: &[&str]| {
+        let out = std::process::Command::new(program)
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|e| panic!("cannot start {program}: {e}"));
+        assert!(out.status.success(), "{program}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    run("cc", &["-c", "engine.c", "-o", "engine.o"]);
+    run("ar", &["rcs", "libengine.a", "engine.o"]);
+}
+
+#[test]
+fn a_prebuilt_library_is_an_ordinary_dependency() {
+    // 他の道具が作った書庫に繋ぐ綴りは `link_flags` にパスを直書きする以外に
+    // なかった。それは依存ではないので、面も伝わらず、ABI 札も付かず、
+    // `dowel why` にも出ない（ADR-0049）。
+    let p = Project::new("prebuilt");
+    prebuilt_archive(&p);
+    p.write("dowel.toml", "[package]\nname = \"pre\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.engine]\nprebuilt = file(\"vendor/libengine.a\")\n\n\
+         [lib.engine.public]\nincludes = [dir(\"vendor/include\")]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"engine\")]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"engine.h\"\n\
+         int main(void) { printf(\"v=%d\\n\", engine_answer()); return 0; }\n",
+    );
+
+    let r = p.run(".", &["build"]);
+    r.success();
+    // 組むものは無い。書庫作成も走らない。
+    assert!(!r.stderr.contains("AR "), "a prebuilt library must not be archived:\n{}", r.stderr);
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "v=42\n");
+
+    // 面は普通に伝わる。`link_flags` の直書きにはできなかったことである。
+    let why = p.run(".", &["why", "app", "includes"]);
+    why.success();
+    assert!(why.stdout.contains("engine"), "{}", why.stdout);
+}
+
+#[test]
+fn a_prebuilt_library_carries_an_abi_label_that_is_checked() {
+    // この検査は「片方がここで組まれていない」場合のために設計されている
+    // （ADR-0042）。そういう相手が持てるようになったのは今回である。
+    let p = Project::new("prebuilt-abi");
+    prebuilt_archive(&p);
+    p.write("dowel.toml", "[package]\nname = \"pre\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.engine]\nprebuilt = file(\"vendor/libengine.a\")\n\n\
+         [lib.engine.public]\nabi = { libc = \"musl\" }\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"engine\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("abi-mismatch");
+    r.stderr_contains("musl");
+}
+
+#[test]
+fn a_prebuilt_library_that_is_not_there_says_so_before_linking() {
+    // 無いまま進むと、リンカの言葉で1段あとに現れる（issue #50 と同じ理由）。
+    let p = Project::new("prebuilt-missing");
+    p.write("dowel.toml", "[package]\nname = \"pre\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.engine]\nprebuilt = file(\"vendor/libengine.a\")\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"engine\")]\n",
+    );
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("missing-prebuilt");
+    // 誰が作るはずだったかを述べる。dowel はそのビルドを走らせない。
+    r.stderr_contains("does not run the build that produces it");
+}
+
+#[test]
+fn a_target_cannot_be_both_built_here_and_built_elsewhere() {
+    let p = Project::new("prebuilt-both");
+    prebuilt_archive(&p);
+    p.write("dowel.toml", "[package]\nname = \"pre\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.engine]\nsources = [file(\"vendor/engine.c\")]\n\
+         prebuilt = file(\"vendor/libengine.a\")\n",
+    );
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("prebuilt-with-sources");
+}

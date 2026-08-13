@@ -553,6 +553,30 @@ changes, only the speed.
   - The build still uses `[toolchain] c` to assemble — the driver runs the
     assembler. Choosing `nasm` is not expressible, and `.asm` is
     deliberately not recognized: that syntax the C driver cannot accept
+- **A `lib` may name a library that already exists**
+  ([ADR-0049](adr/0049-prebuilt-libraries.md)). `prebuilt` takes the place
+  of `sources`, so a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`,
+  or a vendor blob is a dependency instead of a `-L` and a `-l` written in
+  every consumer. The target is ordinary from there on: `public` propagates,
+  `dowel why` traces it, and it produces no compile and no archive action.
+  - dowel does not run cargo, zig, or go. Doing so would make it a general
+    build system, which [ADR-0001](adr/0001-toolchain-vs-supply.md) says it
+    is not. The file's existence is checked when the plan is made, like a
+    tool's; absent, it is `missing-prebuilt` naming the path and saying
+    dowel does not run the build that produces it
+  - This gives the ABI label its first edge worth checking. A `staticlib`
+    built against musl, declared `abi = { libc = "musl" }` and linked into a
+    gnu build, is refused before the link — the check
+    ([ADR-0042](adr/0042-abi-label-components.md)) was designed for the case
+    where one side is not built here, and until now there was no way to have
+    one. The extra system libraries these toolchains want (`-lpthread`,
+    `-ldl`, `-lm`) go in `public.link_flags`, which already propagates
+  - `sources` and `prebuilt` together is `prebuilt-with-sources`: with both,
+    which file is the artifact has no answer. Only a `lib` may be prebuilt
+    (`prebuilt-not-a-library`) — what is named is something to link against
+  - Nothing verifies that the file is a library, or that it is for this
+    triple. `exports` and `soversion` describe how dowel *builds* a shared
+    library and do not apply, so ADR-0039's export check does not run on one
 - The language standard is typed: `c_std` / `cxx_std` take a value from a
   closed, ordered vocabulary and merge with the `max` rule, so the highest
   standard in the closure wins ([ADR-0016](adr/0016-language-standard-property.md)).
@@ -1090,7 +1114,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (725 tests):
+Current breakdown (729 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1099,10 +1123,10 @@ Current breakdown (725 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 264 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 268 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (75 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (78 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |

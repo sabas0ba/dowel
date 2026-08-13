@@ -598,6 +598,27 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "prebuilt-with-sources",
+        why: "a target is built here or was built elsewhere, not both (ADR-0049)",
+        files: &[(
+            "app/dowel.build",
+            "[lib.engine]\nsources = glob(\"src/*.c\")\nprebuilt = file(\"libengine.a\")\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "prebuilt-not-a-library",
+        why: "what `prebuilt` names is a library to link, not a program to run",
+        files: &[("app/dowel.build", "[bin.app]\nprebuilt = file(\"libengine.a\")\n")],
+        args: CHECK,
+    },
+    Case {
+        code: "missing-prebuilt",
+        why: "the library `prebuilt` names is not there (ADR-0049)",
+        files: &[("app/dowel.build", "[lib.engine]\nprebuilt = file(\"nowhere.a\")\n")],
+        args: CHECK,
+    },
+    Case {
         code: "missing-sysroot",
         why: "`sysroot()` is written but no sysroot is declared (ADR-0047)",
         files: &[(
