@@ -6561,6 +6561,95 @@ fn an_installed_library_is_found_by_pkg_config_and_builds_a_plain_consumer() {
 }
 
 #[test]
+fn a_library_that_sits_on_a_sibling_says_so_and_a_plain_consumer_links() {
+    // 静的な書庫は自分のリンク要件を運べない。同じパッケージの下の
+    // ライブラリを名指さなければ、pkg-config だけを頼りにする使う側は
+    // 未定義参照を受け取る。名指してよい条件（同じ実行で書いた記述で
+    // あること）は、ここでしか満たされない（issue #156、ADR-0043）。
+    //
+    // 静的のまま確かめる。共有にすると `DT_NEEDED` が下を連れてきて
+    // しまい、記述が下を名指しているかどうかが見えない。
+    let p = Project::new("pkgconfig-sibling");
+    p.write(
+        "dowel.toml",
+        "[package]\nname = \"two\"\nversion = \"0.1.0\"\n\
+         description = \"two static libraries, one on the other\"\n",
+    );
+    p.write(
+        "dowel.build",
+        "[lib.base]\nsources = [file(\"src/base.c\")]\n\n\
+         [lib.base.public]\nincludes = [dir(\"a\")]\nlink_flags = [\"-lm\"]\n\n\
+         [lib.top]\nsources = [file(\"src/top.c\")]\n\n\
+         [lib.top.public]\nincludes = [dir(\"b\")]\n\n\
+         [lib.top.private]\ndeps = [target(\"base\")]\n",
+    );
+    p.write("a/base.h", "#pragma once\ndouble base_area(double);\n");
+    p.write("b/top.h", "#pragma once\ndouble top_area(double);\n");
+    p.write(
+        "src/base.c",
+        "#include <math.h>\ndouble base_area(double r) { return M_PI * r * r; }\n",
+    );
+    p.write(
+        "src/top.c",
+        "double base_area(double);\ndouble top_area(double r) { return base_area(r) * 2; }\n",
+    );
+
+    let prefix = p.path("out");
+    p.run(".", &["install", &format!("--prefix={}", prefix.display())]).success();
+
+    let text = std::fs::read_to_string(prefix.join("lib/pkgconfig/top.pc")).expect("no file");
+    assert!(text.contains("Requires: base"), "the descriptor does not name the sibling:\n{text}");
+    // 下は誰にも乗っていない。`Requires` を持たない。
+    let base = std::fs::read_to_string(prefix.join("lib/pkgconfig/base.pc")).expect("no file");
+    assert!(
+        !base.contains("Requires:"),
+        "a library that sits on nothing requires something:\n{base}"
+    );
+
+    let dir = prefix.join("lib/pkgconfig");
+    let run = |args: &[&str]| {
+        std::process::Command::new("pkg-config")
+            .env("PKG_CONFIG_PATH", &dir)
+            .args(args)
+            .output()
+            .expect("cannot start pkg-config")
+    };
+    assert!(run(&["--validate", "top"]).status.success(), "the file does not validate:\n{text}");
+    // 静的な書庫の解決順は依存元が先である。`-ltop` の後に `-lbase`。
+    let libs = String::from_utf8_lossy(&run(&["--libs", "top"]).stdout).to_string();
+    let top_at = libs.find("-ltop").unwrap_or_else(|| panic!("`-ltop` is missing: {libs}"));
+    let base_at = libs.find("-lbase").unwrap_or_else(|| panic!("`-lbase` is missing: {libs}"));
+    assert!(top_at < base_at, "the link order is inverted: {libs}");
+    // 下が公表している要件も一緒に届く。`Requires` を採った理由である。
+    assert!(libs.contains("-lm"), "the sibling's own link requirement did not travel: {libs}");
+
+    // dowel を通さない利用者が組んで走る。ここが本題である。
+    let out = run(&["--cflags", "--libs", "top"]);
+    assert!(out.status.success(), "pkg-config could not answer:\n{text}");
+    let flags: Vec<String> =
+        String::from_utf8_lossy(&out.stdout).split_whitespace().map(|s| s.to_string()).collect();
+    p.write(
+        "consumer.c",
+        "#include <stdio.h>\n#include \"top.h\"\n\
+         int main(void) { printf(\"%.4f\\n\", top_area(1.0)); return 0; }\n",
+    );
+    let exe = p.path("consumer");
+    let built = std::process::Command::new("cc")
+        .arg("-o")
+        .arg(&exe)
+        .arg(p.path("consumer.c"))
+        .args(&flags)
+        .output()
+        .expect("cannot start cc");
+    assert!(
+        built.status.success(),
+        "a plain consumer did not link against the sibling: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    assert_eq!(run_artifact(&exe), "6.2832\n");
+}
+
+#[test]
 fn a_package_without_a_description_still_writes_a_valid_file() {
     // pkg-config は `Description` を要求する。空の記述はファイルを不正に
     // するので、書かれていなければ名前で代える（ADR-0043）。
