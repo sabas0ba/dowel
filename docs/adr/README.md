@@ -57,3 +57,4 @@ was originally written in.
 | [0048](0048-assembly.md) | Assembly is a third language, not C that happens to assemble | Accepted |
 | [0049](0049-prebuilt-libraries.md) | A `lib` may name a library that already exists, so what another toolchain built becomes a first-class dependency | Accepted |
 | [0050](0050-separate-assembler.md) | A build may declare its own assembler, and `.asm` is what needs one | Accepted |
+| [0051](0051-source-language-is-closed.md) | A source's language is a closed question, and a tool that writes nothing has failed | Accepted |

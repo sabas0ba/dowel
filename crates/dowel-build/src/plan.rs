@@ -7,7 +7,7 @@ use crate::action::{Action, ActionId, ActionKind};
 use crate::glob;
 use crate::toolstyle;
 use dowel_eval::schema::TableKind;
-use dowel_eval::{Config, Data, PathBase, Value};
+use dowel_eval::{Config, Data, PathBase, Site, Value};
 use dowel_model::graph::Graph;
 use dowel_model::interface;
 use dowel_model::{Session, TargetId};
@@ -368,7 +368,7 @@ pub fn plan(
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
         has_unmarked_asm.insert(
             tid,
-            cfg.assembler().is_some() && sources.iter().any(|s| language(s) == Language::Asm),
+            cfg.assembler().is_some() && sources.iter().any(|s| language(s) == Some(Language::Asm)),
         );
         if has_cxx[&tid] && !cxx_toolchain_checked {
             cxx_toolchain_checked = true;
@@ -452,7 +452,8 @@ pub fn plan(
             // 言語は拡張子で決まる。`cc` は driver であり `.cpp` のコンパイル
             // 自体は通すが、C++ として組むには標準ライブラリと ABI の前提が
             // 揃った driver（`tc.cxx`）を使う必要がある
-            let lang = language(src);
+            // 翻訳できない綴りは `collect_sources` が既に断っている（ADR-0051）。
+            let Some(lang) = language(src) else { continue };
             // アセンブリは既定では C の driver に渡す。driver が gas を呼ぶ
             // ので、それで足りる（ADR-0048）。`[toolchain] asm` が宣言されて
             // いればそちらへ行く（ADR-0050）。
@@ -970,14 +971,23 @@ fn is_masm_syntax(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some("asm")
 }
 
-fn language(path: &Path) -> Language {
+/// C として翻訳される拡張子。
+///
+/// `.i` は前処理済みの C である。driver はこれも受け取り、前処理を飛ばす。
+const C_EXTENSIONS: &[&str] = &["c", "i"];
+
+/// ソース1つの言語。dowel が翻訳できる綴りでなければ `None`
+/// （[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)）。
+fn language(path: &Path) -> Option<Language> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     if CXX_EXTENSIONS.contains(&ext) {
-        Language::Cxx
+        Some(Language::Cxx)
     } else if ASM_EXTENSIONS.contains(&ext) {
-        Language::Asm
+        Some(Language::Asm)
+    } else if C_EXTENSIONS.contains(&ext) {
+        Some(Language::C)
     } else {
-        Language::C
+        None
     }
 }
 
@@ -1094,7 +1104,12 @@ fn collect_sources(
                     }
                     diags.push(d.note(format!("scanned {}", pkg_root.display())));
                 }
-                out.extend(hits.into_iter().map(|rel| pkg_root.join(rel)));
+                let site = item.prov.nearest_site();
+                out.extend(
+                    hits.into_iter()
+                        .map(|rel| pkg_root.join(rel))
+                        .filter(|p| accept_source(p, site, diags)),
+                );
             }
             Data::Path(p) if p.base == PathBase::Package => {
                 // 明示されたソースは、ここで実在を確かめる。
@@ -1117,7 +1132,11 @@ fn collect_sources(
                             p.rel
                         )));
                     }
-                    Ok(_) => out.push(path),
+                    Ok(_) => {
+                        if accept_source(&path, site, diags) {
+                            out.push(path);
+                        }
+                    }
                     Err(e) => {
                         let mut d = Diagnostic::error(
                             "unresolved-path",
@@ -1146,6 +1165,45 @@ fn collect_sources(
     out.sort();
     out.dedup();
     out
+}
+
+/// 翻訳できる綴りか確かめ、できなければ `unknown-source-language` を積む
+/// （[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)）。
+///
+/// 通してしまうと、C の driver は知らない綴りを**警告つきで受け取り**、
+/// 終了状態 0 のまま目的ファイルを書かない。失敗はリンカの、ビルド
+/// ディレクトリの中のパスについての言葉になり、元のファイルの名前も行も
+/// 残らない。現れない出力を宣言したことにもなるので、増分ビルドは収束
+/// しなくなる（issue #157、#112 と同じ形）。
+fn accept_source(path: &Path, site: Option<Site>, diags: &mut Vec<Diagnostic>) -> bool {
+    if language(path).is_some() {
+        return true;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut d = Diagnostic::error(
+        "unknown-source-language",
+        format!("`{name}` is not in a language dowel can compile"),
+    );
+    if let Some(s) = site {
+        d = d.at(s.file, s.span, "declared as a source here");
+    }
+    diags.push(
+        d.note(format!(
+            "sources are C ({}), C++ ({}), or assembly ({})",
+            list_extensions(C_EXTENSIONS),
+            list_extensions(CXX_EXTENSIONS),
+            list_extensions(ASM_EXTENSIONS)
+        ))
+        .note(
+            "the C driver takes an unknown spelling with a warning, writes no object, and exits 0",
+        ),
+    );
+    false
+}
+
+/// 拡張子の一覧を `.c` `.i` の形で並べる。
+fn list_extensions(exts: &[&str]) -> String {
+    exts.iter().map(|e| format!("`.{e}`")).collect::<Vec<_>>().join(" ")
 }
 
 /// 伝播してきた `Path` を絶対パスにする。

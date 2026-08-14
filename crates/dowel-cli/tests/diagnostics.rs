@@ -684,6 +684,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unknown-source-language",
+        why: "a source is in no language dowel compiles (ADR-0051)",
+        files: &[
+            ("app/dowel.build", "[bin.app]\nsources = [file(\"src/note.txt\")]\n"),
+            ("app/src/note.txt", "not a source\n"),
+        ],
+        args: CHECK,
+    },
+    Case {
         code: "missing-toolchain",
         why: "`[toolchain] c` names a compiler that is not on PATH",
         files: &[(
