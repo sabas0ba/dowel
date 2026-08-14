@@ -301,11 +301,16 @@ pub fn plan(
     let mut sibling_inputs: BTreeMap<TargetId, (PathBuf, ActionId)> = BTreeMap::new();
     // ターゲット → 自身のソースに C++ を含むか。リンカの選択が読む
     let mut has_cxx: BTreeMap<TargetId, bool> = BTreeMap::new();
+    // ターゲット → 別のアセンブラが組み立てた目的コードを持つか（ADR-0050）。
+    // その目的ファイルには `.note.GNU-stack` が無く、リンクの側で言い直す
+    let mut has_unmarked_asm: BTreeMap<TargetId, bool> = BTreeMap::new();
     // C++ コンパイラの実在検査は C++ ソースが現れたときに1度だけ行う。
     // C だけのビルドに C++ ツールチェーンを要求しないため
     let mut cxx_toolchain_checked = false;
     // 書庫作成器も同じ扱い。書庫を作らないビルドには要求しない
     let mut ar_toolchain_checked = false;
+    // 別に宣言されたアセンブラ（ADR-0050）。アセンブリが現れたときだけ要る
+    let mut asm_toolchain_checked = false;
     // 変換の道具も同じ扱い。使う宣言があったときに1度だけ確かめる
     let mut probed_tools: BTreeSet<String> = BTreeSet::new();
 
@@ -361,6 +366,10 @@ pub fn plan(
 
         let sources = collect_sources(sess, tid, cfg, &mut diags);
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
+        has_unmarked_asm.insert(
+            tid,
+            cfg.assembler().is_some() && sources.iter().any(|s| language(s) == Language::Asm),
+        );
         if has_cxx[&tid] && !cxx_toolchain_checked {
             cxx_toolchain_checked = true;
             if !is_host && root_toolchain.is_none_or(|t| t.tool("cxx").is_none()) {
@@ -444,13 +453,33 @@ pub fn plan(
             // 自体は通すが、C++ として組むには標準ライブラリと ABI の前提が
             // 揃った driver（`tc.cxx`）を使う必要がある
             let lang = language(src);
+            // アセンブリは既定では C の driver に渡す。driver が gas を呼ぶ
+            // ので、それで足りる（ADR-0048）。`[toolchain] asm` が宣言されて
+            // いればそちらへ行く（ADR-0050）。
+            let separate_asm = lang == Language::Asm && cfg.assembler().is_some();
+            if lang == Language::Asm && !separate_asm && is_masm_syntax(src) {
+                // driver に渡しても「ファイルの形式が分からない」と言われる。
+                // 何が要るかは分かっているので、そう述べる。
+                diags.push(
+                    Diagnostic::error(
+                        "missing-assembler",
+                        format!("`{}` needs an assembler", rel_display(&pkg.root, src)),
+                    )
+                    .at(target.site.file, target.site.span, "declared as a source here")
+                    .note("`.asm` is MASM or NASM syntax, which the C compiler driver does not accept")
+                    .note("declare one, as in `[toolchain] asm = \"nasm\"` in dowel.toml"),
+                );
+                continue;
+            }
             let (compiler, tool) = match lang {
                 Language::Cxx => (cfg.tool("cxx"), "CXX"),
-                // アセンブリも C の driver に渡す。driver が gas を呼ぶので、
-                // 別の道具を宣言させる理由が無い（ADR-0048）。
-                Language::Asm => (cfg.tool("c"), "AS"),
+                Language::Asm => (cfg.assembler().unwrap_or_else(|| cfg.tool("c")), "AS"),
                 Language::C => (cfg.tool("c"), "CC"),
             };
+            if separate_asm && !asm_toolchain_checked {
+                asm_toolchain_checked = true;
+                require_tool(&mut diags, cfg, root_toolchain, "asm", "assembler");
+            }
             let obj = object_path(&build_dir, &pkg.name, &target.name, &pkg.root, src, cfg);
             // 依存の記録は必ず1つの `.d` に落ちる。MSVC はコンパイラに
             // 書かせず、実行する側が `/showIncludes` の出力を畳んで書く
@@ -458,43 +487,54 @@ pub fn plan(
             let depfile = obj.with_extension(format!("{}.d", toolstyle::object_extension(cfg)));
             // 前処理を通らないアセンブリに依存は無い。`-MD` を渡しても
             // 何も書かれず、宣言した出力が出ないことになる（ADR-0048）。
-            let wants_depfile = lang != Language::Asm || is_preprocessed_asm(src);
+            // 別のアセンブラには依存を頼まない。頼み方が道具ごとに違い、
+            // 書かれない依存ファイルを宣言することになる（ADR-0050）。
+            let wants_depfile =
+                !separate_asm && (lang != Language::Asm || is_preprocessed_asm(src));
             let mut args: Vec<String> = Vec::new();
-            args.extend(toolstyle::default_compile_flags(cfg));
-            if position_independent.contains(&tid) {
-                args.extend(toolstyle::shared_object_flags(cfg));
-            }
-            if lang == Language::Asm {
-                args.extend(toolstyle::assemble_flags(cfg));
-            }
-            args.extend(flags.iter().cloned());
-            // 言語別のフラグは共通の `flags` の後。後勝ちの慣習により、
-            // 言語別の指定が共通の指定を上書きできる向きにする。
-            //
-            // アセンブリに `c_flags` は掛けない。`-std=c17` を手書きの
-            // アセンブリに渡すのは、言語を取り違えているだけである（ADR-0048）。
-            args.extend(
-                match lang {
-                    Language::Cxx => &cxx_flags,
-                    Language::Asm => &asm_flags,
-                    Language::C => &c_flags,
+            if separate_asm {
+                // 渡すのは自身の旗と入出力だけである。翻訳の行の残り——
+                // 最適化、`flags`、インクルード検索路、定義——は C の driver の
+                // 綴りであり、アセンブラは driver ではない（ADR-0050）。
+                args.extend(asm_flags.iter().cloned());
+                args.extend(toolstyle::assemble_io(cfg, src, &obj));
+            } else {
+                args.extend(toolstyle::default_compile_flags(cfg));
+                if position_independent.contains(&tid) {
+                    args.extend(toolstyle::shared_object_flags(cfg));
                 }
-                .iter()
-                .cloned(),
-            );
-            for inc in &includes {
-                args.push(toolstyle::include(cfg, inc));
+                if lang == Language::Asm {
+                    args.extend(toolstyle::assemble_flags(cfg));
+                }
+                args.extend(flags.iter().cloned());
+                // 言語別のフラグは共通の `flags` の後。後勝ちの慣習により、
+                // 言語別の指定が共通の指定を上書きできる向きにする。
+                //
+                // アセンブリに `c_flags` は掛けない。`-std=c17` を手書きの
+                // アセンブリに渡すのは、言語を取り違えているだけである（ADR-0048）。
+                args.extend(
+                    match lang {
+                        Language::Cxx => &cxx_flags,
+                        Language::Asm => &asm_flags,
+                        Language::C => &c_flags,
+                    }
+                    .iter()
+                    .cloned(),
+                );
+                for inc in &includes {
+                    args.push(toolstyle::include(cfg, inc));
+                }
+                for (k, v) in &defines {
+                    args.push(toolstyle::define(cfg, k, v));
+                }
+                // 入出力と依存の綴りは様式が決める（ADR-0027）。
+                args.extend(toolstyle::compile_io(
+                    cfg,
+                    src,
+                    &obj,
+                    wants_depfile.then_some(depfile.as_path()),
+                ));
             }
-            for (k, v) in &defines {
-                args.push(toolstyle::define(cfg, k, v));
-            }
-            // 入出力と依存の綴りは様式が決める（ADR-0027）。
-            args.extend(toolstyle::compile_io(
-                cfg,
-                src,
-                &obj,
-                wants_depfile.then_some(depfile.as_path()),
-            ));
 
             let id = ActionId(plan.actions.len());
             plan.actions.push(Action {
@@ -604,7 +644,19 @@ pub fn plan(
                 let mut inputs_args: Vec<String> =
                     objects.iter().map(|o| o.display().to_string()).collect();
                 inputs_args.extend(libs.iter().map(|l| l.display().to_string()));
-                let mut flags = link_flags.clone();
+                // 印の無いアセンブリが閉包に居れば、実行可能スタックは
+                // リンクの側で断る（ADR-0050）。`link_flags` はこの後に並ぶ
+                // ので、本当に要る場合は言い直せる。
+                let mut flags = if graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .any(|t| has_unmarked_asm.get(&t).copied().unwrap_or(false))
+                {
+                    toolstyle::noexecstack_link_flags(cfg)
+                } else {
+                    Vec::new()
+                };
+                flags.extend(link_flags.iter().cloned());
                 // 自身が共有ライブラリに繋ぐ場合も、実行時の探索路が要る。
                 if graph
                     .link_closure(tid)
@@ -760,7 +812,19 @@ pub fn plan(
                 let mut inputs_args: Vec<String> =
                     objects.iter().map(|o| o.display().to_string()).collect();
                 inputs_args.extend(libs.iter().map(|l| l.display().to_string()));
-                let mut flags = link_flags.clone();
+                // 印の無いアセンブリが閉包に居れば、実行可能スタックは
+                // リンクの側で断る（ADR-0050）。`link_flags` はこの後に並ぶ
+                // ので、本当に要る場合は言い直せる。
+                let mut flags = if graph
+                    .link_closure(tid)
+                    .into_iter()
+                    .any(|t| has_unmarked_asm.get(&t).copied().unwrap_or(false))
+                {
+                    toolstyle::noexecstack_link_flags(cfg)
+                } else {
+                    Vec::new()
+                };
+                flags.extend(link_flags.iter().cloned());
                 // 実行時の探索路が要るのは、**面越しに**共有ライブラリへ
                 // 繋いだときだけである。同じパッケージのものは静的に取り
                 // 込んでいるので、走らせる先に `.so` は要らない。
@@ -891,13 +955,19 @@ enum Language {
 /// アセンブリとして扱われる拡張子。
 ///
 /// `.S` は前処理を通り、`.s` は通らない。C の driver はどちらも受けるが、
-/// 依存を書くのは前者だけである。`.asm` は入れない——あれは MASM や NASM の
-/// 構文であって、gas の driver は受け取れない。
-const ASM_EXTENSIONS: &[&str] = &["s", "S"];
+/// 依存を書くのは前者だけである。`.asm` は MASM や NASM の構文であり、
+/// driver は受け取れない——言語はアセンブリのままで、組み立てる道具が違う
+/// （[ADR-0050](../../../docs/adr/0050-separate-assembler.md)）。
+const ASM_EXTENSIONS: &[&str] = &["s", "S", "asm"];
 
 /// 前処理を通るアセンブリか。依存ファイルを頼めるのはこちらだけである。
 fn is_preprocessed_asm(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some("S")
+}
+
+/// MASM / NASM の構文か。C の driver では組み立てられない（ADR-0050）。
+fn is_masm_syntax(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("asm")
 }
 
 fn language(path: &Path) -> Language {
@@ -951,7 +1021,7 @@ fn require_tool(
         }
     }
     diags.push(d.note(
-        "fetching toolchains is Phase 5 (docs/90-roadmap.md); until then it must be on PATH",
+        "it must be on PATH, or come from a toolchain this package fetches (`[toolchain] url`)",
     ));
 }
 

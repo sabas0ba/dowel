@@ -1082,7 +1082,7 @@ fn a_misspelled_toolchain_key_is_refused_with_a_suggestion() {
     r.failure();
     r.stderr_contains("unknown-property");
     r.stderr_contains("did you mean `ar`?");
-    r.stderr_contains("accepts: c, cxx, ar");
+    r.stderr_contains("accepts: c, cxx, asm, ar");
 }
 
 #[test]
@@ -7067,6 +7067,154 @@ fn every_backend_builds_assembly() {
             "backend `{backend}`"
         );
     }
+}
+
+/// 別に宣言されたアセンブラを持つ木
+/// （[ADR-0050](../../../docs/adr/0050-separate-assembler.md)）。
+///
+/// nasm も ml64 も置けないので、`-f <形式> -o <出力> <入力>` を受け取って
+/// gas に流し直す偽物を置く。確かめたいのは「dowel が宣言された道具を、
+/// 組み立てた引数で起こすか」であって、その道具が何であるかではない。
+/// 受け取った引数はそのまま記録して、渡っていないものも見えるようにする。
+fn project_with_declared_assembler(name: &str) -> (Project, std::path::PathBuf) {
+    let p = Project::new(name);
+    let log = p.path("asm-argv.txt");
+    p.write_script(
+        "bin/fake-nasm",
+        &format!(
+            "#!/bin/sh\necho \"$@\" >> {}\n\
+             obj=\"\"; src=\"\"\n\
+             while [ $# -gt 0 ]; do\n\
+             case \"$1\" in\n\
+             -f) shift 2 ;;\n\
+             -o) obj=\"$2\"; shift 2 ;;\n\
+             *) src=\"$1\"; shift ;;\n\
+             esac\n\
+             done\n\
+             exec cc -x assembler -c \"$src\" -o \"$obj\"\n",
+            log.display()
+        ),
+    );
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"masm\"\nversion = \"0\"\n\n[toolchain]\nasm = \"{}\"\n",
+            p.path("bin/fake-nasm").display()
+        ),
+    );
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\"), file(\"src/kernel.asm\")]\n\n\
+         [bin.app.private]\nc_std = \"c17\"\nc_flags = [\"-Wall\"]\n\
+         asm_flags = [\"-f\", \"elf64\"]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"answer.h\"\nint kernel_answer(void);\n\
+         int main(void) { printf(\"%d\\n\", kernel_answer() + ANSWER_BASE); return 0; }\n",
+    );
+    p.write("include/answer.h", "#define ANSWER_BASE 35\n");
+    // 偽のアセンブラは gas へ流すので、綴りは gas のものである。拡張子が
+    // 決めるのは道具であって、その道具が読む構文ではない。
+    p.write(
+        "src/kernel.asm",
+        "\t.text\n\t.globl kernel_answer\nkernel_answer:\n\tmovl $7, %eax\n\tret\n",
+    );
+    (p, log)
+}
+
+#[test]
+fn a_declared_assembler_gets_the_assembly_and_only_its_own_flags() {
+    // アセンブリは宣言された道具へ行き、渡るのは入出力と `asm_flags` だけ
+    // である。翻訳の行の残りは C の driver の綴りであり、アセンブラは
+    // driver ではない（ADR-0050）。
+    if std::env::consts::ARCH != "x86_64" {
+        return;
+    }
+    let (p, log) = project_with_declared_assembler("declared-assembler");
+    let r = p.run(".", &["build"]);
+    r.success();
+    r.stderr_contains("AS ");
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "42\n");
+
+    let argv = std::fs::read_to_string(&log).expect("the declared assembler never ran");
+    assert!(argv.contains("-f elf64"), "`asm_flags` did not reach the assembler: {argv}");
+    assert!(argv.contains("kernel.asm"), "the source did not reach the assembler: {argv}");
+    // C の driver の綴りは渡らない。読めるものが1つでも在れば、
+    // 「アセンブラは driver ではない」という判断が実装に無い。
+    // 語で見る——引数の中身ではなく引数そのものを検める。
+    let words: Vec<&str> = argv.split_whitespace().collect();
+    for spelling in ["-std=c17", "-Wall", "-g", "-O0", "-MD", "-c"] {
+        assert!(!words.contains(&spelling), "`{spelling}` reached the assembler: {argv}");
+    }
+    assert!(
+        !words.iter().any(|w| w.starts_with("-I")),
+        "an include path reached the assembler: {argv}"
+    );
+    // 依存ファイルも頼まない。頼み方が道具ごとに違う。
+    let out = build_dir(&p.path("."), "debug");
+    assert!(!out.join("obj/masm/app/src_kernel.asm.o.d").exists(), "a depfile was declared");
+}
+
+#[test]
+fn assembly_the_c_driver_cannot_take_says_which_declaration_is_missing() {
+    // `.asm` は MASM / NASM の構文であり、driver は受け取れない。宣言が
+    // 無ければ、リンカの「形式が分からない」より前にそう述べる（ADR-0050）。
+    let p = Project::new("masm-without-assembler");
+    p.write("dowel.toml", "[package]\nname = \"masm\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/kernel.asm\")]\n");
+    p.write("src/kernel.asm", "\t.text\n\t.globl kernel_answer\nkernel_answer:\n\tret\n");
+
+    let r = p.run(".", &["build"]);
+    r.failure();
+    r.stderr_contains("missing-assembler");
+    r.stderr_contains("asm = \"nasm\"");
+}
+
+#[test]
+fn objects_from_a_declared_assembler_do_not_ask_for_an_executable_stack() {
+    // 別のアセンブラの出力に `.note.GNU-stack` は無く、dowel はその道具の
+    // 綴りで印を頼めない。リンカの綴りは知っているので、そこで断る
+    // （ADR-0050）。リンクしない木にまで掛けないことも同時に確かめる。
+    if std::env::consts::ARCH != "x86_64" {
+        return;
+    }
+    let (p, _log) = project_with_declared_assembler("assembler-stack");
+    let link_log = p.path("link-argv.txt");
+    p.write_script(
+        "bin/rec-link",
+        &format!("#!/bin/sh\necho \"$@\" >> {}\nexec cc \"$@\"\n", link_log.display()),
+    );
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"masm\"\nversion = \"0\"\n\n[toolchain]\nasm  = \"{}\"\nlink = \"{}\"\n",
+            p.path("bin/fake-nasm").display(),
+            p.path("bin/rec-link").display()
+        ),
+    );
+    // アセンブリを持たない実行ファイルを並べる。印の無い目的コードが
+    // 閉包に居ないので、リンクに何も足らない。
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\"), file(\"src/kernel.asm\")]\n\n\
+         [bin.app.private]\nasm_flags = [\"-f\", \"elf64\"]\nincludes = [dir(\"include\")]\n\n\
+         [bin.plain]\nsources = [file(\"src/plain.c\")]\n",
+    );
+    p.write("src/plain.c", "int main(void) { return 0; }\n");
+
+    p.run(".", &["build"]).success();
+    let argv = std::fs::read_to_string(&link_log).expect("the declared linker never ran");
+    let line_for = |name: &str| -> String {
+        argv.lines()
+            .find(|l| l.contains(name))
+            .unwrap_or_else(|| panic!("`{name}` was not linked:\n{argv}"))
+            .to_string()
+    };
+    let app = line_for("bin/app");
+    assert!(app.contains("-z noexecstack"), "the assembled objects were left executable: {app}");
+    let plain = line_for("bin/plain");
+    assert!(!plain.contains("noexecstack"), "a build with no such objects was touched: {plain}");
 }
 
 /// 他のビルドシステムが作った静的ライブラリを模す

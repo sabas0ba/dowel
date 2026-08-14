@@ -550,9 +550,39 @@ changes, only the speed.
     `depfile = $depfile`, and an edge that leaves the variable unbound makes
     ninja resolve it to itself and refuse the file as a cycle. The other two
     backends already coped, which is why the test covers all three
-  - The build still uses `[toolchain] c` to assemble — the driver runs the
-    assembler. Choosing `nasm` is not expressible, and `.asm` is
-    deliberately not recognized: that syntax the C driver cannot accept
+- **A build may declare its own assembler**
+  ([ADR-0050](adr/0050-separate-assembler.md)). `[toolchain] asm` joins the
+  tool table with no default; empty means the C driver assembles, which is
+  ADR-0048 unchanged. `.asm` became an assembly extension, since the
+  reason for excluding it — no tool could accept that syntax — stopped
+  holding once one can be named. The projects that need this are the ones
+  dowel is for: OpenSSL's and BoringSSL's generators emit gas syntax for
+  the Unix triples and NASM syntax for Windows.
+  - **A declared assembler takes every assembly source in that build**, not
+    only `.asm`. One build, one assembly syntax; a tree shipping both
+    selects them per triple with `match target.os`, where the toolchain
+    declaration already lives. Routing by extension within one build would
+    put two assemblers behind one `asm_flags`, and `-f elf64` means nothing
+    to the other one
+  - **dowel passes the input, the output, and `asm_flags` — nothing else.**
+    The rest of a compile line is spelled for a C driver, and an assembler
+    is not one. Since `asm_flags` is `List<Word>`, what the assembler does
+    need is written there and can carry paths:
+    `["-f", "elf64", "-I", dir("asm")]`. The I/O spelling follows the style:
+    `-o out in` for `nasm`, `/c /Fo<out> in` for `ml64`
+  - A `.asm` source with nothing declared is `missing-assembler`, naming the
+    file and the declaration to write. Handed to the driver it comes back as
+    "file format not recognized" from the *linker*, two stages later
+  - **Executable stack is refused at the link instead.** dowel cannot ask a
+    tool whose spelling it does not know for `-Wa,--noexecstack`, but it
+    knows the linker's: a link closure containing objects from a declared
+    assembler gets `-z noexecstack`, before `link_flags` so it can be
+    overridden. What does not travel is the per-object marking — an
+    installed archive of NASM objects carries none, and only a `section
+    .note.GNU-stack` directive in the source survives redistribution
+  - No depfile is requested from a declared assembler. NASM can write one,
+    but the spelling belongs to that assembler rather than to the tool slot,
+    so a `%include` edit does not rebuild today
 - **A `lib` may name a library that already exists**
   ([ADR-0049](adr/0049-prebuilt-libraries.md)). `prebuilt` takes the place
   of `sources`, so a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`,
@@ -1114,7 +1144,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (729 tests):
+Current breakdown (732 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1123,10 +1153,10 @@ Current breakdown (729 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 268 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 271 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (78 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (79 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
