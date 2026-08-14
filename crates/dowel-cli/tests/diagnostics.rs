@@ -619,6 +619,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "missing-assembler",
+        why: "a `.asm` source is declared and no assembler is (ADR-0050)",
+        files: &[
+            ("app/dowel.build", "[bin.app]\nsources = [file(\"src/kernel.asm\")]\n"),
+            ("app/src/kernel.asm", "\t.text\n\t.globl k\nk:\n\tret\n"),
+        ],
+        args: CHECK,
+    },
+    Case {
         code: "missing-sysroot",
         why: "`sysroot()` is written but no sysroot is declared (ADR-0047)",
         files: &[(

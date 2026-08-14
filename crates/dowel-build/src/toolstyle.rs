@@ -246,6 +246,43 @@ pub fn assemble_flags(cfg: &Config) -> Vec<String> {
     }
 }
 
+/// 実行可能スタックを断るリンク時の引数（ADR-0050）。
+///
+/// 別のアセンブラが組み立てた目的ファイルに `.note.GNU-stack` は無く、
+/// dowel はその道具の綴りで印を頼めない。リンカの綴りは様式が決めるので
+/// 知っている——同じ主張を、まだ言える場所で言う。
+/// `link_flags` はこの後に並ぶので、本当に要る稀な場合は `-z execstack` で
+/// 言い直せる。
+pub fn noexecstack_link_flags(cfg: &Config) -> Vec<String> {
+    match cfg.style {
+        Style::Gnu => vec!["-z".into(), "noexecstack".into()],
+        // 実行可能スタックは ELF の話である。
+        Style::Msvc => Vec::new(),
+    }
+}
+
+/// 別に宣言されたアセンブラに渡す入出力
+/// （[ADR-0050](../../../docs/adr/0050-separate-assembler.md)）。
+///
+/// dowel が組み立てるのはこれだけである。翻訳の行の残り——最適化、`flags`、
+/// インクルード検索路、定義——は C の driver の綴りであって、アセンブラは
+/// driver ではない。それらを言い直す場所は `asm_flags` であり、
+/// `List<Word>` なので `["-I", dir("asm")]` のようにパスも書ける。
+pub fn assemble_io(cfg: &Config, src: &Path, obj: &Path) -> Vec<String> {
+    match cfg.style {
+        Style::Gnu => {
+            vec!["-o".into(), obj.display().to_string(), src.display().to_string()]
+        }
+        // `ml64` は翻訳だけの指定を要し、出力の綴りが `/Fo<ファイル>` である。
+        Style::Msvc => vec![
+            "/nologo".into(),
+            "/c".into(),
+            format!("/Fo{}", obj.display()),
+            src.display().to_string(),
+        ],
+    }
+}
+
 /// 共有ライブラリに入りうるオブジェクトの翻訳時の追加。
 ///
 /// 位置独立にするだけである。`-fvisibility=hidden` は**足さない**——

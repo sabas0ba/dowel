@@ -131,6 +131,11 @@ pub fn triple_style(triple: &str) -> Style {
 pub const TOOLS: &[(&str, &str, &str)] = &[
     ("c", "cc", "cl"),
     ("cxx", "c++", "cl"),
+    // アセンブラ。既定を持たない——空は「`tc.c` の driver が組み立てる」を
+    // 意味する（[ADR-0048](../../../docs/adr/0048-assembly.md)）。宣言すると
+    // アセンブリはそちらへ行く（ADR-0050）。既定を `nasm` などに置かないのは、
+    // 構文が driver のものと違い、既定で選ぶと大半の木が組めなくなるためである。
+    ("asm", "", ""),
     ("ar", "ar", "lib"),
     // リンカ。GNU では driver が兼ねるので既定を持たない——空は
     // 「`tc.c` / `tc.cxx` がリンクする」を意味する。MSVC では別物である
@@ -224,6 +229,17 @@ impl Config {
     /// ホストの三つ組を、道具が名乗ったもので置き換える。
     pub fn set_host(&mut self, triple: String) {
         self.host = triple;
+    }
+
+    /// アセンブルに使う道具（[ADR-0050](../../../docs/adr/0050-separate-assembler.md)）。
+    ///
+    /// `None` は「C の driver が組み立てる」であり、既定はそちらである
+    /// （ADR-0048）。宣言があるときだけ別の道具になる。
+    pub fn assembler(&self) -> Option<&str> {
+        match self.tool("asm") {
+            "" => None,
+            command => Some(command),
+        }
     }
 
     /// リンクに使う道具。GNU では driver が兼ねる（`link` は空）。
@@ -378,6 +394,12 @@ pub const VOCABULARY: &[(&str, &str, Domain, &str)] = &[
     ("feature", "*", Domain::Bool, "feature flag declared in [features] of dowel.toml"),
     ("tc", "c", Domain::Open, "identifier of the selected C toolchain"),
     ("tc", "cxx", Domain::Open, "identifier of the selected C++ toolchain"),
+    (
+        "tc",
+        "asm",
+        Domain::Open,
+        "identifier of the selected assembler; empty when the C driver assembles",
+    ),
     ("tc", "ar", Domain::Open, "identifier of the selected archiver"),
     (
         "tc",

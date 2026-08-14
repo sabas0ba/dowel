@@ -85,7 +85,7 @@ set.
 
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
-| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C, C++, and assembly may mix in one target; the language is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; assembly: `.s` `.S` ([ADR-0048](adr/0048-assembly.md)); everything else compiles as C). Excluded by `prebuilt` |
+| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C, C++, and assembly may mix in one target; the language is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; assembly: `.s` `.S` `.asm` ([ADR-0048](adr/0048-assembly.md), [ADR-0050](adr/0050-separate-assembler.md)); everything else compiles as C). Excluded by `prebuilt` |
 | `prebuilt` | `Path` | `replace` | a library that already exists, built by something else — a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`, a vendor blob ([ADR-0049](adr/0049-prebuilt-libraries.md)). Only a `lib` may declare it, and not alongside `sources`. The target is ordinary from there on: it propagates its `public` block, carries an `abi` label, and appears in `dowel why`. dowel does not run the build that produces the file; if it is not there, that is `missing-prebuilt` |
 | `use` | `List<TemplateRef>` | `append` | templates to expand into this target's blocks ([ADR-0035](adr/0035-template-kind.md)) |
 | `targets` | `List<Str>` | `append` | triples this target is built for. Empty means every triple. Same spelling as `[package] targets`, narrower reach |
@@ -287,7 +287,7 @@ affects this target only. (The precise formulas are in
 | `flags` | `List<Str>` | `append` | compile flags for every language, order-preserving |
 | `c_flags` | `List<Str>` | `append` | compile flags for C sources only, placed after `flags` |
 | `cxx_flags` | `List<Str>` | `append` | compile flags for C++ sources only, placed after `flags` |
-| `asm_flags` | `List<Word>` | `append` | flags for assembly sources only, placed after `flags` ([ADR-0048](adr/0048-assembly.md)). `c_flags` and `c_std` do **not** reach assembly — a language-specific flag belongs to its language |
+| `asm_flags` | `List<Word>` | `append` | flags for assembly sources only, placed after `flags` ([ADR-0048](adr/0048-assembly.md)). `c_flags` and `c_std` do **not** reach assembly — a language-specific flag belongs to its language. With `[toolchain] asm` declared these are the *only* flags the assembler receives, so its object format and include paths are written here: `["-f", "elf64", "-I", dir("asm")]` ([ADR-0050](adr/0050-separate-assembler.md)) |
 | `c_std` | `Str` | `max` | the C standard: `c89` `c99` `c11` `c17` `c23`. Becomes `-std=` for C sources |
 | `cxx_std` | `Str` | `max` | the C++ standard: `c++98` `c++03` `c++11` `c++14` `c++17` `c++20` `c++23` `c++26`. Becomes `-std=` for C++ sources |
 | `link_flags` | `List<Str \| Path>` | `append` | link flags, order-preserving. A `Path` element expands to its absolute path, which is how a linker script inside the package is named (`["-T", file("ld/app.ld")]`) — the link runs in the build directory, so a relative string would not reach it. Unlike the translation properties, these follow the **link closure** even across `private` edges — a static archive cannot carry its own link requirements ([13-semantics.md](13-semantics.md)) |
