@@ -349,6 +349,16 @@ pub fn plan(
         let env = interface::compile_env(sess, tid, &mut diags);
         check_abi_against_build(&env, cfg, &mut diags);
 
+        // 既に在るライブラリ（[ADR-0049](../../../docs/adr/0049-prebuilt-libraries.md)）。
+        // 組むものが無いので、翻訳も書庫作成もせずに繋ぐ入力として置く。
+        if let Some(value) = root_value(sess, tid, cfg, "prebuilt") {
+            if let Some(path) = prebuilt_library(sess, tid, &value, cfg, &mut diags) {
+                link_inputs.insert(tid, path.clone());
+                plan.artifacts.insert(tid, path);
+            }
+            continue;
+        }
+
         let sources = collect_sources(sess, tid, cfg, &mut diags);
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
         if has_cxx[&tid] && !cxx_toolchain_checked {
@@ -1238,6 +1248,66 @@ pub fn supports_target(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
 
 fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Vec<String> {
     root_value(sess, tid, cfg, name).map(|v| flatten_strs(&v)).unwrap_or_default()
+}
+
+/// 既に在るライブラリの位置（[ADR-0049](../../../docs/adr/0049-prebuilt-libraries.md)）。
+///
+/// dowel は他のビルドシステムを走らせない（ADR-0001）。cargo も zig も go
+/// も、静的ライブラリを作るところまでは各々の道具の仕事であり、dowel が
+/// 引き受けるのは**その先**——繋ぐこと、面を伝えること、ABI を突き合わせる
+/// こと——である。
+fn prebuilt_library(
+    sess: &Session,
+    tid: TargetId,
+    value: &Value,
+    cfg: &Config,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<PathBuf> {
+    let target = sess.target(tid);
+    // 組むものと、既に在るものの両方は書けない。どちらが成果物かが決まらない。
+    if target.root.contains_key("sources") {
+        diags.push(
+            Diagnostic::error(
+                "prebuilt-with-sources",
+                format!("`{}` declares both `sources` and `prebuilt`", sess.label(tid)),
+            )
+            .at(target.site.file, target.site.span, "declared here")
+            .note("a target either is built here or was built elsewhere, not both"),
+        );
+        return None;
+    }
+    if target.kind != TableKind::Lib {
+        diags.push(
+            Diagnostic::error(
+                "prebuilt-not-a-library",
+                format!(
+                    "`{}` is a `{}`; only a `lib` can be prebuilt",
+                    sess.label(tid),
+                    target.kind.name()
+                ),
+            )
+            .at(target.site.file, target.site.span, "declared here")
+            .note("what is given is a library to link against, not a program to run"),
+        );
+        return None;
+    }
+    let path = absolute_path(sess, value, cfg, Path::new(""), diags)?;
+    // 実在は計画段で確かめる。道具の実在を確かめるのと同じ理由——無いまま
+    // 進むと、リンカの言葉で1段あとに現れる（issue #50）。
+    if !path.is_file() {
+        let mut d = Diagnostic::error(
+            "missing-prebuilt",
+            format!("`{}` names a library that is not there", sess.label(tid)),
+        )
+        .note(format!("looked for {}", path.display()))
+        .note("dowel does not run the build that produces it (ADR-0001); run that first");
+        if let Some(s) = value.prov.nearest_site() {
+            d = d.at(s.file, s.span, "declared here");
+        }
+        diags.push(d);
+        return None;
+    }
+    Some(path)
 }
 
 /// このターゲット自身が公開している翻訳時の語

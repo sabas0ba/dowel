@@ -321,6 +321,13 @@ pub fn root_props() -> Vec<PropDef> {
             domain: None,
         },
         PropDef {
+            name: "prebuilt",
+            ty: Type::Path,
+            merge: Merge::Replace,
+            doc: "a library that already exists, built by something else (ADR-0049). Excludes `sources`",
+            domain: None,
+        },
+        PropDef {
             name: "soversion",
             ty: Type::Int,
             merge: Merge::Replace,

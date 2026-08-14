@@ -85,12 +85,40 @@ set.
 
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
-| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C, C++, and assembly may mix in one target; the language is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; assembly: `.s` `.S` ([ADR-0048](adr/0048-assembly.md)); everything else compiles as C) |
+| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C, C++, and assembly may mix in one target; the language is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; assembly: `.s` `.S` ([ADR-0048](adr/0048-assembly.md)); everything else compiles as C). Excluded by `prebuilt` |
+| `prebuilt` | `Path` | `replace` | a library that already exists, built by something else — a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`, a vendor blob ([ADR-0049](adr/0049-prebuilt-libraries.md)). Only a `lib` may declare it, and not alongside `sources`. The target is ordinary from there on: it propagates its `public` block, carries an `abi` label, and appears in `dowel why`. dowel does not run the build that produces the file; if it is not there, that is `missing-prebuilt` |
 | `use` | `List<TemplateRef>` | `append` | templates to expand into this target's blocks ([ADR-0035](adr/0035-template-kind.md)) |
 | `targets` | `List<Str>` | `append` | triples this target is built for. Empty means every triple. Same spelling as `[package] targets`, narrower reach |
 | `linkage` | `Str` | `replace` | how a `lib` is linked: `static` (the default) or `shared`. Ignored by other kinds |
 | `exports` | `List<Str>` | `append` | the symbols a shared library exports. Required when `linkage = "shared"` |
 | `soversion` | `Int` | `replace` | the ABI generation of a shared library. Enters the file name and the soname ([ADR-0040](adr/0040-shared-library-version.md)). Absent means the library carries no version |
+
+#### A library that was built elsewhere
+
+A `lib` may name a file instead of sources ([ADR-0049](adr/0049-prebuilt-libraries.md)):
+
+```
+[lib.engine]
+prebuilt = file("target/release/libengine.a")
+
+[lib.engine.public]
+includes   = [dir("include")]
+abi        = { libc = "gnu" }
+link_flags = ["-lpthread", "-ldl"]
+```
+
+This is how a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`, or a
+vendor's binary SDK becomes a dependency rather than a `-L` and a `-l`
+written in every consumer. `deps = [target("engine")]` links it, the
+`public` block propagates, and the `abi` label is compared against the
+build the way every other label is — a library built against musl is
+refused before it reaches a gnu link.
+
+dowel does not run cargo, zig, or go; it links what they left behind
+([ADR-0001](adr/0001-toolchain-vs-supply.md)). The file has to exist when
+the plan is made, and if it does not, that is `missing-prebuilt` naming the
+path it looked for. `exports` and `soversion` describe how dowel *builds* a
+shared library and do not apply here.
 
 #### Sharing settings between targets
 

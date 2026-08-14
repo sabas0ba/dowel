@@ -55,3 +55,4 @@ was originally written in.
 | [0046](0046-transfer-once.md) | An artifact is transferred once per destination, and a run that could not start is what sends it again | Accepted |
 | [0047](0047-sysroot.md) | `sysroot()` is a path base, declared once beside the tools that need it | Accepted |
 | [0048](0048-assembly.md) | Assembly is a third language, not C that happens to assemble | Accepted |
+| [0049](0049-prebuilt-libraries.md) | A `lib` may name a library that already exists, so what another toolchain built becomes a first-class dependency | Accepted |
