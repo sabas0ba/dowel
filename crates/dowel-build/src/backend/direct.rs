@@ -78,6 +78,26 @@ fn run_step(g: &BuildGraph, step: &Step) -> Result<(), Failure> {
             stderr: String::from_utf8_lossy(&out.stderr).to_string(),
         });
     }
+    // 宣言した出力が現れないまま成功したら、そこで落とす
+    // （[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)）。
+    // 通すと、失敗は次の段の言葉になる——結合器が、ビルドディレクトリの
+    // 中のパスについて述べる。そのうえ現れない出力は常に古いままなので、
+    // 増分ビルドが収束しない（issue #157、#112 と同じ形）。
+    if let Some(missing) = step.outputs.iter().find(|o| !o.exists()) {
+        return Err(Failure {
+            description: step.description.clone(),
+            command: step.command_line(),
+            status: out.status.code(),
+            stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+            // 道具自身の言葉を残す。「翻訳しないので入力を使わなかった」と
+            // 言っていることが多く、それが最も説明になる。
+            stderr: format!(
+                "{}\nit exited 0 without writing {}",
+                String::from_utf8_lossy(&out.stderr).trim_end(),
+                missing.display()
+            ),
+        });
+    }
     // MSVC はヘッダ依存の記録を書かない。標準出力に1行1件で並べるだけなので、
     // それを `.d` に畳むのは**実行した側**の仕事になる（ADR-0027）。畳んで
     // おけば、最新性を判定する側は様式を知らずに済む。

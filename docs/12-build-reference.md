@@ -85,7 +85,7 @@ set.
 
 | Property | Type | Merge | Meaning |
 |---|---|---|---|
-| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C, C++, and assembly may mix in one target; the language is chosen per file by extension (C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; assembly: `.s` `.S` `.asm` ([ADR-0048](adr/0048-assembly.md), [ADR-0050](adr/0050-separate-assembler.md)); everything else compiles as C). Excluded by `prebuilt` |
+| `sources` | `List<Path>` | `append` | sources to compile. Does not propagate. C, C++, and assembly may mix in one target; the language is chosen per file by extension (C: `.c` `.i`; C++: `.cc` `.cp` `.cpp` `.cxx` `.c++` `.CPP` `.C`; assembly: `.s` `.S` `.asm` ([ADR-0048](adr/0048-assembly.md), [ADR-0050](adr/0050-separate-assembler.md))). The set is closed: any other spelling is `unknown-source-language`, reported where it is declared ([ADR-0051](adr/0051-source-language-is-closed.md)). Excluded by `prebuilt` |
 | `prebuilt` | `Path` | `replace` | a library that already exists, built by something else — a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`, a vendor blob ([ADR-0049](adr/0049-prebuilt-libraries.md)). Only a `lib` may declare it, and not alongside `sources`. The target is ordinary from there on: it propagates its `public` block, carries an `abi` label, and appears in `dowel why`. dowel does not run the build that produces the file; if it is not there, that is `missing-prebuilt` |
 | `use` | `List<TemplateRef>` | `append` | templates to expand into this target's blocks ([ADR-0035](adr/0035-template-kind.md)) |
 | `targets` | `List<Str>` | `append` | triples this target is built for. Empty means every triple. Same spelling as `[package] targets`, narrower reach |

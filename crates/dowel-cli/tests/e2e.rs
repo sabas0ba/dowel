@@ -7069,6 +7069,81 @@ fn every_backend_builds_assembly() {
     }
 }
 
+#[test]
+fn a_source_in_no_language_is_refused_where_it_is_declared() {
+    // 通すと、C の driver が警告つきで受け取り、終了状態 0 のまま目的
+    // ファイルを書かない。失敗はリンカの、ビルドディレクトリの中のパスに
+    // ついての言葉になる（issue #157、ADR-0051）。
+    let p = Project::new("unknown-language");
+    p.write("dowel.toml", "[package]\nname = \"u\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\"), file(\"src/note.txt\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.write("src/note.txt", "this is not a source\n");
+
+    // 計画の段で言う。`check` にも出る——ビルドまで持ち越さない。
+    let r = p.run(".", &["check"]);
+    r.failure();
+    r.stderr_contains("unknown-source-language");
+    r.stderr_contains("note.txt");
+    r.stderr_contains("declared as a source here");
+    assert!(!r.stderr.contains("cannot find"), "the linker was reached:\n{}", r.stderr);
+}
+
+#[test]
+fn a_glob_that_sweeps_up_something_unbuildable_says_so_at_the_glob() {
+    // 総当たりで拾った場合、指すべきはファイルの宣言ではなく総当たりの
+    // 位置である。そこにしか書かれた行が無い（ADR-0051）。
+    let p = Project::new("unknown-language-glob");
+    p.write("dowel.toml", "[package]\nname = \"u\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = glob(\"src/*\")\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.write("src/README", "notes\n");
+
+    let r = p.run(".", &["build"]);
+    r.failure();
+    r.stderr_contains("unknown-source-language");
+    r.stderr_contains("README");
+}
+
+#[test]
+fn a_tool_that_exits_zero_without_writing_its_output_is_a_failure() {
+    // 現れない出力を宣言したアクションは常に古いままで、増分ビルドが
+    // 収束しない（issue #157、#112 と同じ形）。バックエンドによらず、
+    // 「built:」と刷る前に在ることを確かめる（ADR-0051）。
+    let p = Project::new("silent-tool");
+    let cc = p.write_script("bin/silent-cc", "#!/bin/sh\nexit 0\n");
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"s\"\nversion = \"0\"\n\n[toolchain]\nc = \"{}\"\n",
+            cc.display()
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    for backend in ["ninja", "direct", "make"] {
+        let _ = std::fs::remove_dir_all(p.path(".dowel"));
+        let r = p.run(".", &["build", &format!("--backend={backend}")]);
+        r.failure();
+        assert!(
+            !r.stderr.contains("built:"),
+            "backend `{backend}` reported an artifact that is not there:\n{}",
+            r.stderr
+        );
+        // 直接実行はアクションを自分で起こすので、どの翻訳が黙ったかまで
+        // 言える。ninja と make は道具を起こす側ではないので、言えるのは
+        // 成果物が無いことだけである（ADR-0051）。
+        if backend == "direct" {
+            assert!(
+                r.stderr.contains("src_main.c.o"),
+                "the failure does not name the object that was not written:\n{}",
+                r.stderr
+            );
+        }
+    }
+}
+
 /// 別に宣言されたアセンブラを持つ木
 /// （[ADR-0050](../../../docs/adr/0050-separate-assembler.md)）。
 ///

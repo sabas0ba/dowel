@@ -531,7 +531,7 @@ changes, only the speed.
 - Per-language flags: `flags` applies to every language, `c_flags` /
   `cxx_flags` / `asm_flags` follow it and reach only their own language
 - **Assembly is a third language** ([ADR-0048](adr/0048-assembly.md)).
-  `.s` and `.S` select it; everything else that is not C++ is still C.
+  `.s` and `.S` select it.
   Passing `foo.s` to `cc` did assemble it, so it looked like it already
   worked — measuring what came out found three things wrong.
   - `-std=c17` and `-Wall` were reaching the assembler, because assembly was
@@ -583,6 +583,30 @@ changes, only the speed.
   - No depfile is requested from a declared assembler. NASM can write one,
     but the spelling belongs to that assembler rather than to the tool slot,
     so a `%include` edit does not rebuild today
+- **The set of source spellings is closed**
+  ([ADR-0051](adr/0051-source-language-is-closed.md)). C is `.c` and `.i`;
+  anything outside the three lists is `unknown-source-language`, reported
+  where it is declared. The old rule was "everything that is not C++ is C",
+  which was a decision about `.c` that also swallowed `README`.
+  - What it cost was measured: `cc -c note.txt -o note.o` **warns, exits 0,
+    and writes nothing**. dowel does not show a successful command's
+    warnings, so the failure arrived from the linker, about a path inside
+    the build directory, with no source name and no line — and `dowel check`
+    passed. The declared-but-absent object also made the step permanently
+    stale, so an unchanged tree never converged (issue #157, the shape
+    ADR-0048 refused for depfiles)
+  - A glob that sweeps up a `README` is reported at the glob, since that is
+    where the written line is
+  - **A command that exits 0 without writing its output has failed.** The
+    direct backend checks a step's outputs and reports the tool's own
+    stderr; after *any* backend, dowel checks that what it is about to print
+    as `built:` exists. The second net is what covers ninja and make —
+    neither fails on a missing output, and dowel was printing `built:` for a
+    file that was not there. It sits beside the export check, after the
+    build, for the same reason
+  - A source with no extension is refused too, and there is no `-x c` escape
+    hatch. Nothing checks that an artifact is *correct*, only that it is
+    there
 - **A `lib` may name a library that already exists**
   ([ADR-0049](adr/0049-prebuilt-libraries.md)). `prebuilt` takes the place
   of `sources`, so a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`,
@@ -1144,7 +1168,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (732 tests):
+Current breakdown (735 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1153,10 +1177,10 @@ Current breakdown (732 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 271 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 274 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (79 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (80 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |

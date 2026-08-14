@@ -648,6 +648,18 @@ fn build(
         return Ok(None);
     }
 
+    // 述べる前に、述べるものが在ることを確かめる
+    // （[ADR-0051](../../docs/adr/0051-source-language-is-closed.md)）。
+    // バックエンドが成功と言っても、道具が黙って何も書かないことはある——
+    // 「built:」と刷ってから、次の実行で同じ翻訳がまた走るのが、それを
+    // 見なかった場合の姿である（issue #157）。エクスポートの検査と同じく
+    // ビルドの後に置く。ninja でも make でも直接実行でも同じように働く。
+    if let Some(missing) = p.default_outputs().into_iter().find(|o| !o.exists()) {
+        eprintln!("error: the build reported success but did not produce {}", missing.display());
+        eprintln!("note: a tool exited 0 without writing what it was asked for");
+        return Ok(None);
+    }
+
     // 出来上がった共有ライブラリに、何を書き出したか聞く（ADR-0039）。
     // ビルドの段ではなく後に置くのは、答が出るのが判定であってファイルでは
     // ないためである——グラフに載せるには出力ファイルが要る。後に置けば、
