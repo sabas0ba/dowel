@@ -1025,6 +1025,15 @@ fn require_tool(
     if crate::exec::program_exists(command) {
         return;
     }
+    // 取ってくる宣言が在って、取れていないなら黙る。取得が成り立たなかった
+    // ことは既に述べられており（`unfetchable-toolchain` / `needs-fetch`）、
+    // ここで重ねて「PATH に無い」と言うと**別の直し方**を指す——翻訳器を
+    // 入れに行く動機になる（issue #159）。
+    if let Some(src) = root_toolchain.and_then(|t| t.source.as_ref()) {
+        if dowel_model::fetch::existing_toolchain(&src.sha256).is_none() {
+            return;
+        }
+    }
     let mut d =
         Diagnostic::error("missing-toolchain", format!("cannot find the {what} `{command}`"));
     match root_toolchain.and_then(|t| t.tool(name)) {
