@@ -311,6 +311,9 @@ pub fn plan(
     let mut ar_toolchain_checked = false;
     // 別に宣言されたアセンブラ（ADR-0050）。アセンブリが現れたときだけ要る
     let mut asm_toolchain_checked = false;
+    // ビルドと合わない ABI 札。宣言ごとに1件へ畳むので、溜めてから出す
+    // （issue #158）
+    let mut abi_against_build: Vec<AbiAgainstBuild> = Vec::new();
     // 変換の道具も同じ扱い。使う宣言があったときに1度だけ確かめる
     let mut probed_tools: BTreeSet<String> = BTreeSet::new();
 
@@ -352,7 +355,7 @@ pub fn plan(
         }
         let pkg = sess.package(target.package);
         let env = interface::compile_env(sess, tid, &mut diags);
-        check_abi_against_build(&env, cfg, &mut diags);
+        check_abi_against_build(&env, cfg, sess.label(tid), &mut abi_against_build);
 
         // 既に在るライブラリ（[ADR-0049](../../../docs/adr/0049-prebuilt-libraries.md)）。
         // 組むものが無いので、翻訳も書庫作成もせずに繋ぐ入力として置く。
@@ -926,6 +929,9 @@ pub fn plan(
         }
     }
 
+    // 溜めた分をここで出す。宣言1つに1件である（issue #158）。
+    diags.extend(abi_against_build.into_iter().map(AbiAgainstBuild::into_diagnostic));
+
     log_debug!(
         "{} actions ({} compile, {} archive, {} link, {} transform)",
         plan.actions.len(),
@@ -1480,7 +1486,12 @@ pub fn public_link_flags(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<Str
 ///
 /// dowel が三つ組から導ける成分に限る。導けないものは、ここで言えることが
 /// 何も無い。
-fn check_abi_against_build(env: &dowel_model::PropMap, cfg: &Config, diags: &mut Vec<Diagnostic>) {
+fn check_abi_against_build(
+    env: &dowel_model::PropMap,
+    cfg: &Config,
+    reached_by: String,
+    found: &mut Vec<AbiAgainstBuild>,
+) {
     let Some(value) = env.get("abi") else { return };
     let Some(value) = dowel_eval::specialize(value, cfg) else { return };
     let Data::Map(components) = &value.data else { return };
@@ -1489,16 +1500,61 @@ fn check_abi_against_build(env: &dowel_model::PropMap, cfg: &Config, diags: &mut
     if declared == actual {
         return;
     }
-    let mut d = Diagnostic::error(
-        "abi-mismatch",
-        format!("this surface requires `libc = \"{declared}\"` but the build is `{actual}`"),
-    )
-    .note(format!("the target triple is `{}`", cfg.target))
-    .note("nothing later refuses this; the link succeeds and the failure is at run time");
-    if let Some(s) = components.get("libc").and_then(|v| v.prov.nearest_site()) {
-        d = d.at(s.file, s.span, "declared here");
+    let site = components.get("libc").and_then(|v| v.prov.nearest_site());
+    // 同じ宣言に2度目は積まない。誰が引いているかだけを足す。
+    if let Some(m) = found
+        .iter_mut()
+        .find(|m| m.site == site && m.declared == declared && !m.reached_by.contains(&reached_by))
+    {
+        m.reached_by.push(reached_by);
+        return;
     }
-    diags.push(d);
+    if found.iter().any(|m| m.site == site && m.declared == declared) {
+        return;
+    }
+    found.push(AbiAgainstBuild {
+        declared: declared.to_string(),
+        actual: actual.to_string(),
+        triple: cfg.target.clone(),
+        site,
+        reached_by: vec![reached_by],
+    });
+}
+
+/// ビルドと合わない ABI 札の宣言1つ分。
+///
+/// 宣言ごとに1件へ畳むために溜める。この検査は**宣言と構成**の関係であり、
+/// 誰が引いているかに依らない——ビルドは一様である（ADR-0031）。目標ごとに
+/// 出すと、文面も位置も同じレコードが使う側の数だけ並び、「1つ直せば全部
+/// 消える」のか「N 箇所直すところがある」のかが読めない（issue #158）。
+struct AbiAgainstBuild {
+    declared: String,
+    actual: String,
+    triple: String,
+    site: Option<Site>,
+    /// この面を引いている目標。件数ではなく、影響の範囲として述べる
+    reached_by: Vec<String>,
+}
+
+impl AbiAgainstBuild {
+    fn into_diagnostic(self) -> Diagnostic {
+        let mut d = Diagnostic::error(
+            "abi-mismatch",
+            format!(
+                "this surface requires `libc = \"{}\"` but the build is `{}`",
+                self.declared, self.actual
+            ),
+        );
+        if let Some(s) = self.site {
+            d = d.at(s.file, s.span, "declared here");
+        }
+        d = d.note(format!("the target triple is `{}`", self.triple));
+        if !self.reached_by.is_empty() {
+            let names: Vec<String> = self.reached_by.iter().map(|t| format!("`{t}`")).collect();
+            d = d.note(format!("reached by {}", names.join(", ")));
+        }
+        d.note("nothing later refuses this; the link succeeds and the failure is at run time")
+    }
 }
 
 /// このターゲット自身が公開しているヘッダの置き場所

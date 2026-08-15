@@ -6450,6 +6450,40 @@ fn a_surface_requiring_another_c_runtime_than_the_build_is_refused() {
 }
 
 #[test]
+fn one_wrong_label_is_one_diagnostic_however_many_targets_carry_it() {
+    // ビルドとの照合は**宣言と構成**の関係であり、誰が引いているかに依らない
+    // ——ビルドは一様である（ADR-0031）。目標ごとに出すと、文面も位置も同じ
+    // レコードが使う側の数だけ並び、「1つ直せば全部消える」のか「N 箇所直す
+    // ところがある」のかが読めない（issue #158）。
+    let p = Project::new("abi-vs-build-fold");
+    p.write("dowel.toml", "[package]\nname = \"p\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.engine]\nsources = [file(\"src/engine.c\")]\n\n\
+         [lib.engine.public]\nabi = { libc = \"musl\" }\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"engine\")]\n\n\
+         [bin.tool]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.tool.private]\ndeps = [target(\"engine\")]\n",
+    );
+    p.write("src/engine.c", "int engine_open(void) { return 1; }\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["check"]);
+    r.failure();
+    assert_eq!(
+        r.stderr.matches("error[abi-mismatch]").count(),
+        1,
+        "one declaration produced more than one diagnostic:\n{}",
+        r.stderr
+    );
+    // 畳んでも失われるものが無いこと。影響の範囲は note に並ぶ。
+    for label in ["`p:engine`", "`p:app`", "`p:tool`"] {
+        assert!(r.stderr.contains(label), "{label} is not named as affected:\n{}", r.stderr);
+    }
+}
+
+#[test]
 fn a_package_that_declares_a_template_still_passes_check() {
     // `check` は何も名指ししていない。それでも `not-a-target` が出ていた
     // ——「全ターゲット」を数える経路が、雛型まで要求として計画へ渡して

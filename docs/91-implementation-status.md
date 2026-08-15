@@ -262,6 +262,14 @@ changes, only the speed.
   - A declared `libc` is also checked **against the build**. Comparing
     labels only asks who requires what, never what this build is; a surface
     requiring `musl` built for a gnu triple links fine and fails at run time
+  - That check is folded to **one diagnostic per declaration**, with the
+    affected targets in a note. It is a relation between a declaration and
+    the configuration, and the configuration is uniform (ADR-0031), so
+    emitting it per consuming target produced records identical in text and
+    in location — N copies of one error, from which "fix one and they all
+    go" could not be read (issue #158). The label-to-label comparison stays
+    one per pair, since it points at both declarations and each pair is a
+    different link
   - A label written as one word keeps its meaning and is compared whole.
     A word and a component set cannot be compared, since a word cannot be
     taken apart
@@ -1180,7 +1188,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (736 tests):
+Current breakdown (737 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1189,7 +1197,7 @@ Current breakdown (736 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 275 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 276 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (80 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
