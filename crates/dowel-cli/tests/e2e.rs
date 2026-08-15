@@ -6887,6 +6887,72 @@ fn offline_refuses_what_is_missing_and_fetch_makes_the_tree_ready() {
     p.run_env(".", &["build"], &[("DOWEL_OFFLINE", "1")]).success();
 }
 
+#[test]
+fn fetch_counts_and_lists_the_toolchain_it_acquired() {
+    // 取ってくるものが道具一式だけ、という形は cross では普通である
+    // （依存はすべて `path`、道具立てだけ書庫）。数にも一覧にも入れないと、
+    // その木の利用者が読む唯一の行が「fetched 0 package(s)」になる。素直な
+    // 解釈は「何も要らなかった」であり、数百 MB を落とした直後でも同じ行
+    // である（issue #159、ADR-0045）。
+    let p = Project::new("fetch-toolchain");
+    let (url, sha) = toolchain_archive(&p);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"tc\"\nversion = \"0\"\n\n\
+             [toolchain]\nurl = \"{url}\"\nsha256 = \"{sha}\"\nc = \"bin/mycc\"\n"
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let cache = p.path("cache").display().to_string();
+    let envs = [("DOWEL_TOOLCHAIN_DIR", cache.as_str())];
+    let r = p.run_env(".", &["fetch"], &envs);
+    r.success();
+    r.stderr_contains("ready: toolchain");
+    r.stderr_contains("/dowel/toolchains/");
+    assert!(
+        !r.stderr.contains("0 toolchain(s)"),
+        "the toolchain it acquired was not counted:\n{}",
+        r.stderr
+    );
+    // 取ってくるだけで、組まない。
+    assert!(!build_dir_exists(&p.path(".")), "`fetch` must not build");
+    // 述べたとおり、これで網を切っても組める。
+    p.run_env(".", &["build", "--offline"], &envs).success();
+}
+
+#[test]
+fn a_toolchain_that_could_not_be_acquired_does_not_also_look_missing_from_path() {
+    // 2つ目は1つ目の帰結だが、**別の直し方**を指す——「翻訳器が PATH に
+    // 無い」と読めるので、翻訳器を入れに行く動機になる。ADR-0044 が
+    // `missing-toolchain` に与えた役割は「取ってきたものの中に道具が
+    // 無い」場合であって、取得そのものが成り立っていない場合ではない
+    // （issue #159）。
+    let p = Project::new("toolchain-unfetched");
+    let (url, sha) = toolchain_archive(&p);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"tc\"\nversion = \"0\"\n\n\
+             [toolchain]\nurl = \"{url}\"\nsha256 = \"{sha}\"\nc = \"bin/mycc\"\n"
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let cache = p.path("cache").display().to_string();
+    let r = p.run_env(".", &["check", "--offline"], &[("DOWEL_TOOLCHAIN_DIR", cache.as_str())]);
+    r.failure();
+    r.stderr_contains("needs-fetch");
+    assert!(
+        !r.stderr.contains("missing-toolchain"),
+        "the consequence was reported as a second, differently-fixed problem:\n{}",
+        r.stderr
+    );
+}
+
 /// ビルドディレクトリが1つでも在るか。`fetch` が組んでいないことを見る。
 fn build_dir_exists(project_dir: &std::path::Path) -> bool {
     std::fs::read_dir(project_dir.join(".dowel/build")).is_ok_and(|mut d| d.next().is_some())

@@ -247,10 +247,27 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             if report(&sess, opts) {
                 return Ok(ExitCode::FAILURE);
             }
+            // 道具一式も取得の対象である（ADR-0044）。構成の組み立ての中で
+            // 済んでいるので、ここでは在るものを見て述べる——数にも一覧にも
+            // 入れなければ、取ってくるものが道具一式だけの木（cross では
+            // 普通の形である）で、利用者が読む唯一の行が「0 package(s)」に
+            // なる。数百 MB を落とした直後でも同じ行である（issue #159）。
+            let toolchain = sess
+                .root_package()
+                .and_then(|p| p.toolchain_for(&cfg.target, cfg.targets_host()))
+                .and_then(|d| d.source.as_ref())
+                .and_then(|src| dowel_model::fetch::existing_toolchain(&src.sha256));
             for p in &fetched {
                 eprintln!("ready: {} at {}", p.name, p.root.display());
             }
-            eprintln!("fetched {} package(s); the build can now run with --offline", fetched.len());
+            if let Some(dir) = &toolchain {
+                eprintln!("ready: toolchain {} at {}", cfg.target, dir.display());
+            }
+            eprintln!(
+                "fetched {} package(s), {} toolchain(s); the build can now run with --offline",
+                fetched.len(),
+                usize::from(toolchain.is_some())
+            );
             Ok(ExitCode::SUCCESS)
         }
 

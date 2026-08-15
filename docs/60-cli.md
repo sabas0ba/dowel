@@ -159,13 +159,17 @@ Acquires every dependency and toolchain the build needs, and stops
 ```
 $ dowel fetch
 ready: dep at /w/.dowel/deps/dep-1d726e00c095
-fetched 1 package(s); the build can now run with --offline
+ready: toolchain aarch64-unknown-linux-gnu at ~/.cache/dowel/toolchains/7e5b1e042540
+fetched 1 package(s), 1 toolchain(s); the build can now run with --offline
 ```
 
 Nothing is compiled. Acquisition already happens while the model loads
 (dependencies) and while the configuration is assembled (the toolchain);
 this command is those two steps without the build, so "ready to go offline"
-is something you can see rather than infer. It takes no target.
+is something you can see rather than infer. **Both** are listed and counted:
+a cross tree usually fetches nothing but its toolchain, and a lone
+"0 package(s)" reads as "nothing was needed" (issue #159). It takes no
+target.
 
 ## `dowel build`
 
