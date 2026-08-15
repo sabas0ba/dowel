@@ -884,6 +884,13 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
             } else {
                 status.success()
             };
+            // 通らなかった実行は記録を落とす
+            // （[ADR-0052](../../../docs/adr/0052-transfer-record-drops-on-failure.md)）。
+            // 対象機から成果物が消えても運び手は起動するので、見えるのは
+            // 非零の終了状態だけである。それを送り直す合図として使う。
+            if !passed {
+                forget_transfer(job);
+            }
             Outcome {
                 status: status.code(),
                 signal,
@@ -895,9 +902,7 @@ fn run_one(job: &Job, capture: bool) -> Outcome {
                 ..Outcome::of(job)
             }
         }
-        // 起動できなかった。対象機で消された・置き換えられたことは、
-        // こちらからは見えない——見えるのはこの失敗だけなので、これを
-        // 送り直す合図として使う（ADR-0046）。
+        // 起動そのものが成り立たなかった。同じ理由で記録を落とす。
         Err(e) => {
             forget_transfer(job);
             Outcome { duration_ms, ..failed(e.to_string()) }

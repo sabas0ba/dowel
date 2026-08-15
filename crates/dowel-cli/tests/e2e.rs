@@ -7049,6 +7049,36 @@ fn a_run_that_cannot_start_makes_the_next_one_transfer_again() {
 }
 
 #[test]
+fn a_machine_that_lost_the_artifact_recovers_on_the_run_after_the_one_that_noticed() {
+    // ADR-0046 が自己修復の動機に挙げた場面そのものである。板を配り直す、
+    // `/tmp` が消える、誰かが片付ける——いずれも運び手は起動し、向こう側が
+    // 非零で返す。`launch_error` は立たないので、起動の失敗だけを合図に
+    // していると、記録は残ったまま木が失敗し続ける（issue #160）。
+    let (p, log) = counting_transfer_project("transfer-vanished", "env");
+    let sent = || std::fs::read_to_string(&log).map(|t| t.lines().count()).unwrap_or(0);
+    let staged = p.path("staged");
+
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 1, "the first run must transfer");
+
+    // 対象機の側から消える。dowel からは見えない出来事である。
+    std::fs::remove_file(staged.join("moved")).expect("the artifact was never transferred");
+
+    // 気づく実行。飛ばして起動し、向こう側が非零で返す。
+    p.run(".", &["test"]).failure();
+    assert_eq!(sent(), 1, "this run has nothing new to send");
+
+    // その次で直る。記録を落としてあるので、中身が同じでも送り直す。
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 2, "a failed run must drop the record");
+    assert!(staged.join("moved").is_file(), "the artifact did not come back");
+
+    // 通った後は、また送らない。記録が戻っている。
+    p.run(".", &["test"]).success();
+    assert_eq!(sent(), 2, "the record should be back");
+}
+
+#[test]
 fn sysroot_paths_resolve_against_the_declared_sysroot() {
     // `docs/30-devexp.md` 1節は `args = ["-L", sysroot()]` を載せていたが、
     // `sysroot()` は書けなかった（ADR-0047）。文書に在って実装に無い。
