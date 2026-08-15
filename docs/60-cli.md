@@ -341,7 +341,10 @@ installed: /opt/myapp/lib/libcore.so.2
   nothing about dowel can build against it:
   `cc main.c $(pkg-config --cflags --libs core)`. Its contents are the
   target's `public` block in another notation, and `prefix` is the real
-  prefix even under `--destdir`
+  prefix even under `--destdir`. A library that sits on a sibling of the
+  same package names it in `Requires`, in link order — a static archive
+  cannot carry its own link requirements, so without that a consumer using
+  pkg-config alone gets undefined references (issue #156)
 - Nothing is rebuilt: what was tested and what is shipped are the same bytes
 
 Installed executables find their libraries **relative to themselves**, so

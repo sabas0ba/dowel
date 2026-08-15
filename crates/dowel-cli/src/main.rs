@@ -376,6 +376,7 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             let (items, diags) = dowel_build::install::entries(
                 &sess,
                 &p,
+                &g,
                 &cfg,
                 &prefix,
                 opts.destdir.as_deref(),

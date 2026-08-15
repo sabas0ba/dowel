@@ -519,10 +519,22 @@ changes, only the speed.
     read this notation ([ADR-0015](adr/0015-version-deps-pkgconfig.md)) and
     could not write it, so a library could move to dowel only if every
     consumer moved with it. `Requires` names only what is certainly present:
-    system dependencies, and dowel packages this same run installed —
+    system dependencies, the **sibling libraries of the same package**
+    this run wrote a descriptor for, and dowel packages this same run installed —
     a `Requires` pointing at a missing file makes pkg-config fail outright.
     `[package] description` was added because pkg-config requires
     `Description:`; absent, the target name stands in
+    - The sibling case is the one that actually occurs, and it was missing
+      (issue #156). `install` writes the current package's libraries
+      (ADR-0041), so "installed in this same run" is a condition only a
+      sibling can meet. A static archive carries no link requirements of its
+      own, so a `top` that sits on a `base` linked with undefined references
+      for any consumer using pkg-config alone. It passed when the libraries
+      were shared, because `DT_NEEDED` fetched the sibling — one line of
+      `linkage` decided whether the published surface worked
+    - Siblings are listed in link order (dependents first), which is what a
+      static resolution requires. `Requires` rather than `-lbase` in `Libs`,
+      so the sibling's own `Cflags` and `link_flags` travel with it
   - Symbol versioning *inside* the library (version nodes in the script) is
     not implemented, and neither are CMake package config files (CMake reads
     pkg-config through `FindPkgConfig`, so the common case is covered).
@@ -1168,7 +1180,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (735 tests):
+Current breakdown (736 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1177,7 +1189,7 @@ Current breakdown (735 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 274 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 275 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (80 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

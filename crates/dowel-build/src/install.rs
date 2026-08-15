@@ -12,6 +12,7 @@ use crate::plan::Plan;
 use crate::toolstyle;
 use dowel_eval::schema::TableKind;
 use dowel_eval::Config;
+use dowel_model::graph::Graph;
 use dowel_model::{Session, TargetId};
 use dowel_support::Diagnostic;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,7 @@ impl Item {
 pub fn entries(
     sess: &Session,
     plan: &Plan,
+    graph: &Graph,
     cfg: &Config,
     prefix: &Path,
     destdir: Option<&Path>,
@@ -95,20 +97,18 @@ pub fn entries(
 
     // pkg-config の記述は、入れるライブラリが出揃ってから書く。挙げてよい
     // `Requires` は、この実行で実際に書いた記述だけだからである（ADR-0043）。
-    let installed_libs: Vec<String> = targets
+    let described: Vec<TargetId> = targets
         .iter()
-        .filter(|t| sess.target(**t).kind == TableKind::Lib)
+        .copied()
+        .filter(|t| sess.target(*t).kind == TableKind::Lib)
         .filter(|t| plan.artifacts.contains_key(t))
-        .map(|t| sess.package(sess.target(*t).package).name.clone())
         .collect();
-    for &tid in targets {
-        let target = sess.target(tid);
-        if target.kind != TableKind::Lib || !plan.artifacts.contains_key(&tid) {
-            continue;
-        }
+    let installed_libs: Vec<String> =
+        described.iter().map(|t| sess.package(sess.target(*t).package).name.clone()).collect();
+    for &tid in &described {
         items.push(Item::Write {
-            at: root.join("lib/pkgconfig").join(format!("{}.pc", target.name)),
-            text: pkgconfig(sess, tid, cfg, prefix, &installed_libs),
+            at: root.join("lib/pkgconfig").join(format!("{}.pc", sess.target(tid).name)),
+            text: pkgconfig(sess, tid, graph, cfg, prefix, &installed_libs, &described),
         });
     }
 
@@ -249,9 +249,11 @@ pub fn perform(items: &[Item]) -> Result<(), String> {
 fn pkgconfig(
     sess: &Session,
     tid: TargetId,
+    graph: &Graph,
     cfg: &Config,
     prefix: &Path,
     installed_libs: &[String],
+    described: &[TargetId],
 ) -> String {
     let target = sess.target(tid);
     let pkg = sess.package(target.package);
@@ -273,18 +275,25 @@ fn pkgconfig(
 
     // 名指しできるのは、この実行で実際に書いた記述だけである。無い `.pc` を
     // 挙げると pkg-config はその場で失敗する——黙って落とすより悪い。
-    let requires: Vec<String> = pkg
-        .deps
-        .iter()
-        .filter_map(|d| match &d.kind {
-            // システムのパッケージは pkg-config の名前がそのまま鍵である。
-            dowel_model::package::DepKind::PkgConfig { min_version } => {
-                Some(format!("{} >= {min_version}", d.name))
-            }
-            _ if installed_libs.contains(&d.name) => Some(d.name.clone()),
-            _ => None,
-        })
+    //
+    // 乗っているライブラリを先に挙げる。静的な書庫は自分の要件を運べない
+    // ので、名指さなければ使う側は未定義参照を受け取る——同じ実行で隣に
+    // 書いた記述であり、「確かに在るもの」の条件を満たす唯一の場合である
+    // （issue #156）。順序はリンク順（依存元が先）である。
+    let mut requires: Vec<String> = graph
+        .link_closure(tid)
+        .into_iter()
+        .filter(|t| *t != tid && described.contains(t))
+        .map(|t| sess.target(t).name.clone())
         .collect();
+    requires.extend(pkg.deps.iter().filter_map(|d| match &d.kind {
+        // システムのパッケージは pkg-config の名前がそのまま鍵である。
+        dowel_model::package::DepKind::PkgConfig { min_version } => {
+            Some(format!("{} >= {min_version}", d.name))
+        }
+        _ if installed_libs.contains(&d.name) => Some(d.name.clone()),
+        _ => None,
+    }));
     if !requires.is_empty() {
         s.push_str(&format!("Requires: {}\n", requires.join(", ")));
     }
