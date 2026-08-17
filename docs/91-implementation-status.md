@@ -853,10 +853,21 @@ changes, only the speed.
     every run. `<build-dir>/transfers` records the artifact's fingerprint
     against the transfer's full command line; the command line is the key
     because two destinations are two transfers
-  - **A run that could not start drops the record**, so the next one sends
-    again. dowel cannot see the target machine and so cannot know it was
-    wiped; the launch failing is the only evidence available, and using it
-    makes the skip self-healing
+  - **A run that did not pass drops the record**, so the next one sends
+    again ([ADR-0052](adr/0052-transfer-record-drops-on-failure.md)). dowel
+    cannot see the target machine and so cannot know it was wiped; the
+    strongest evidence it does receive is the outcome of the run
+    - ADR-0046 used the *launch* failing, which turned out to fire for one
+      thing only: the launcher named in `command` is not on this machine — a
+      configuration mistake, fixed once. When a board is reflashed or `/tmp`
+      is cleared, the local `ssh` starts fine and the far side returns
+      nonzero, so `launch_error` stayed null, the record survived, and the
+      tree failed until the user deleted `transfers` by hand. The
+      self-healing worked everywhere except where it was aimed (issue #160)
+    - The cost is one transfer per failing run, bounded by the key being the
+      transfer command rather than the case: twenty cases with one failure
+      pay one. Editing the code changes the artifact anyway, which was
+      always going to be sent
   - **Artifacts are left behind on purpose.** Cleaning them up would undo
     the skip — the two cannot both be defaults. The record lives in the
     build directory, so `cache gc --older-than` or removing `.dowel/build`
@@ -1197,7 +1208,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (739 tests):
+Current breakdown (740 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1206,7 +1217,7 @@ Current breakdown (739 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 278 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 279 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (80 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
