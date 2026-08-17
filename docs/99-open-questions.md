@@ -70,22 +70,6 @@ and no one has asked for it.
   one. Nothing converts an older format: misreading an old layout is worse
   than recomputing
 
-## Q6. What to do when `import` output is rejected
-
-Configurations extracted from an existing project may fail this system's
-verification (ABI mismatch, `error_on_conflict`, and so on).
-
-Options:
-
-- A mode that downgrades to warnings (limited to a migration window)
-- Fail and require fixes
-- Mark extracted output "unverified" and enable verification incrementally
-
-The third is favored. The current implementation carries the mark as an
-UNVERIFIED header comment on the generated files (human-facing, pointing at
-`migrate verify`); whether a machine-readable mark should gate verification
-per target — and what clears it — remains undecided.
-
 ## Q7. C++20 modules
 
 The plan is to make scan actions first-class in the graph, but parts of this

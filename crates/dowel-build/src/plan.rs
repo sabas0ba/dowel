@@ -354,6 +354,9 @@ pub fn plan(
             continue;
         }
         let pkg = sess.package(target.package);
+        // 取り込んだままの下書きは、そう述べる（ADR-0053）。放っておくと
+        // 気づくのはリンクの段で、リンカの言葉になる。
+        report_unverified(sess, tid, cfg, &mut diags);
         let env = interface::compile_env(sess, tid, &mut diags);
         check_abi_against_build(&env, cfg, sess.label(tid), &mut abi_against_build);
 
@@ -1350,6 +1353,50 @@ fn c_string_literal(s: &str) -> String {
 ///
 /// `sources` と同じ道である。`public` / `private` に置くものではないため
 /// `compile_env` には現れない——繋ぎ方も書き出す記号も伝播しない。
+/// まだ印の付いている目標の名札（ADR-0053）。
+///
+/// `migrate verify` が「あと何目標残っているか」を述べるために読む。
+/// 移植の単位は目標である（docs/40-migration.md 5節）以上、進み具合も
+/// 目標で数える。
+pub fn unverified_targets(sess: &Session, cfg: &Config, targets: &[TargetId]) -> Vec<String> {
+    targets
+        .iter()
+        .filter(|tid| {
+            root_value(sess, **tid, cfg, "unverified")
+                .is_some_and(|v| matches!(v.data, Data::Bool(true)))
+        })
+        .map(|tid| sess.label(*tid))
+        .collect()
+}
+
+/// 取り込んだままの下書きであることを述べる
+/// （[ADR-0053](../../../docs/adr/0053-unverified-import.md)）。
+///
+/// 印は provenance の宣言であって、検査を弱める鍵ではない。下書きは
+/// `check` を通ってしまう——落ちるのはリンクの段で、`deps` になっていない
+/// リンク入力について、リンカが未定義参照として述べる。印が在る間そう言い
+/// 続けることで、残りの移植量が数えられる形になる。
+fn report_unverified(sess: &Session, tid: TargetId, cfg: &Config, diags: &mut Vec<Diagnostic>) {
+    let Some(value) = root_value(sess, tid, cfg, "unverified") else { return };
+    if !matches!(value.data, Data::Bool(true)) {
+        return;
+    }
+    let target = sess.target(tid);
+    let mut d = Diagnostic::warning(
+        "unverified-import",
+        format!("`{}` is an unverified import", sess.label(tid)),
+    );
+    match value.prov.nearest_site() {
+        Some(s) => d = d.at(s.file, s.span, "drafted by `dowel migrate import`"),
+        None => d = d.at(target.site.file, target.site.span, "drafted by `dowel migrate import`"),
+    }
+    diags.push(
+        d.note("nothing has confirmed that it builds what the old build built")
+            .note("everything came in private, and link inputs the old build passed are not `deps` yet")
+            .note("check it with `dowel migrate verify <old-build>/compile_commands.json`, then remove `unverified = true`"),
+    );
+}
+
 fn root_value(sess: &Session, tid: TargetId, cfg: &Config, name: &str) -> Option<Value> {
     let target = sess.target(tid);
     let value = target.root.get(name)?;

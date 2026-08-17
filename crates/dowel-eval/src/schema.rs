@@ -334,6 +334,14 @@ pub fn root_props() -> Vec<PropDef> {
             doc: "the ABI generation of a shared library. names the file and the soname (ADR-0040)",
             domain: None,
         },
+        PropDef {
+            name: "unverified",
+            ty: Type::Bool,
+            merge: Merge::Replace,
+            doc: "this target was drafted by `migrate import` and nothing has confirmed it \
+                  matches the old build (ADR-0053). Warns until the line is removed",
+            domain: None,
+        },
     ]
 }
 

@@ -54,6 +54,10 @@ pub struct Verdict {
     pub unported: Vec<PathBuf>,
     /// dowel 側にだけあるソース（テスト等。失敗にはしない）
     pub extra_sources: Vec<PathBuf>,
+    /// まだ `unverified = true` の付いている目標の名札
+    /// （[ADR-0053](../../../docs/adr/0053-unverified-import.md)）。
+    /// 移植の単位は目標なので、進み具合も目標で数える
+    pub unverified: Vec<String>,
 }
 
 impl Verdict {
@@ -90,7 +94,7 @@ pub fn read_reference(text: &str) -> Result<Vec<RefEntry>, String> {
 }
 
 /// dowel の計画と参照を比べる。
-pub fn compare(plan: &Plan, reference: &[RefEntry]) -> Verdict {
+pub fn compare(plan: &Plan, reference: &[RefEntry], unverified: &[String]) -> Verdict {
     let mut ours: BTreeMap<PathBuf, Normalized> = BTreeMap::new();
     for cc in &plan.compile_commands {
         let file = absolute(&cc.directory, &cc.file);
@@ -103,6 +107,7 @@ pub fn compare(plan: &Plan, reference: &[RefEntry]) -> Verdict {
         differing: Vec::new(),
         unported: Vec::new(),
         extra_sources: Vec::new(),
+        unverified: unverified.to_vec(),
     };
     let mut seen: BTreeSet<&Path> = BTreeSet::new();
     for r in reference {
@@ -334,6 +339,18 @@ pub fn render_text(v: &Verdict) -> String {
             out.push_str(&format!("  {}\n", f.display()));
         }
     }
+    // 等価であることは、下書きが完成したという意味ではない。翻訳の引数を
+    // 見ているだけで、リンクの入力は見ていない（ADR-0053）。印を外すのは
+    // 人の判断であり、ここは残りを数えるだけである。
+    if !v.unverified.is_empty() {
+        out.push_str(&format!(
+            "\n{} target(s) still marked `unverified = true`:\n",
+            v.unverified.len()
+        ));
+        for t in &v.unverified {
+            out.push_str(&format!("  {t}\n"));
+        }
+    }
     out
 }
 
@@ -353,6 +370,7 @@ pub fn render_json(v: &Verdict) -> String {
     w.end_array();
     w.field_strs("unported", v.unported.iter().map(|p| p.to_str().unwrap_or("")));
     w.field_strs("only_in_dowel", v.extra_sources.iter().map(|p| p.to_str().unwrap_or("")));
+    w.field_strs("unverified", v.unverified.iter().map(String::as_str));
     w.end_object();
     w.finish()
 }

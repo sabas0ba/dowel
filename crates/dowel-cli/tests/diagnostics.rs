@@ -684,6 +684,15 @@ const CASES: &[Case] = &[
         args: CHECK,
     },
     Case {
+        code: "unverified-import",
+        why: "a target is still marked as drafted by `migrate import` (ADR-0053)",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\nunverified = true\n",
+        )],
+        args: CHECK,
+    },
+    Case {
         code: "unknown-source-language",
         why: "a source is in no language dowel compiles (ADR-0051)",
         files: &[

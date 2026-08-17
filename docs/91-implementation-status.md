@@ -1116,8 +1116,9 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   looking at the directory rather than by a `--from=` flag — what gets
   passed is the old build directory, and what made it is written there; if
   neither is found, the error names both recipes. The draft is marked
-  **UNVERIFIED** in a header comment (the favored shape of Q6; a machine
-  gate on unverified targets remains open) and points at `migrate verify`.
+  **UNVERIFIED** in a header comment and carries `unverified = true` on
+  every target it writes ([ADR-0053](adr/0053-unverified-import.md), which
+  closes Q6), and points at `migrate verify`.
   Everything lands in `private` blocks — the public/private intent is
   unknowable from what either system reports — and sources are listed
   explicitly, not globbed, so the draft stays faithful to the extracted
@@ -1125,6 +1126,22 @@ talks to the real `dowel lsp`. It is not yet published to the marketplace.
   `-DNDEBUG`) are not copied: dowel's `--config` supplies them, and copying
   them unconditionally would make a draft imported from Release produce
   optimized `NDEBUG` debug builds (issue #54)
+  - The mark **gates nothing**. Q6 assumed a draft would fail this system's
+    verification and asked what to downgrade; measuring one says it does
+    not — a Meson draft whose target linked a sibling archive passes
+    `check` and fails at the *link*, in the linker's words, about a symbol,
+    because the dropped input was never claimed to exist. There is nothing
+    to suppress, and suppressing would hide a hand-added `abi` label, which
+    is exactly the claim worth checking during a migration
+  - What it buys is visibility: every plan reports `unverified-import` as a
+    warning naming the target, so the incompleteness is stated before the
+    link rather than discovered inside it, and `migrate verify` counts the
+    targets still marked beside its source-level verdict. "Equivalent" and
+    "still unverified" are both true at once — it compares compile
+    arguments and never runs the link
+  - **Only a person removes the line.** Clearing it is the claim "I checked
+    this", and nothing dowel observes supports making that claim on
+    someone's behalf
 - The two differ in what they hand over. CMake reports compile arguments
   already sorted into `defines` / `includes` / fragments and names
   in-project `dependencies`, which become `target(...)`. Meson hands over
@@ -1208,7 +1225,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (740 tests):
+Current breakdown (742 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1217,10 +1234,10 @@ Current breakdown (740 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 11 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 279 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 281 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (80 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (81 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
