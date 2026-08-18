@@ -52,10 +52,16 @@ a maintenance burden.
 
 ```
 dowel migrate import   # draft from CMake's File API or Meson's introspection
-                       # (marked unverified)
+                       # (every target marked `unverified = true`, ADR-0053)
 dowel migrate verify   # compare the existing system's compile_commands.json
                        # against our action set, and report the differences
 ```
+
+The mark is what makes the second step countable: `check` names every target
+still carrying it, and `verify` reports how many remain. Clearing it is the
+person's claim that the target is ported — `verify` compares compile
+arguments and never runs the link, so it cannot make that claim itself
+([ADR-0053](adr/0053-unverified-import.md)).
 
 `verify` is cheap to implement — the action graph already exists — and high
 value. Migration becomes not a one-shot conversion but **a continuous

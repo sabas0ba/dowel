@@ -258,6 +258,10 @@ fn render_build(header: &str, targets: &[Imported]) -> String {
             out.push_str(&format!("    file(\"{s}\"),\n"));
         }
         out.push_str("]\n");
+        // 機械が読める印を置く（[ADR-0053](../../../docs/adr/0053-unverified-import.md)）。
+        // 見出しのコメントは人だけが読む。`check` が目標ごとに述べ続ける
+        // ことで、残りの移植量が数えられる形になる。
+        out.push_str("unverified = true\n");
         for s in &t.skipped_sources {
             out.push_str(&format!("# skipped source (outside the source tree): {s}\n"));
         }

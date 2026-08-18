@@ -605,6 +605,15 @@ and points at the follow-up:
 dowel migrate verify <old-build>/compile_commands.json
 ```
 
+Every drafted target also carries `unverified = true`
+([ADR-0053](adr/0053-unverified-import.md)). That mark is machine-readable:
+`check` reports each one as an `unverified-import` warning, and
+`migrate verify` counts the targets still marked beside its verdict, so how
+much is left to port is a number rather than a memory. It gates nothing and
+suppresses nothing — a draft is checked exactly like anything else — and
+only a person removes the line, since clearing it is the claim "I checked
+this" and `verify` compares compile arguments without ever running the link.
+
 Common mapping: executables → `bin`; static (and, with a note, shared)
 libraries → `lib`; includes outside the source tree → `-I` flags. Target
 names are mapped to valid identifiers. Configuration-level flags coming from

@@ -92,6 +92,7 @@ set.
 | `linkage` | `Str` | `replace` | how a `lib` is linked: `static` (the default) or `shared`. Ignored by other kinds |
 | `exports` | `List<Str>` | `append` | the symbols a shared library exports. Required when `linkage = "shared"` |
 | `soversion` | `Int` | `replace` | the ABI generation of a shared library. Enters the file name and the soname ([ADR-0040](adr/0040-shared-library-version.md)). Absent means the library carries no version |
+| `unverified` | `Bool` | `replace` | this target was drafted by `dowel migrate import` and nothing has confirmed it builds what the old build built ([ADR-0053](adr/0053-unverified-import.md)). Every plan reports it as `unverified-import`, a warning; it gates nothing, suppresses nothing, and only a person removes the line |
 
 #### A library that was built elsewhere
 

@@ -308,7 +308,11 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             if report(&sess, opts) {
                 return Ok(ExitCode::FAILURE);
             }
-            let verdict = dowel_build::migrate::compare(&p, &entries);
+            // 印の残っている目標も述べる。等価であることは下書きが完成した
+            // という意味ではない——見ているのは翻訳の引数であって、リンクの
+            // 入力ではない（ADR-0053）。
+            let unverified = build_plan::unverified_targets(&sess, &cfg, &all);
+            let verdict = dowel_build::migrate::compare(&p, &entries, &unverified);
             match opts.out_format {
                 OutFormat::Json => println!("{}", dowel_build::migrate::render_json(&verdict)),
                 _ => print!("{}", dowel_build::migrate::render_text(&verdict)),

@@ -1827,6 +1827,58 @@ fn migrate_verify_compares_against_a_reference_compdb() {
     r.stdout_contains("\"unported\"");
 }
 
+#[test]
+fn an_imported_target_says_it_is_unverified_until_a_person_says_otherwise() {
+    // 下書きは検査に落ちない——通る。落ちるのはリンクの段で、`deps` に
+    // なっていないリンク入力について、リンカが未定義参照として述べる。
+    // 弱める検査が無いので、印は provenance の宣言である（ADR-0053）。
+    let p = Project::new("unverified-import");
+    p.write("dowel.toml", "[package]\nname = \"u\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\nunverified = true\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    // 警告であり、失敗ではない。下書きは組めて走る。
+    let r = p.run(".", &["check"]);
+    r.success();
+    r.stderr_contains("unverified-import");
+    r.stderr_contains("u:app");
+    r.stderr_contains("migrate verify");
+    p.run(".", &["build"]).success();
+
+    // 印を外せば黙る。外すのは人である。
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    let r = p.run(".", &["check"]);
+    r.success();
+    assert!(!r.stderr.contains("unverified-import"), "the mark outlived the line:\n{}", r.stderr);
+}
+
+#[test]
+fn migrate_verify_counts_the_targets_still_marked_unverified() {
+    // 等価であることは下書きが完成したという意味ではない。見ているのは
+    // 翻訳の引数であって、リンクの入力ではない（ADR-0053）。移植の単位は
+    // 目標なので、残りも目標で数える。
+    let p = two_package_project("migrate-verify-unverified");
+    let build_file = std::fs::read_to_string(p.path("app/dowel.build")).unwrap();
+    p.write(
+        "app/dowel.build",
+        &build_file.replace("[bin.app]\n", "[bin.app]\nunverified = true\n"),
+    );
+    p.run("app", &["build"]).success();
+    let compdb = std::fs::read_to_string(p.path("app/compile_commands.json")).unwrap();
+    p.write("ref.json", &compdb);
+
+    let r = p.run("app", &["migrate", "verify", "../ref.json"]);
+    r.success();
+    // 等価と、残っていることは両立する。それが正直な状態である。
+    r.stdout_contains("2 equivalent, 0 differing");
+    r.stdout_contains("1 target(s) still marked");
+    r.stdout_contains("app:app");
+
+    let r = p.run("app", &["migrate", "verify", "../ref.json", "--format=json"]);
+    r.success();
+    r.stdout_contains("\"unverified\"");
+}
+
 /// `migrate import`。CMake File API の reply から下書きを生成し、
 /// そのままビルド・実行できることまで確かめる。
 ///
@@ -1891,6 +1943,12 @@ fn migrate_import_drafts_manifests_from_a_cmake_reply() {
     let build_file = std::fs::read_to_string(p.path("dowel.build")).unwrap();
     assert!(build_file.contains("UNVERIFIED DRAFT"), "{build_file}");
     assert!(build_file.contains("migrate verify"), "{build_file}");
+    // 見出しのコメントは人だけが読む。機械が読める印も目標ごとに置く
+    // （ADR-0053）——`check` が述べ、`migrate verify` が数える。
+    assert_eq!(build_file.matches("unverified = true").count(), 2, "{build_file}");
+    let r = p.run(".", &["check"]);
+    r.success();
+    r.stderr_contains("unverified-import");
 
     // 構成レベルのフラグ（build type 由来の -O / -g / -DNDEBUG）は写らない。
     // 写すと無条件のフラグになり、release から取り込んだ下書きの debug
@@ -1982,6 +2040,9 @@ fn migrate_import_drafts_manifests_from_meson_introspection() {
     let build_file = std::fs::read_to_string(p.path("dowel.build")).unwrap();
     assert!(build_file.contains("[lib.len]"), "{build_file}");
     assert!(build_file.contains("[bin.app]"), "{build_file}");
+    // 落としたリンク入力を持つのはこちらである。印はそこにこそ要る
+    // （ADR-0053）——`deps` が空のままでも `check` は通ってしまう。
+    assert_eq!(build_file.matches("unverified = true").count(), 2, "{build_file}");
     // `custom` は組めない。読み飛ばす。
     assert!(!build_file.contains("docs"), "{build_file}");
     // 1つの配列が仕分けられている。
