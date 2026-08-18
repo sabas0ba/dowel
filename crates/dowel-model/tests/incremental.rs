@@ -82,7 +82,10 @@ fn a_comment_only_edit_does_not_reach_the_merge() {
     let stats = sess.query_stats();
     // 触ったファイルの `Parsed` と `Evaluated` だけ。派生の併合は走っていない。
     assert_eq!(stats.computed, 2, "the merge ran again: {stats:?}");
-    assert_eq!(stats.cut_off, 0, "{stats:?}");
+    // 宣言の組み上げ（`BuildDecls`）と、そこから取り出す `Declared` は走り直す
+    // が、要約はスパンを含まないので指紋が変わらない——併合の手前で止まる。
+    // これが「取り出しは走ったが、その先へは届かなかった」の姿である。
+    assert_eq!(stats.cut_off, 2, "the extraction reached the merge: {stats:?}");
 }
 
 #[test]
@@ -114,9 +117,13 @@ fn the_first_load_computes_every_query() {
     assert!(!sess.has_errors(), "{:?}", sess.diagnostics);
 
     let stats = sess.query_stats();
-    // 4ファイル × 2クエリ。
-    assert_eq!(stats.computed, 8, "{stats:?}");
-    assert_eq!(stats.hit, 0, "{stats:?}");
+    // 4ファイル × 2クエリ（`Parsed` と `Evaluated`）に、`dowel.build` 2つ分の
+    // 宣言の組み上げ（`BuildDecls`）。読み込みそのものが導出になったので、
+    // 初回はここも数に入る。
+    assert_eq!(stats.computed, 10, "{stats:?}");
+    // 組み上げは評価結果を問い合わせる。読み込みが既に計算しているので、
+    // 2つの `dowel.build` について memo がそのまま返る——評価は2度走らない。
+    assert_eq!(stats.hit, 2, "{stats:?}");
 }
 
 #[test]
@@ -168,10 +175,49 @@ fn editing_one_file_recomputes_only_that_file() {
     sess.reload();
 
     let stats = sess.query_stats();
-    // 触ったファイルの `Parsed` と `Evaluated` だけ。
-    assert_eq!(stats.computed, 2, "{stats:?}");
+    // 触ったファイルの `Parsed` と `Evaluated`、そしてその宣言の組み上げ。
+    // 他のファイルの組み上げは走らない——これが読み込みを導出にした効果で
+    // ある（以前は読み込みの度に全ファイル分を組み上げていた）。
+    assert_eq!(stats.computed, 3, "{stats:?}");
     // 残り3ファイルは依存を辿って「変わっていない」と確認しただけ。
-    assert_eq!(stats.verified, 6, "{stats:?}");
+    assert_eq!(stats.verified, 7, "{stats:?}");
+    assert!(!sess.has_errors(), "{:?}", sess.diagnostics);
+}
+
+#[test]
+fn an_untouched_package_does_not_have_its_declarations_rebuilt() {
+    // 読み込みそのものが導出になったので、触っていないファイルの宣言は
+    // 組み直されない。以前は `Session` が読み込みの度に全ファイル分を
+    // 組み上げ、値を写し、要約を取り直していた（Phase 1 の宿題）。
+    let s = workspace();
+    let mut sess = Session::load(&s.path("app"));
+    derive(&sess);
+    // 宣言の同一性で見る。組み直せば新しい `Arc` になる——統計はクエリを
+    // 通った分しか数えないので、外へ出た仕事は数に現れない。
+    let of = |sess: &Session, name: &str| {
+        sess.targets.iter().find(|t| t.name == name).map(|t| t.decl.clone()).expect(name)
+    };
+    let untouched = of(&sess, "app");
+    let touched = of(&sess, "foo");
+
+    // 1ファイルだけ触る。他のパッケージの宣言は在るままである。
+    s.write(
+        "libfoo/dowel.build",
+        "[lib.foo]\nsources = glob(\"src/*.c\")\n\n[lib.foo.private]\nflags = [\"-O2\"]\n",
+    );
+    sess.reload();
+    derive(&sess);
+
+    assert!(
+        std::sync::Arc::ptr_eq(&untouched, &of(&sess, "app")),
+        "an untouched package had its declarations rebuilt"
+    );
+    // 対になる検査。触った側は組み直る——これが無いと、上は「そもそも
+    // 読み直していない」でも通る。
+    assert!(
+        !std::sync::Arc::ptr_eq(&touched, &of(&sess, "foo")),
+        "the edited package was not rebuilt"
+    );
     assert!(!sess.has_errors(), "{:?}", sess.diagnostics);
 }
 

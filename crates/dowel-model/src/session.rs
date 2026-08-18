@@ -11,7 +11,7 @@ use crate::persist::Cache;
 use crate::query::{self, Key};
 use crate::runner::Runner;
 use crate::target::{
-    label, ArtifactDecl, CaseDecl, HarnessDecl, PackageId, PropMap, Target, TargetId,
+    label, ArtifactDecl, CaseDecl, HarnessDecl, PackageId, PropMap, Target, TargetDecl, TargetId,
 };
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Data, Document, Ns, Site, Value};
@@ -255,20 +255,17 @@ impl Session {
             public.insert("link_flags".to_string(), strs(&r.libs));
         }
         let tid = TargetId(self.targets.len());
-        self.targets.push(Target {
-            id: tid,
-            package: pid,
-            kind: TableKind::Lib,
-            name: name.to_string(),
-            site,
-            root: PropMap::new(),
-            public,
-            private: PropMap::new(),
-            artifacts: Vec::new(),
-            inspections: Vec::new(),
-            cases: Vec::new(),
-            harness: None,
-        });
+        // 外部のパッケージは宣言を持たない。pkg-config が答えた面だけを持つ
+        // ターゲットとして置く。
+        let mut decl = TargetDecl::bare(TableKind::Lib, name.to_string(), site);
+        decl.public = public;
+        let decl = std::sync::Arc::new(decl);
+        query::set_target_source(
+            &self.db,
+            &label(&self.packages[pid.0].name, name),
+            query::Source::External(decl.clone()),
+        );
+        self.targets.push(Target { id: tid, package: pid, decl });
         self.externals.insert(name.to_string(), pid);
         log_debug!("external dependency `{name}` {} via pkg-config", r.version);
     }
@@ -340,15 +337,20 @@ impl Session {
         }
     }
 
+    /// 読み込みに要る設定。導出クエリが互いを呼ぶときに持ち回る。
+    fn ctx(&self) -> query::Ctx {
+        query::Ctx { max_nesting: self.max_nesting, store: Some(self.cache.clone()) }
+    }
+
     /// 依存側へ供給するプロパティ。メモを経由する。
     pub fn interface_of(&self, id: TargetId) -> Arc<query::Merged> {
-        query::interface(&self.db, &self.label(id))
+        query::interface(&self.db, &self.label(id), &self.ctx())
             .expect("the session never cancels its own queries")
     }
 
     /// 自身のコンパイルに効くプロパティ。メモを経由する。
     pub fn compile_env_of(&self, id: TargetId) -> Arc<query::Merged> {
-        query::compile_env(&self.db, &self.label(id))
+        query::compile_env(&self.db, &self.label(id), &self.ctx())
             .expect("the session never cancels its own queries")
     }
 
@@ -602,12 +604,6 @@ impl Session {
                 }
             }
         }
-        // 宣言をクエリへ渡す。指紋はスパンを含まない要約から導くため、
-        // コメントだけの編集ではここで版が進まない。
-        for t in &self.targets {
-            let label = label(&self.packages[t.package.0].name, &t.name);
-            query::set_declared(&self.db, &label, t.public.clone(), t.private.clone());
-        }
         log_debug!("loaded {} packages and {} targets", self.packages.len(), self.targets.len());
         let s = self.db.stats();
         log_debug!(
@@ -708,7 +704,7 @@ impl Session {
                     self.by_root.insert(dir.to_path_buf(), id);
                     self.packages.push(pkg);
                     self.check_feature_refs(id, &build.doc);
-                    self.build_targets(id, &build.doc);
+                    self.build_targets(id, f);
                     log_debug!(
                         "loaded package `{}` from {}",
                         self.packages[id.0].name,
@@ -835,14 +831,26 @@ impl Session {
     }
 
     /// `dowel.build` の各テーブルをターゲットへ組み上げる。
-    fn build_targets(&mut self, pkg: PackageId, doc: &Document) {
-        TargetSink {
-            pkg,
-            targets: &mut self.targets,
-            runners: &mut self.runners,
-            diagnostics: &mut self.diagnostics,
+    ///
+    /// 組み上げ自体はメモを通す（[`query::build_decls`]）。同じ本文からは
+    /// 同じ宣言が出るので、触っていないファイルはここで何も走らない——
+    /// 以前は読み込みの度に値を写し、要約を取り直していた。
+    fn build_targets(&mut self, pkg: PackageId, file: FileId) {
+        let decls = query::build_decls(&self.db, file, &self.ctx())
+            .expect("the session never cancels its own queries");
+        for decl in &decls.targets {
+            let id = TargetId(self.targets.len());
+            self.targets.push(Target { id, package: pkg, decl: decl.clone() });
+            query::set_target_source(
+                &self.db,
+                &label(&self.packages[pkg.0].name, &decl.name),
+                query::Source::File(file),
+            );
         }
-        .build(doc);
+        for (triple, runner) in &decls.runners {
+            self.runners.insert(triple.clone(), runner.clone());
+        }
+        self.diagnostics.extend(decls.diagnostics.iter().cloned());
     }
 }
 
@@ -891,8 +899,7 @@ fn prepend_props(into: &mut PropMap, from: &[PropMap], diags: &mut Vec<Diagnosti
 /// （[`check_build_file`]、issue #38）が同じ実装を共有する。分けて持つと、
 /// 片方だけを直したときに CLI とエディタの診断が黙って食い違う。
 struct TargetSink<'a> {
-    pkg: PackageId,
-    targets: &'a mut Vec<Target>,
+    targets: &'a mut Vec<TargetDecl>,
     runners: &'a mut BTreeMap<String, Runner>,
     diagnostics: &'a mut Vec<Diagnostic>,
 }
@@ -904,17 +911,25 @@ struct TargetSink<'a> {
 /// （issue #38）。ファイルを跨ぐ検査（機能名の照合、依存の解決、併合）と
 /// 計画段の検査（パス解決、glob 展開）はここには無い。
 pub fn check_build_file(doc: &Document) -> Vec<Diagnostic> {
+    declarations_of(doc).diagnostics
+}
+
+/// 1つの `dowel.build` が宣言したもの一式。
+///
+/// 評価結果だけを見る純粋な関数である。だからこそ導出クエリに置ける
+/// （[`crate::query::build_decls`]）——読み込みの度に組み上げていたものが、
+/// ファイルが変わらない限り走らなくなる。
+pub fn declarations_of(doc: &Document) -> crate::query::BuildDecls {
     let mut targets = Vec::new();
     let mut runners = BTreeMap::new();
     let mut diagnostics = Vec::new();
-    TargetSink {
-        pkg: PackageId(0),
-        targets: &mut targets,
-        runners: &mut runners,
-        diagnostics: &mut diagnostics,
+    TargetSink { targets: &mut targets, runners: &mut runners, diagnostics: &mut diagnostics }
+        .build(doc);
+    crate::query::BuildDecls {
+        targets: targets.into_iter().map(std::sync::Arc::new).collect(),
+        runners,
+        diagnostics,
     }
-    .build(doc);
-    diagnostics
 }
 
 /// 開いている1ファイルの `dowel.toml` を型検査する。
@@ -929,7 +944,6 @@ pub fn check_manifest_file(doc: &Document, file: FileId) -> Vec<Diagnostic> {
 
 impl TargetSink<'_> {
     fn build(&mut self, doc: &Document) {
-        let pkg = self.pkg;
         // `[lib.foo]` と `[lib.foo.public]` は別テーブルだが同じターゲットを指す。
         let mut index: BTreeMap<(String, String), TargetId> = BTreeMap::new();
         // 同じパッケージの中でターゲット名は一意である（issue #114）。
@@ -1093,20 +1107,7 @@ impl TargetSink<'_> {
 
             let tid = *index.entry(key).or_insert_with(|| {
                 let tid = TargetId(self.targets.len());
-                self.targets.push(Target {
-                    id: tid,
-                    package: pkg,
-                    kind,
-                    name: name.clone(),
-                    site: table.site,
-                    root: PropMap::new(),
-                    public: PropMap::new(),
-                    private: PropMap::new(),
-                    artifacts: Vec::new(),
-                    inspections: Vec::new(),
-                    cases: Vec::new(),
-                    harness: None,
-                });
+                self.targets.push(TargetDecl::bare(kind, name.clone(), table.site));
                 tid
             });
 
@@ -1135,12 +1136,10 @@ impl TargetSink<'_> {
             }
         }
 
-        self.expand_templates(pkg);
+        self.expand_templates();
 
         for t in self.targets.iter() {
-            if t.package == pkg {
-                log_trace!("declared target {}.{}", t.kind.name(), t.name);
-            }
+            log_trace!("declared target {}.{}", t.kind.name(), t.name);
         }
     }
 
@@ -1155,19 +1154,20 @@ impl TargetSink<'_> {
     /// 使う側に先に書かれていた場合と同じであり、`append` の順序も
     /// `replace` の後勝ちも普段どおりに効く。併合の代数に特例を作らないので、
     /// `dowel why` は展開後も来歴を辿れる。
-    fn expand_templates(&mut self, pkg: PackageId) {
+    fn expand_templates(&mut self) {
         let templates: BTreeMap<String, (PropMap, PropMap, Site)> = self
             .targets
             .iter()
-            .filter(|t| t.package == pkg && t.kind == TableKind::Template)
+            .filter(|t| t.kind == TableKind::Template)
             .map(|t| (t.name.clone(), (t.public.clone(), t.private.clone(), t.site)))
             .collect();
 
         let ids: Vec<TargetId> = self
             .targets
             .iter()
-            .filter(|t| t.package == pkg && t.kind != TableKind::Template)
-            .map(|t| t.id)
+            .enumerate()
+            .filter(|(_, t)| t.kind != TableKind::Template)
+            .map(|(i, _)| TargetId(i))
             .collect();
 
         for tid in ids {
