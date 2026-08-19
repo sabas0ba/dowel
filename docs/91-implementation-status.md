@@ -98,6 +98,20 @@ rebuilt.
 - A target whose declaration comes from pkg-config rather than a document
   (`version` dependencies, ADR-0015) has no file to derive from, so its
   source input carries the declaration itself
+- **Name resolution follows.** `Deps(label)` derives the edges — specializing
+  the target's `deps`, resolving each `target("...")` and `dep("...")`, and
+  reporting what does not resolve. What stays an input is a **name table**:
+  package to target names and kinds, package to declared dependency names and
+  what each resolved to. That much cannot come from one file, since deciding
+  which directory is which package is what loading does; but it holds names
+  only, so it does not move unless the shape of the tree does. `graph::build`
+  is left assembling edges and ordering them
+- The `Deps` fingerprint covers the labels, the blocks, and the diagnostics —
+  not the sites the references were written at. A comment inserted above a
+  `deps` line moves every span and changes nothing a merge can observe. The
+  sites are still in the value, and a cut-off memo is *replaced* rather than
+  kept, so the one thing that reads them (the cycle diagnostic) never sees a
+  stale position
 - `Target` splits into the declaration (shared, memoized) and its place in
   the session (`id`, package). Readers reach the declaration through
   `Deref`, so `target.public` still means what it did
@@ -1245,7 +1259,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (743 tests):
+Current breakdown (744 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1253,7 +1267,7 @@ Current breakdown (743 tests):
 | `unit-*` | per-crate unit tests | 363 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
-| `model-incremental` | counting what a reload did not recompute | 12 |
+| `model-incremental` | counting what a reload did not recompute | 13 |
 | `e2e` | compile real C, C++, and assembly, run it, check the output | 281 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
@@ -1322,7 +1336,6 @@ cannot be measured with the current fixtures; the scale fixture
 | Item | Standing |
 |---|---|
 | mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
-| making name resolution a query (`Deps` as a derivation) | Phase 1; `Declared` is now derived from the evaluated document, but resolving `dep("...")` needs every package at once, so `Session` still assembles the edges and passes them in |
 | the `toolchain` kind in `dowel.build` | still reserved. [ADR-0044](adr/0044-toolchain-acquisition.md) did not need it: the toolchain belongs to the build ([ADR-0031](adr/0031-toolchain-is-the-builds.md)), and `dowel.toml` is where the build is described |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines | deliberately not done ([ADR-0046](adr/0046-transfer-once.md)): it would undo the transfer skip, and the two cannot both be defaults. If wanted, it is an explicit command whose cost is that the next run transfers again |
