@@ -17,10 +17,14 @@ pub struct TargetId(pub usize);
 /// プロパティ名から宣言された値への写像。
 pub type PropMap = BTreeMap<String, Value>;
 
+/// 1つのファイルが宣言したターゲット。
+///
+/// **どのセッションに属するかを含まない。** 同じ本文からは同じ宣言が出る
+/// ので、これは評価結果からの導出であり、メモに載る
+/// （[`crate::query::build_decls`]）。読み込みの度に組み直していたものを、
+/// ファイルが変わらない限り組み直さないための分割である。
 #[derive(Clone, Debug)]
-pub struct Target {
-    pub id: TargetId,
-    pub package: PackageId,
+pub struct TargetDecl {
     pub kind: TableKind,
     pub name: String,
     /// `[lib.foo]` の見出しの位置
@@ -41,6 +45,26 @@ pub struct Target {
     /// `[test.<name>.harness]`。実行ファイル自身に事例を列挙させる宣言。
     /// `cases` と同時には書けない——どちらも「事例は何か」に答えるものである
     pub harness: Option<HarnessDecl>,
+}
+
+/// セッションの中に置かれたターゲット。宣言そのものは共有される。
+///
+/// 宣言（[`TargetDecl`]）へは [`std::ops::Deref`] で透過する。`target.kind`
+/// や `target.public` は、どちらに在るかを読み手が意識せずに済む。
+#[derive(Clone, Debug)]
+pub struct Target {
+    pub id: TargetId,
+    pub package: PackageId,
+    /// 宣言。メモから来るので、読み込みごとの写しは Arc 1つ分である
+    pub decl: std::sync::Arc<TargetDecl>,
+}
+
+impl std::ops::Deref for Target {
+    type Target = TargetDecl;
+
+    fn deref(&self) -> &TargetDecl {
+        &self.decl
+    }
 }
 
 /// `[test.<name>.harness]`（ADR-0023）。
@@ -100,7 +124,23 @@ pub struct ArtifactDecl {
     pub tool_site: Site,
 }
 
-impl Target {
+impl TargetDecl {
+    /// 名前とその位置だけを持つ、空の宣言。
+    pub fn bare(kind: TableKind, name: String, site: Site) -> TargetDecl {
+        TargetDecl {
+            kind,
+            name,
+            site,
+            root: PropMap::new(),
+            public: PropMap::new(),
+            private: PropMap::new(),
+            artifacts: Vec::new(),
+            inspections: Vec::new(),
+            cases: Vec::new(),
+            harness: None,
+        }
+    }
+
     pub fn props(&self, block: Block) -> &PropMap {
         match block {
             Block::Root => &self.root,

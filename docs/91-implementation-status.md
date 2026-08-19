@@ -82,6 +82,26 @@ Real-world test material lives in `tests/projects/` (realistic fixtures) and
 are not re-lexed. The degree of reuse is observable via
 `Session::query_stats`.
 
+**Loading is a derivation too.** `BuildDecls(file)` turns one `dowel.build`'s
+evaluated document into the targets it declares — properties, cases,
+artifacts, inspections, harness, runners, and the diagnostics of reading
+them — and `Declared(label)` projects one target out of it. `Session` used to
+assemble both and push them in as inputs, which meant every load re-ran the
+extraction, copied every value, and re-took every summary even for files
+nobody had touched. Now an untouched package is revalidated rather than
+rebuilt.
+
+- The two keys are separate so **cutoff keeps its per-target grain**: editing
+  one target's `defines` changes the file's fingerprint, so every
+  `Declared` in it recomputes, but only the edited one's fingerprint moves —
+  the merge is not re-entered for its neighbours
+- A target whose declaration comes from pkg-config rather than a document
+  (`version` dependencies, ADR-0015) has no file to derive from, so its
+  source input carries the declaration itself
+- `Target` splits into the declaration (shared, memoized) and its place in
+  the session (`id`, package). Readers reach the declaration through
+  `Deref`, so `target.public` still means what it did
+
 Early cutoff cannot help on per-file queries in principle (values contain
 spans, so any change to the text changes the value). Where it does apply is
 the per-target derivations (`interface` and `compile_env`), whose
@@ -1225,7 +1245,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (742 tests):
+Current breakdown (743 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1233,7 +1253,7 @@ Current breakdown (742 tests):
 | `unit-*` | per-crate unit tests | 363 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
-| `model-incremental` | counting what a reload did not recompute | 11 |
+| `model-incremental` | counting what a reload did not recompute | 12 |
 | `e2e` | compile real C, C++, and assembly, run it, check the output | 281 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
@@ -1302,7 +1322,7 @@ cannot be measured with the current fixtures; the scale fixture
 | Item | Standing |
 |---|---|
 | mmap-ing the index (currently read whole) | Phase 1; reading whole suffices up to thousands of records |
-| making loading and name resolution queries (`Declared` / `Deps` as derivations) | Phase 1; today `Session` assembles them and passes them as inputs |
+| making name resolution a query (`Deps` as a derivation) | Phase 1; `Declared` is now derived from the evaluated document, but resolving `dep("...")` needs every package at once, so `Session` still assembles the edges and passes them in |
 | the `toolchain` kind in `dowel.build` | still reserved. [ADR-0044](adr/0044-toolchain-acquisition.md) did not need it: the toolchain belongs to the build ([ADR-0031](adr/0031-toolchain-is-the-builds.md)), and `dowel.toml` is where the build is described |
 | language-server diagnostics that need fetching, `--target`, or external processes | the editor session is read-only and host-targeted by design; the remaining exclusions are listed with reasons in `dowel_lsp::UNSUPPORTED` |
 | cleaning up artifacts left on target machines | deliberately not done ([ADR-0046](adr/0046-transfer-once.md)): it would undo the transfer skip, and the two cannot both be defaults. If wanted, it is an explicit command whose cost is that the next run transfers again |

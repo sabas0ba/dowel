@@ -22,9 +22,18 @@
 //!
 //! ## 派生クエリの入力
 //!
-//! 併合はターゲットの宣言と依存の解決結果から決まる。どちらも `Session` が
-//! 組み上げるため、クエリからは入力として受け取る（[`set_declared`]、
-//! [`set_deps`]）。読み込みと名前解決そのものをクエリにするのは別の増分である。
+//! 併合はターゲットの宣言と依存の解決結果から決まる。宣言は評価結果からの
+//! **導出**である（[`build_decls`]、[`declared`]）——同じ本文からは同じ宣言が
+//! 出るので、触っていないファイルでは組み上げ自体が走らない。
+//!
+//! 依存の解決だけは入力のままである（[`set_deps`]）。`dep("...")` の解決には
+//! 全パッケージが同時に要り、それは1ファイルからの導出にならない。名前解決を
+//! クエリにするのは別の増分である。
+//!
+//! 鍵をファイル単位（[`Key::BuildDecls`]）とターゲット単位
+//! （[`Key::Declared`]）に分けているのは cutoff の粒度のためである。同じ
+//! ファイルの別のターゲットを編集すると前者の指紋は変わるが、後者は変わらない
+//! ——併合はそこで止まる。
 //!
 //! ## 来歴の扱い
 //!
@@ -36,7 +45,7 @@
 //! 診断は値に含め、指紋にも含める。スパンを含むため、位置が動けば cutoff は
 //! 起きない。誤りのある構成では再計算を選び、古い位置を報告しない。
 
-use crate::target::PropMap;
+use crate::target::{PropMap, TargetDecl};
 use dowel_eval::schema::{self, Block};
 use dowel_eval::{Config, Value};
 use dowel_query::{fingerprint_str, Cancelled, Db, Durability, Fingerprint};
@@ -60,10 +69,22 @@ pub enum Key {
     Evaluated(FileId),
     /// 入力: 構成。`--release` や `--target` の切り替えで変わる
     Config,
-    /// 入力: ターゲットが宣言したプロパティ。鍵はラベル（`pkg:name`）
+    /// 導出: 1つの `dowel.build` が宣言したターゲット一式
+    BuildDecls(FileId),
+    /// 入力: ラベルの宣言がどこから来るか（[`Source`]）。
+    ///
+    /// 対応そのものは読み込みが決める（どのディレクトリがどのパッケージか）。
+    /// ファイル由来なら値は `FileId` 1つなので、ターゲットがファイルを移らない
+    /// 限り版は進まない。
+    TargetSource(String),
+    /// 導出: ターゲットが宣言したプロパティ。鍵はラベル（`pkg:name`）
     ///
     /// 添字（`TargetId`）を鍵にしない。読み込み順で振られるため、
     /// マニフェストの形が変わるとメモが別のターゲットを指す。
+    ///
+    /// ファイル単位（[`Key::BuildDecls`]）から1つ取り出すだけの導出だが、
+    /// 鍵を分けることで cutoff の粒度がターゲット単位に保たれる——同じ
+    /// ファイルの別のターゲットを編集しても、こちらの指紋は変わらない。
     Declared(String),
     /// 入力: 解決済みの依存。ラベルと宣言ブロックの対
     Deps(String),
@@ -74,9 +95,27 @@ pub enum Key {
 }
 
 /// ターゲットが宣言したプロパティ。具体化前。
-pub struct Declared {
-    pub public: PropMap,
-    pub private: PropMap,
+///
+/// 宣言そのものは [`BuildDecls`] が持ち、ここはその1つを指すだけである。
+pub struct Declared(pub Arc<TargetDecl>);
+
+impl std::ops::Deref for Declared {
+    type Target = TargetDecl;
+
+    fn deref(&self) -> &TargetDecl {
+        &self.0
+    }
+}
+
+/// 1つの `dowel.build` が宣言したもの一式。
+///
+/// 読み込みそのものを導出にするための単位である（Phase 1 の宿題）。
+/// 以前は `Session` が読み込みの度に組み上げ、入力として渡していた——
+/// 触っていないファイルでも、値の写しと要約の計算が毎回走っていた。
+pub struct BuildDecls {
+    pub targets: Vec<Arc<TargetDecl>>,
+    pub runners: std::collections::BTreeMap<String, crate::runner::Runner>,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// 併合の結果。診断を値に含めるのは [`Evaluated`] と同じ理由による。
@@ -208,18 +247,138 @@ pub fn set_config(db: &Db<Key>, cfg: &Config) {
     );
 }
 
-/// ターゲットの宣言を入力として登録する。指紋はスパンを含まない要約から導く。
-pub fn set_declared(db: &Db<Key>, label: &str, public: PropMap, private: PropMap) {
-    let fp = dowel_query::fingerprint_of(&(
-        dowel_eval::props_digest(public.iter().map(|(k, v)| (k.as_str(), v))),
-        dowel_eval::props_digest(private.iter().map(|(k, v)| (k.as_str(), v))),
-    ));
-    db.set_input(
-        Key::Declared(label.to_string()),
-        Declared { public, private },
-        fp,
-        Durability::Low,
-    );
+/// 読み込みに要る設定。導出クエリが互いを呼ぶときに持ち回る。
+///
+/// 入力（`Db` の鍵）にはできない。`store` は `Rc<dyn Evaluations>` であり、
+/// 入力に求められる `Send + Sync` を満たさない——プロセスを跨いだ供給元は
+/// スレッドを跨がない。
+#[derive(Clone)]
+pub struct Ctx {
+    pub max_nesting: usize,
+    pub store: Option<Rc<dyn Evaluations>>,
+}
+
+/// 1つの `dowel.build` が宣言したターゲット一式。
+///
+/// 評価結果からの導出である。同じ本文からは同じ宣言が出るので、触っていない
+/// ファイルではここも走らない。診断を値に含めるのは [`Evaluated`] と同じ
+/// 理由による——メモが再利用されると計算手続きが走らない。
+pub fn build_decls(db: &Db<Key>, file: FileId, ctx: &Ctx) -> Result<Arc<BuildDecls>, Cancelled> {
+    let ctx = ctx.clone();
+    db.query(Key::BuildDecls(file), move |db| {
+        let doc = evaluated(db, file, false, ctx.max_nesting, ctx.store.clone())?;
+        let decls = crate::session::declarations_of(&doc.doc);
+        let fp = build_decls_fingerprint(&decls);
+        Ok((decls, fp))
+    })
+}
+
+/// ターゲットの宣言の出どころ。
+///
+/// ほとんどのターゲットは `dowel.build` から来る。pkg-config が答えた面だけを
+/// 持つ外部のターゲットには読む文書が無いので、宣言そのものを渡す
+/// （[ADR-0015](../../../docs/adr/0015-version-deps-pkgconfig.md)）。
+#[derive(Clone)]
+pub enum Source {
+    File(FileId),
+    External(Arc<TargetDecl>),
+}
+
+/// ラベルの宣言の出どころを登録する。
+pub fn set_target_source(db: &Db<Key>, label: &str, source: Source) {
+    let fp = match &source {
+        Source::File(f) => dowel_query::fingerprint_of(&f.0),
+        Source::External(d) => declared_fingerprint(d),
+    };
+    db.set_input(Key::TargetSource(label.to_string()), source, fp, Durability::Low);
+}
+
+/// ターゲット1つの宣言。指紋はスパンを含まない要約から導く。
+///
+/// ファイル単位の宣言から取り出すだけだが、鍵を分けることで cutoff の粒度が
+/// ターゲット単位に保たれる。同じファイルの別のターゲットを編集しても、
+/// この指紋は変わらないので併合まで届かない。
+pub fn declared(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Declared>, Cancelled> {
+    let owned = label.to_string();
+    let ctx = ctx.clone();
+    db.query(Key::Declared(owned.clone()), move |db| {
+        let source = db
+            .input::<Source>(Key::TargetSource(owned.clone()))?
+            .expect("the target's source is set before merging");
+        let name = owned.split_once(':').map(|(_, n)| n).unwrap_or(&owned);
+        let decl = match source.as_ref() {
+            Source::External(d) => d.clone(),
+            Source::File(file) => {
+                let decls = build_decls(db, *file, &ctx)?;
+                decls
+                    .targets
+                    .iter()
+                    .find(|t| t.name == name)
+                    .cloned()
+                    // 宣言が消えた場合。読み込みが登録し直すまでの間だけ在りうる。
+                    .unwrap_or_else(|| {
+                        Arc::new(TargetDecl::bare(
+                            dowel_eval::schema::TableKind::Lib,
+                            name.to_string(),
+                            dowel_eval::Site::new(*file, dowel_support::Span::EMPTY),
+                        ))
+                    })
+            }
+        };
+        let fp = declared_fingerprint(&decl);
+        Ok((Declared(decl), fp))
+    })
+}
+
+/// 宣言1つ分の指紋。スパンを含まない要約から導く（ADR-0011）。
+fn declared_fingerprint(decl: &TargetDecl) -> Fingerprint {
+    dowel_query::fingerprint_of(&(
+        dowel_eval::props_digest(decl.public.iter().map(|(k, v)| (k.as_str(), v))),
+        dowel_eval::props_digest(decl.private.iter().map(|(k, v)| (k.as_str(), v))),
+    ))
+}
+
+/// ファイル1つ分の指紋。
+///
+/// 根のプロパティと事例・変換・検査の宣言も混ぜる。併合に効くのは
+/// `public` / `private` だけだが、この値を読むのは併合だけではない——
+/// `sources` の編集で読み込みが組み直されなければ、計画が古い宣言を見る。
+fn build_decls_fingerprint(decls: &BuildDecls) -> Fingerprint {
+    let mut parts: Vec<u64> = Vec::new();
+    for t in &decls.targets {
+        parts.push(fingerprint_str(t.name.as_str()));
+        parts.push(dowel_eval::props_digest(t.root.iter().map(|(k, v)| (k.as_str(), v))));
+        parts.push(declared_fingerprint(t));
+        parts.push(dowel_query::fingerprint_of(&(
+            t.artifacts.len() as u64,
+            t.inspections.len() as u64,
+            t.cases.len() as u64,
+            t.harness.is_some(),
+        )));
+        for c in &t.cases {
+            parts.push(fingerprint_str(&c.name));
+            parts.push(dowel_eval::value_digest(&c.value));
+        }
+        for a in t.artifacts.iter().chain(&t.inspections) {
+            parts.push(fingerprint_str(&a.suffix));
+            parts.push(fingerprint_str(&a.tool));
+            parts.push(a.args.as_ref().map(dowel_eval::value_digest).unwrap_or(0));
+        }
+        if let Some(h) = &t.harness {
+            for (k, v) in &h.fields {
+                parts.push(fingerprint_str(k));
+                parts.push(dowel_eval::value_digest(v));
+            }
+        }
+    }
+    for (triple, r) in &decls.runners {
+        parts.push(fingerprint_str(triple));
+        parts.push(fingerprint_str(&format!("{r:?}")));
+    }
+    // 診断はスパンを含む。位置が動けば cutoff は起きない——誤りのある
+    // 構成では組み直しを選び、古い位置を報告しない。
+    parts.push(diagnostics_fingerprint(&decls.diagnostics));
+    dowel_query::fingerprint_of(&parts)
 }
 
 /// 解決済みの依存を入力として登録する。
@@ -238,10 +397,11 @@ fn package_of(label: &str) -> &str {
 ///
 /// `interface(T)` = T の `public` ＋ T の `public.deps` の `interface`
 /// （[`crate::interface`] の定義と同じ）。
-pub fn interface(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> {
+pub fn interface(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Merged>, Cancelled> {
     let owned = label.to_string();
+    let ctx = ctx.clone();
     db.query(Key::Interface(owned.clone()), move |db| {
-        let declared = expect_declared(db, &owned)?;
+        let declared = expect_declared(db, &owned, &ctx)?;
         // 具体化はそのターゲットのパッケージで行う。`feature.<名前>` は
         // 宣言したパッケージで有効かを問うものである（ADR-0017）。
         let cfg = expect_config(db)?.for_package(package_of(&owned));
@@ -257,7 +417,7 @@ pub fn interface(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> {
             }
             // 伝播するのは `public` で宣言された依存だけである。
             for (dep, _) in deps.iter().filter(|(_, b)| *b == Block::Public) {
-                if let Some(v) = interface(db, dep)?.props.get(def.name) {
+                if let Some(v) = interface(db, dep, &ctx)?.props.get(def.name) {
                     reached.push(crate::interface::tag_propagated(v, dep, def.name));
                 }
             }
@@ -285,10 +445,11 @@ pub fn interface(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> {
 /// 自身のコンパイルに効くプロパティ。
 ///
 /// `compile_env(T)` = T の `public` ＋ T の `private` ＋ 全依存の `interface`。
-pub fn compile_env(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> {
+pub fn compile_env(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Merged>, Cancelled> {
     let owned = label.to_string();
+    let ctx = ctx.clone();
     db.query(Key::CompileEnv(owned.clone()), move |db| {
-        let declared = expect_declared(db, &owned)?;
+        let declared = expect_declared(db, &owned, &ctx)?;
         // 具体化はそのターゲットのパッケージで行う。`feature.<名前>` は
         // 宣言したパッケージで有効かを問うものである（ADR-0017）。
         let cfg = expect_config(db)?.for_package(package_of(&owned));
@@ -306,7 +467,7 @@ pub fn compile_env(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> 
             }
             // 依存は宣言順。`public` と `private` の双方を取り込む。
             for (dep, _) in deps.iter() {
-                if let Some(v) = interface(db, dep)?.props.get(def.name) {
+                if let Some(v) = interface(db, dep, &ctx)?.props.get(def.name) {
                     reached.push(crate::interface::tag_propagated(v, dep, def.name));
                 }
             }
@@ -329,10 +490,8 @@ pub fn compile_env(db: &Db<Key>, label: &str) -> Result<Arc<Merged>, Cancelled> 
     })
 }
 
-fn expect_declared(db: &Db<Key>, label: &str) -> Result<Arc<Declared>, Cancelled> {
-    Ok(db
-        .input::<Declared>(Key::Declared(label.to_string()))?
-        .expect("the declared properties are set before merging"))
+fn expect_declared(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Declared>, Cancelled> {
+    declared(db, label, ctx)
 }
 
 fn expect_config(db: &Db<Key>) -> Result<Arc<Config>, Cancelled> {
@@ -351,13 +510,18 @@ fn expect_deps(db: &Db<Key>, label: &str) -> Result<Arc<Vec<(String, Block)>>, C
 /// 誤りのある構成で位置が動いた場合は cutoff させず、再計算して新しい位置を出す。
 fn merged_fingerprint(props: &PropMap, diagnostics: &[Diagnostic]) -> Fingerprint {
     let summary = dowel_eval::props_digest(props.iter().map(|(k, v)| (k.as_str(), v)));
+    dowel_query::fingerprint_of(&(summary, diagnostics_fingerprint(diagnostics)))
+}
+
+/// 診断の並びの指紋。スパンを含むので、位置が動けば変わる。
+fn diagnostics_fingerprint(diagnostics: &[Diagnostic]) -> Fingerprint {
     let mut of_diags = Vec::new();
     for d in diagnostics {
         let labels: Vec<(u64, u32, u32)> =
             d.labels.iter().map(|l| (l.file.0, l.span.start, l.span.end)).collect();
         of_diags.push((d.code, d.message.clone(), labels, d.notes.clone()));
     }
-    dowel_query::fingerprint_of(&(summary, of_diags))
+    dowel_query::fingerprint_of(&of_diags)
 }
 
 fn names(props: &PropMap) -> String {
