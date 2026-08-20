@@ -26,9 +26,10 @@
 //! **導出**である（[`build_decls`]、[`declared`]）——同じ本文からは同じ宣言が
 //! 出るので、触っていないファイルでは組み上げ自体が走らない。
 //!
-//! 依存の解決だけは入力のままである（[`set_deps`]）。`dep("...")` の解決には
-//! 全パッケージが同時に要り、それは1ファイルからの導出にならない。名前解決を
-//! クエリにするのは別の増分である。
+//! 依存の解決も導出である（[`deps`]）。入力に残るのは**名札の表**だけで
+//! ある（[`set_name_table`]）——`dep("...")` の解決には「どのディレクトリが
+//! どのパッケージか」が要り、それを決めるのは読み込みそのものである。表は
+//! 名前しか持たないので、木の形が変わらない限り版は進まない。
 //!
 //! 鍵をファイル単位（[`Key::BuildDecls`]）とターゲット単位
 //! （[`Key::Declared`]）に分けているのは cutoff の粒度のためである。同じ
@@ -47,7 +48,7 @@
 
 use crate::target::{PropMap, TargetDecl};
 use dowel_eval::schema::{self, Block};
-use dowel_eval::{Config, Value};
+use dowel_eval::{Config, Data, Value};
 use dowel_query::{fingerprint_str, Cancelled, Db, Durability, Fingerprint};
 use dowel_support::{log_trace, Diagnostic, FileId};
 use dowel_syntax::Parsed;
@@ -86,7 +87,14 @@ pub enum Key {
     /// 鍵を分けることで cutoff の粒度がターゲット単位に保たれる——同じ
     /// ファイルの別のターゲットを編集しても、こちらの指紋は変わらない。
     Declared(String),
-    /// 入力: 解決済みの依存。ラベルと宣言ブロックの対
+    /// 入力: 名前解決に要る、全パッケージ分の名札の表
+    ///
+    /// これだけは1ファイルからの導出にならない。`dep("...")` の解決には
+    /// **どのディレクトリがどのパッケージか**が要り、それを決めるのは
+    /// 読み込みそのものである。値は名前だけなので、木の形が変わらない限り
+    /// 版は進まない。
+    NameTable,
+    /// 導出: 解決済みの依存。ラベルと宣言ブロックの対
     Deps(String),
     /// 導出: 依存側へ供給するプロパティ
     Interface(String),
@@ -382,10 +390,187 @@ fn build_decls_fingerprint(decls: &BuildDecls) -> Fingerprint {
 }
 
 /// 解決済みの依存を入力として登録する。
-pub fn set_deps(db: &Db<Key>, label: &str, deps: Vec<(String, Block)>) {
-    let key: Vec<(String, u8)> = deps.iter().map(|(l, b)| (l.clone(), *b as u8)).collect();
-    let fp = dowel_query::fingerprint_of(&key);
-    db.set_input(Key::Deps(label.to_string()), deps, fp, Durability::Low);
+pub fn set_name_table(db: &Db<Key>, table: NameTable) {
+    let fp = fingerprint_str(&table.canonical());
+    db.set_input(Key::NameTable, table, fp, Durability::Low);
+}
+
+/// 名前解決の結果。`dowel.toml` の依存1つ分。
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum DepResolution {
+    /// 解決できた依存先のパッケージ名
+    Package(String),
+    /// 任意の依存で、対応する機能が有効でない。読み込んでいないため解決できない
+    Inactive,
+    /// 供給形態が未実装。`dowel.toml` の読み取りで診断済みである
+    AlreadyReported,
+}
+
+/// 名前解決に要る、全パッケージ分の名札の表。
+///
+/// 値は持たない——名前と種別だけである。宣言そのもの（[`Declared`]）と
+/// 分けているのは、こちらが**木の形**で決まるためである。1ファイルを
+/// 編集しても、ターゲットの名前が変わらない限りこの表は動かない。
+#[derive(Default)]
+pub struct NameTable {
+    /// パッケージ名 → そのパッケージのターゲット（名前と種別、宣言順）
+    pub targets: std::collections::BTreeMap<String, Vec<(String, schema::TableKind)>>,
+    /// パッケージ名 → 宣言された依存の名前と解決結果（宣言順）
+    pub deps: std::collections::BTreeMap<String, Vec<(String, DepResolution)>>,
+}
+
+impl NameTable {
+    /// 指紋を取るための正規形。中身が同じなら同じ文字列になる。
+    fn canonical(&self) -> String {
+        let mut out = String::new();
+        for (pkg, targets) in &self.targets {
+            out.push_str(pkg);
+            for (name, kind) in targets {
+                out.push('\u{1}');
+                out.push_str(name);
+                out.push('\u{2}');
+                out.push_str(kind.name());
+            }
+            out.push('\n');
+        }
+        for (pkg, deps) in &self.deps {
+            out.push_str(pkg);
+            for (name, r) in deps {
+                out.push('\u{1}');
+                out.push_str(name);
+                out.push('\u{2}');
+                match r {
+                    DepResolution::Package(p) => out.push_str(p),
+                    DepResolution::Inactive => out.push_str("<inactive>"),
+                    DepResolution::AlreadyReported => out.push_str("<reported>"),
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// このパッケージのターゲットのうち、この名前のもの。
+    fn target_in(&self, pkg: &str, name: &str) -> bool {
+        self.targets.get(pkg).is_some_and(|ts| ts.iter().any(|(n, _)| n == name))
+    }
+
+    fn target_names(&self, pkg: &str) -> Vec<&str> {
+        self.targets
+            .get(pkg)
+            .map(|ts| ts.iter().map(|(n, _)| n.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    fn dep_names(&self, pkg: &str) -> Vec<&str> {
+        self.deps
+            .get(pkg)
+            .map(|ds| ds.iter().map(|(n, _)| n.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    fn resolve_dep(&self, pkg: &str, name: &str) -> Option<&DepResolution> {
+        self.deps.get(pkg)?.iter().find(|(n, _)| n == name).map(|(_, r)| r)
+    }
+
+    /// 依存先パッケージが供給するライブラリのラベル。
+    fn libs_of(&self, pkg: &str) -> Vec<String> {
+        self.targets
+            .get(pkg)
+            .map(|ts| {
+                ts.iter()
+                    .filter(|(_, k)| *k == schema::TableKind::Lib)
+                    .map(|(n, _)| crate::target::label(pkg, n))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// 解決済みの依存。
+pub struct Deps {
+    /// 依存先のラベル、宣言したブロック、書かれた位置
+    pub edges: Vec<(String, Block, dowel_eval::Site)>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// 解決済みの依存（[`Key::Deps`]）。
+///
+/// 辺は具体化後に決まる。`deps = [dep("zlib") when feature.zlib]` は機能
+/// フラグによって現れたり消えたりするので、構成なしには定まらない。
+///
+/// 指紋には**ラベルとブロックと診断だけ**を混ぜる。位置は混ぜない——
+/// コメント1行の挿入で全ての位置が動くが、併合が読むのは「誰に繋がるか」
+/// だけである（ADR-0011 と同じ判断）。位置は値には持つ。cutoff でも値は
+/// 差し替わるため、閉路の診断が古い位置を指すことはない。
+pub fn deps(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Deps>, Cancelled> {
+    let owned = label.to_string();
+    let ctx = ctx.clone();
+    db.query(Key::Deps(owned.clone()), move |db| {
+        let declared = expect_declared(db, &owned, &ctx)?;
+        let cfg = expect_config(db)?.for_package(package_of(&owned));
+        let names =
+            db.input::<NameTable>(Key::NameTable)?.expect("the name table is set before resolving");
+        let pkg = package_of(&owned);
+        let mut edges = Vec::new();
+        let mut diagnostics = Vec::new();
+        for block in [Block::Public, Block::Private] {
+            let Some(value) = declared.props(block).get("deps") else { continue };
+            let Some(value) = dowel_eval::specialize(value, &cfg) else { continue };
+            for item in dep_items(&value) {
+                let site = item.prov.nearest_site().unwrap_or(declared.site);
+                match &item.data {
+                    Data::Target(name) if names.target_in(pkg, name) => {
+                        edges.push((crate::target::label(pkg, name), block, site));
+                    }
+                    Data::Target(name) => diagnostics.push(crate::graph::unknown_target(
+                        name,
+                        &names.target_names(pkg),
+                        &item,
+                    )),
+                    Data::Dep(name) => match names.resolve_dep(pkg, name) {
+                        None => diagnostics.push(crate::graph::undeclared_dep(
+                            name,
+                            &names.dep_names(pkg),
+                            &item,
+                        )),
+                        Some(DepResolution::Inactive) => {
+                            diagnostics.push(crate::graph::inactive_dep(name, &item))
+                        }
+                        // 供給形態が未実装なものは `dowel.toml` の読み取りで
+                        // 既に診断済み。同じことを2度言わない。
+                        Some(DepResolution::AlreadyReported) => {}
+                        Some(DepResolution::Package(to)) => {
+                            let libs = names.libs_of(to);
+                            if libs.is_empty() {
+                                diagnostics.push(crate::graph::empty_dep(name, &item));
+                            }
+                            for l in libs {
+                                edges.push((l, block, site));
+                            }
+                        }
+                    },
+                    Data::Error => {}
+                    _ => diagnostics.push(crate::graph::invalid_dep(&item)),
+                }
+            }
+        }
+        let key: Vec<(&str, u8)> = edges.iter().map(|(l, b, _)| (l.as_str(), *b as u8)).collect();
+        let fp = dowel_query::fingerprint_of(&(
+            dowel_query::fingerprint_of(&key),
+            diagnostics_fingerprint(&diagnostics),
+        ));
+        Ok((Deps { edges, diagnostics }, fp))
+    })
+}
+
+/// `deps` の値を1件ずつに開く。
+fn dep_items(value: &Value) -> Vec<Value> {
+    match &value.data {
+        Data::List(items) => items.clone(),
+        Data::Error => Vec::new(),
+        _ => vec![value.clone()],
+    }
 }
 
 /// ラベル `<パッケージ>:<ターゲット>` のパッケージ名。
@@ -405,7 +590,7 @@ pub fn interface(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Merged>, Ca
         // 具体化はそのターゲットのパッケージで行う。`feature.<名前>` は
         // 宣言したパッケージで有効かを問うものである（ADR-0017）。
         let cfg = expect_config(db)?.for_package(package_of(&owned));
-        let deps = expect_deps(db, &owned)?;
+        let deps = expect_deps(db, &owned, &ctx)?;
         let mut diagnostics = Vec::new();
         let mut props = PropMap::new();
         for def in schema::block_props() {
@@ -416,7 +601,7 @@ pub fn interface(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Merged>, Ca
                 }
             }
             // 伝播するのは `public` で宣言された依存だけである。
-            for (dep, _) in deps.iter().filter(|(_, b)| *b == Block::Public) {
+            for (dep, ..) in deps.edges.iter().filter(|(_, b, _)| *b == Block::Public) {
                 if let Some(v) = interface(db, dep, &ctx)?.props.get(def.name) {
                     reached.push(crate::interface::tag_propagated(v, dep, def.name));
                 }
@@ -453,7 +638,7 @@ pub fn compile_env(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Merged>, 
         // 具体化はそのターゲットのパッケージで行う。`feature.<名前>` は
         // 宣言したパッケージで有効かを問うものである（ADR-0017）。
         let cfg = expect_config(db)?.for_package(package_of(&owned));
-        let deps = expect_deps(db, &owned)?;
+        let deps = expect_deps(db, &owned, &ctx)?;
         let mut diagnostics = Vec::new();
         let mut props = PropMap::new();
         for def in schema::block_props() {
@@ -466,7 +651,7 @@ pub fn compile_env(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Merged>, 
                 }
             }
             // 依存は宣言順。`public` と `private` の双方を取り込む。
-            for (dep, _) in deps.iter() {
+            for (dep, ..) in deps.edges.iter() {
                 if let Some(v) = interface(db, dep, &ctx)?.props.get(def.name) {
                     reached.push(crate::interface::tag_propagated(v, dep, def.name));
                 }
@@ -498,10 +683,8 @@ fn expect_config(db: &Db<Key>) -> Result<Arc<Config>, Cancelled> {
     Ok(db.input::<Config>(Key::Config)?.expect("the configuration is set before merging"))
 }
 
-fn expect_deps(db: &Db<Key>, label: &str) -> Result<Arc<Vec<(String, Block)>>, Cancelled> {
-    Ok(db
-        .input::<Vec<(String, Block)>>(Key::Deps(label.to_string()))?
-        .expect("the resolved dependencies are set before merging"))
+fn expect_deps(db: &Db<Key>, label: &str, ctx: &Ctx) -> Result<Arc<Deps>, Cancelled> {
+    deps(db, label, ctx)
 }
 
 /// 併合結果の指紋。

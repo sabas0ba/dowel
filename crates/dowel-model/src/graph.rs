@@ -4,9 +4,9 @@
 //! 機能フラグによって辺が現れたり消えたりするため、構成なしにグラフは定まらない。
 
 use crate::session::Session;
-use crate::target::{PackageId, TargetId};
-use dowel_eval::schema::{Block, TableKind};
-use dowel_eval::{Config, Data, Site, Value};
+use crate::target::TargetId;
+use dowel_eval::schema::Block;
+use dowel_eval::{Config, Site, Value};
 use dowel_support::diag::closest;
 use dowel_support::{log_debug, log_trace, Diagnostic};
 use std::collections::BTreeMap;
@@ -58,84 +58,24 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
     let _phase = dowel_support::log::Phase::start("graph");
     let mut diags = Vec::new();
     let mut edges: BTreeMap<TargetId, Vec<Edge>> = BTreeMap::new();
+    // 名前解決に要る表と構成を先に渡す。解決そのものはクエリが行う
+    // （`query::deps`）ので、ここは辺を組み立てるだけである。
+    sess.declare_inputs(cfg);
 
+    let by_label: BTreeMap<String, TargetId> =
+        sess.targets.iter().map(|t| (sess.label(t.id), t.id)).collect();
     for target in &sess.targets {
-        let mut out = Vec::new();
-        log_trace!("resolving deps of {}", sess.label(target.id));
-        for block in [Block::Public, Block::Private] {
-            let Some(value) = target.props(block).get("deps") else { continue };
-            // 具体化は宣言したパッケージで行う（ADR-0017）。
-            let cfg = cfg.for_package(&sess.package(target.package).name);
-            let Some(value) = dowel_eval::specialize(value, &cfg) else { continue };
-            for item in items_of(&value) {
-                match &item.data {
-                    Data::Target(name) => match resolve_target(sess, target.package, name) {
-                        Some(to) => out.push(Edge {
-                            to,
-                            block,
-                            site: item.prov.nearest_site().unwrap_or(target.site),
-                        }),
-                        None => diags.push(unknown_target(sess, target.package, name, &item)),
-                    },
-                    Data::Dep(name) => {
-                        let found = resolve_package_targets(sess, target.package, name);
-                        match found {
-                            Ok(targets) if targets.is_empty() => diags.push(
-                                Diagnostic::error(
-                                    "empty-dependency",
-                                    format!("dependency `{name}` has no lib target"),
-                                )
-                                .with_label(label_at(&item, "this dependency supplies nothing")),
-                            ),
-                            Ok(targets) => {
-                                for to in targets {
-                                    out.push(Edge {
-                                        to,
-                                        block,
-                                        site: item.prov.nearest_site().unwrap_or(target.site),
-                                    });
-                                }
-                            }
-                            Err(Unresolved::NotDeclared) => {
-                                diags.push(undeclared_dep(sess, target.package, name, &item))
-                            }
-                            Err(Unresolved::Inactive) => diags.push(
-                                Diagnostic::error(
-                                    "inactive-dependency",
-                                    format!("`{name}` is optional and its feature is not enabled"),
-                                )
-                                .with_label(label_at(
-                                    &item,
-                                    "this dependency is not part of the current configuration",
-                                ))
-                                .note(format!(
-                                    "write `dep(\"{name}\") when feature.{name}` so the reference \
-                                     appears with the feature"
-                                ))
-                                .note(format!(
-                                    "or enable it with `--features={name}`, or drop `optional` \
-                                     from its declaration"
-                                )),
-                            ),
-                            // 供給形態が未実装なものは `dowel.toml` の読み取りで
-                            // 既に診断済み。同じことを2度言わない。
-                            Err(Unresolved::AlreadyReported) => {}
-                        }
-                    }
-                    Data::Error => {}
-                    _ => diags.push(
-                        Diagnostic::error(
-                            "invalid-dependency",
-                            format!(
-                                "element of `deps` is not a dependency reference: {}",
-                                item.display()
-                            ),
-                        )
-                        .with_label(label_at(&item, "write `dep(\"...\")` or `target(\"...\")`")),
-                    ),
-                }
-            }
-        }
+        let resolved = sess.deps_of(target.id);
+        diags.extend(resolved.diagnostics.iter().cloned());
+        let out: Vec<Edge> = resolved
+            .edges
+            .iter()
+            // 解決済みのラベルは必ずこのセッションに在る。表がこのセッション
+            // から作られている以上、無いラベルは出てこない。
+            .filter_map(|(label, block, site)| {
+                by_label.get(label).map(|to| Edge { to: *to, block: *block, site: *site })
+            })
+            .collect();
         if !out.is_empty() {
             log_trace!(
                 "{} → {}",
@@ -162,14 +102,6 @@ pub fn build(sess: &Session, cfg: &Config) -> (Graph, Vec<Diagnostic>) {
     (Graph { edges, order }, diags)
 }
 
-fn items_of(value: &Value) -> Vec<Value> {
-    match &value.data {
-        Data::List(items) => items.clone(),
-        Data::Error => Vec::new(),
-        _ => vec![value.clone()],
-    }
-}
-
 fn label_at(item: &Value, msg: &str) -> dowel_support::Label {
     match item.prov.nearest_site() {
         Some(s) => dowel_support::Label::primary(s.file, s.span, msg.to_string()),
@@ -181,47 +113,7 @@ fn label_at(item: &Value, msg: &str) -> dowel_support::Label {
     }
 }
 
-fn resolve_target(sess: &Session, pkg: PackageId, name: &str) -> Option<TargetId> {
-    sess.targets.iter().find(|t| t.package == pkg && t.name == name).map(|t| t.id)
-}
-
-enum Unresolved {
-    NotDeclared,
-    /// 任意の依存で、対応する機能が有効でない。読み込んでいないため解決できない
-    Inactive,
-    AlreadyReported,
-}
-
-fn resolve_package_targets(
-    sess: &Session,
-    from: PackageId,
-    dep_name: &str,
-) -> Result<Vec<TargetId>, Unresolved> {
-    let Some(dep) = sess.package(from).deps.iter().find(|d| d.name == dep_name) else {
-        return Err(Unresolved::NotDeclared);
-    };
-    // 有効でない任意の依存は読み込んでいない。解決できないのは
-    // 供給形態が未実装だからではないため、区別して報告する。
-    // 判定は宣言した側のパッケージの機能で行う（ADR-0017）。
-    let empty = std::collections::BTreeSet::new();
-    let active = sess.active_features_of(from).unwrap_or(&empty);
-    if !crate::package::is_active(dep, active) {
-        return Err(Unresolved::Inactive);
-    }
-    let Some(pid) = sess.dep_package(from, dep_name) else {
-        return Err(Unresolved::AlreadyReported);
-    };
-    Ok(sess
-        .targets
-        .iter()
-        .filter(|t| t.package == pid && t.kind == TableKind::Lib)
-        .map(|t| t.id)
-        .collect())
-}
-
-fn unknown_target(sess: &Session, pkg: PackageId, name: &str, item: &Value) -> Diagnostic {
-    let names: Vec<&str> =
-        sess.targets.iter().filter(|t| t.package == pkg).map(|t| t.name.as_str()).collect();
+pub(crate) fn unknown_target(name: &str, names: &[&str], item: &Value) -> Diagnostic {
     let mut d = Diagnostic::error("unknown-target", format!("no target named `{name}`"))
         .with_label(label_at(item, "no target with this name in the same package"))
         .note(format!(
@@ -236,8 +128,7 @@ fn unknown_target(sess: &Session, pkg: PackageId, name: &str, item: &Value) -> D
     d
 }
 
-fn undeclared_dep(sess: &Session, pkg: PackageId, name: &str, item: &Value) -> Diagnostic {
-    let names: Vec<&str> = sess.package(pkg).deps.iter().map(|d| d.name.as_str()).collect();
+pub(crate) fn undeclared_dep(name: &str, names: &[&str], item: &Value) -> Diagnostic {
     let mut d = Diagnostic::error(
         "undeclared-dependency",
         format!("dependency `{name}` is not declared in `dowel.toml`"),
@@ -254,6 +145,34 @@ fn undeclared_dep(sess: &Session, pkg: PackageId, name: &str, item: &Value) -> D
         }
     }
     d
+}
+
+/// 任意の依存で、対応する機能が有効でない。
+pub(crate) fn inactive_dep(name: &str, item: &Value) -> Diagnostic {
+    Diagnostic::error(
+        "inactive-dependency",
+        format!("`{name}` is optional and its feature is not enabled"),
+    )
+    .with_label(label_at(item, "this dependency is not part of the current configuration"))
+    .note(format!(
+        "write `dep(\"{name}\") when feature.{name}` so the reference appears with the feature"
+    ))
+    .note(format!("or enable it with `--features={name}`, or drop `optional` from its declaration"))
+}
+
+/// 依存先のパッケージにライブラリが無い。
+pub(crate) fn empty_dep(name: &str, item: &Value) -> Diagnostic {
+    Diagnostic::error("empty-dependency", format!("dependency `{name}` has no lib target"))
+        .with_label(label_at(item, "this dependency supplies nothing"))
+}
+
+/// `deps` の要素が依存の参照ではない。
+pub(crate) fn invalid_dep(item: &Value) -> Diagnostic {
+    Diagnostic::error(
+        "invalid-dependency",
+        format!("element of `deps` is not a dependency reference: {}", item.display()),
+    )
+    .with_label(label_at(item, "write `dep(\"...\")` or `target(\"...\")`"))
 }
 
 /// 深さ優先による順序づけ。閉路は診断にして、その辺を無視して続行する。

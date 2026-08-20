@@ -27,10 +27,8 @@ use std::collections::BTreeMap;
 /// 依存のインタフェースはクエリが自身で辿るため、下流へ配る必要がない。
 ///
 /// 中身の変わらない編集では併合が再計算されない（early cutoff）。
-pub fn prepare(sess: &Session, graph: &Graph, cfg: &Config) -> Vec<Diagnostic> {
+pub fn prepare(sess: &Session, graph: &Graph, _cfg: &Config) -> Vec<Diagnostic> {
     let _phase = dowel_support::log::Phase::start("interface");
-    sess.declare_derivations(cfg, graph);
-
     let mut diags = Vec::new();
     // `graph.order` は依存が先。クエリは自身で依存を辿るため順序を要さないが、
     // 診断の並びを読み込み順に揃えるためこの順で問い合わせる。

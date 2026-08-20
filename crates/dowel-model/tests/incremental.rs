@@ -185,6 +185,36 @@ fn editing_one_file_recomputes_only_that_file() {
 }
 
 #[test]
+fn an_untouched_reload_resolves_no_dependency_again() {
+    // 名前解決も導出である（`query::deps`）。触っていない木では、辺を
+    // 引き直す計算そのものが走らない——以前は読み込みのたびに全ターゲット分の
+    // `deps` を具体化し、名前を引き直していた。
+    let s = workspace_with_propagation();
+    let mut sess = Session::load(&s.path("app"));
+    derive(&sess);
+    // 解決の結果そのものの同一性で見る。引き直せば新しい `Arc` になる——
+    // 統計はクエリを通った分しか数えないので、外へ出た仕事は現れない。
+    let of = |sess: &Session, name: &str| {
+        let t = sess.targets.iter().find(|t| t.name == name).expect(name);
+        sess.deps_of(t.id)
+    };
+    let before = of(&sess, "app");
+    assert!(!before.edges.is_empty(), "the fixture has no edge to speak of");
+
+    sess.reload();
+    derive(&sess);
+
+    assert!(
+        std::sync::Arc::ptr_eq(&before, &of(&sess, "app")),
+        "the dependencies were resolved again"
+    );
+    let stats = sess.query_stats();
+    assert_eq!(stats.computed, 0, "something was recomputed: {stats:?}");
+    assert_eq!(stats.cut_off, 0, "a query ran its procedure: {stats:?}");
+    assert!(!sess.has_errors(), "{:?}", sess.diagnostics);
+}
+
+#[test]
 fn an_untouched_package_does_not_have_its_declarations_rebuilt() {
     // 読み込みそのものが導出になったので、触っていないファイルの宣言は
     // 組み直されない。以前は `Session` が読み込みの度に全ファイル分を

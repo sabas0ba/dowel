@@ -324,17 +324,56 @@ impl Session {
         self.db.stats()
     }
 
-    /// 構成と解決済みの依存をクエリへ渡す。
+    /// 構成と名札の表をクエリへ渡す。
     ///
-    /// 依存の解決は `Session` の外（[`crate::graph::build`]）で行う。名前解決に
-    /// 全パッケージが要るためであり、その段をクエリにするのは別の増分である。
-    pub fn declare_derivations(&self, cfg: &dowel_eval::Config, graph: &crate::graph::Graph) {
+    /// 名前解決そのものは導出である（[`query::deps`]）。ここで渡すのは
+    /// **どのパッケージにどの名前が在るか**だけで、これだけは1ファイルからの
+    /// 導出にならない——どのディレクトリがどのパッケージかを決めるのは
+    /// 読み込みそのものである。
+    pub fn declare_inputs(&self, cfg: &dowel_eval::Config) {
         query::set_config(&self.db, cfg);
+        query::set_name_table(&self.db, self.name_table());
+    }
+
+    /// 名前解決に要る名札の表を組む。値は持たない。
+    fn name_table(&self) -> query::NameTable {
+        let mut table = query::NameTable::default();
         for t in &self.targets {
-            let deps =
-                graph.deps_of(t.id).iter().map(|e| (self.label(e.to), e.block)).collect::<Vec<_>>();
-            query::set_deps(&self.db, &self.label(t.id), deps);
+            table
+                .targets
+                .entry(self.packages[t.package.0].name.clone())
+                .or_default()
+                .push((t.name.clone(), t.kind));
         }
+        let empty = std::collections::BTreeSet::new();
+        for pkg in &self.packages {
+            let mut deps = Vec::new();
+            for dep in &pkg.deps {
+                let active = self.active_features_of(pkg.id).unwrap_or(&empty);
+                // 有効でない任意の依存は読み込んでいない。解決できないのは
+                // 供給形態が未実装だからではないため、区別して記録する。
+                // 判定は宣言した側のパッケージの機能で行う（ADR-0017）。
+                let r = if !crate::package::is_active(dep, active) {
+                    query::DepResolution::Inactive
+                } else {
+                    match self.dep_package(pkg.id, &dep.name) {
+                        Some(pid) => {
+                            query::DepResolution::Package(self.packages[pid.0].name.clone())
+                        }
+                        None => query::DepResolution::AlreadyReported,
+                    }
+                };
+                deps.push((dep.name.clone(), r));
+            }
+            table.deps.insert(pkg.name.clone(), deps);
+        }
+        table
+    }
+
+    /// 解決済みの依存。メモを経由する。
+    pub fn deps_of(&self, id: TargetId) -> Arc<query::Deps> {
+        query::deps(&self.db, &self.label(id), &self.ctx())
+            .expect("the session never cancels its own queries")
     }
 
     /// 読み込みに要る設定。導出クエリが互いを呼ぶときに持ち回る。
