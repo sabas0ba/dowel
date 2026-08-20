@@ -6,7 +6,19 @@ between versions transparently. The design decisions are in
 
 ## Installation
 
-Releases are not set up yet, so bootstrap by building from this repository.
+Every release archive holds `dowelup` beside `dowel`, so the first one is
+downloaded rather than built — which is the point of publishing binaries at
+all ([ADR-0036](adr/0036-prebuilt-distribution.md)): a Rust toolchain should
+not stand between a C project and its first build.
+
+```sh
+tag=v0.1.0; triple=x86_64-unknown-linux-gnu
+curl -fsSL "https://github.com/sabas0ba/dowel/releases/download/$tag/dowel-$tag-$triple.tar.gz" | tar xz
+./dowelup shim ~/.local/bin              # create a link named `dowel`
+./dowelup default 0.1.0                  # fetch it and make it the default
+```
+
+On a platform with no published archive, build from this repository instead:
 
 ```sh
 cargo build --release -p dowel-up        # target/release/dowelup
@@ -29,11 +41,24 @@ dowelup shim ~/.local/bin                # create a link named `dowel`
 | `<sha>` | a commit; a unique prefix (7+ characters) suffices |
 
 Every form is resolved to a commit sha at `install` / `pin` / `default` time;
-from then on the sha is the source of truth. Upstream has no release tags
-yet, so `stable` and `X.Y.Z` cannot resolve until one appears. The pin holds
+from then on the sha is the source of truth. `stable` and `X.Y.Z` resolve
+against the release tags upstream, which start at `v0.1.0`. The pin holds
 the sha whichever way the binary arrived, so a project pinned to a sha gets
 the same version whether its developers took the published binary or built
 it themselves.
+
+Published binaries exist for these triples:
+
+| Triple | |
+|---|---|
+| `x86_64-unknown-linux-gnu` | `aarch64-unknown-linux-gnu` |
+| `x86_64-apple-darwin` | `aarch64-apple-darwin` |
+| `x86_64-pc-windows-msvc` | |
+
+Anywhere else, a release specifier says so and builds from source instead —
+which needs a Rust toolchain, and is the thing publishing binaries exists to
+avoid. Adding a platform is [50-development.md](50-development.md) section
+4.1.
 
 ## Commands
 

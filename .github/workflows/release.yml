@@ -7,7 +7,10 @@
 #
 # 命名が食い違えば dowelup は資産を見つけられず、黙ってソースからのビルドへ
 # 落ちる——気付きにくい壊れ方なので、同じ配置を e2e が構成して確かめている
-# （crates/dowel-up/tests/dowelup.rs の publish_asset）。
+# （crates/dowel-up/tests/dowelup.rs の publish_asset）。三つ組の一覧が
+# dowelup の側とずれるのも同じ壊れ方であり、こちらはこのファイルを読む検査が
+# 突き合わせる（crates/dowel-up/src/prebuilt.rs の
+# every_published_triple_is_one_the_release_workflow_builds）。
 #
 # ここが作るのはバイト列とその一覧である。それが「どの commit から作られたか」
 # は資産の側からは確かめられない（ADR-0036）。示せるのはソースからのビルドの
@@ -30,15 +33,42 @@ permissions:
   contents: write
 
 jobs:
+  # 配る前に確かめる。タグを押した commit が verify を通っているとは
+  # 限らない——押すのは人であり、押した先が main とも限らない。
+  # 落ちたものを配らないための関門がここである。
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Verify
+        run: make verify
+
   assets:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
             triple: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
           - runner: macos-latest
             triple: aarch64-apple-darwin
+          - runner: macos-15-intel
+            triple: x86_64-apple-darwin
+          - runner: windows-latest
+            triple: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
 
@@ -51,6 +81,10 @@ jobs:
       - name: Build
         # `--locked` で固定どおりに組む。ロックを無視して組んだものを
         # 配ると、その版の宣言と配ったものが食い違う。
+        #
+        # 走らせるのはその機械自身の三つ組である。交差ビルドにしないのは、
+        # 配るものが「その機械で動く」ことを、動く機械の上で確かめられる
+        # 形に保つためである。
         run: cargo build --release --locked
 
       - name: Package
@@ -60,16 +94,29 @@ jobs:
           set -eu
           tag="${{ inputs.tag || github.ref_name }}"
           name="dowel-${tag}-${{ matrix.triple }}.tar.gz"
+          suffix=""
+          if [ -f target/release/dowel.exe ]; then suffix=".exe"; fi
           mkdir -p stage
-          cp target/release/dowel stage/
-          tar -czf "$name" -C stage dowel
-          # sha256sum は Linux、shasum は macOS。dowelup が読むのは
+          # `dowelup` も同じ書庫に入れる。ADR-0036 が資産を配る理由は
+          # 「最初のビルドの前に Rust ツールチェーンを求めない」ことであり、
+          # その資産を取る道具自身を cargo で組ませては前提が立たない。
+          # dowelup が探すのは `dowel` という名前なので、隣に居ても迷わない。
+          cp "target/release/dowel$suffix" "target/release/dowelup$suffix" stage/
+          tar -czf "$name" -C stage "dowel$suffix" "dowelup$suffix"
+          # sha256sum は Linux と Git Bash、shasum は macOS。dowelup が読むのは
           # 先頭の 64 桁なので、どちらの書式でもよい。
           if command -v sha256sum >/dev/null; then
             sha256sum "$name" > "$name.sha256"
           else
             shasum -a 256 "$name" > "$name.sha256"
           fi
+          # 配る前に開き直して、中身が起動することを確かめる。書庫の中で
+          # 名前を取り違えた資産は dowelup から「`dowel` が入っていない」と
+          # しか見えず、その時には配り終わっている。
+          mkdir -p check
+          tar -xzf "$name" -C check
+          "./check/dowel$suffix" --version
+          "./check/dowelup$suffix" --version
           echo "name=$name" >> "$GITHUB_OUTPUT"
           cat "$name.sha256"
 
