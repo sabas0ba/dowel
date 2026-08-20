@@ -17,15 +17,32 @@ and the CLI process is self-contained.
 
 ## Quick start
 
-There are no binary releases yet; build from source. You need a Rust
-toolchain, a C compiler, and ninja (recommended).
+You need a C compiler and, ideally, ninja. Released binaries exist for
+x86-64 and arm64 Linux, macOS, and x86-64 Windows. Each release archive
+holds `dowel` and `dowelup`; from then on `dowelup` fetches, pins, and
+switches versions for you, verifying each against the checksum published
+beside it:
+
+```sh
+tag=v0.1.0; triple=x86_64-unknown-linux-gnu
+curl -fsSL "https://github.com/sabas0ba/dowel/releases/download/$tag/dowel-$tag-$triple.tar.gz" | tar xz
+./dowelup shim ~/.local/bin    # a `dowel` that selects a version on each launch
+./dowelup default 0.1.0
+```
+
+Anywhere else — or to build the compiler yourself — build from source, which
+additionally needs a Rust toolchain:
 
 ```sh
 git clone https://github.com/sabas0ba/dowel
 cd dowel
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
+```
 
+Either way:
+
+```sh
 cd examples/hello/app
 dowel check                  # run through planning, report diagnostics only
 dowel build                  # generate ninja files and run them

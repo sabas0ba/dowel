@@ -114,6 +114,41 @@ Do not add tool names to the `Dockerfile`; duplicated definitions drift.
 
 Adding a dependency at all is confirmed in advance.
 
+## 4.1 Cutting a release
+
+```sh
+scripts/release.sh 0.1.0
+```
+
+The script writes the version into `Cargo.toml`'s `[workspace.package]` — the
+one place that holds it — refreshes `Cargo.lock`, runs the full verification,
+commits, and creates an annotated `v0.1.0` tag. **It pushes nothing.**
+Pushing the tag is what publishes the assets, so the irreversible step stays
+with a person; the script prints the two commands to run.
+
+`dowelup` has its own version and the script does not touch it: it is
+installed once and then updates itself, so its version does not track the
+compiler's.
+
+Pushing the tag starts `.github/workflows/release.yml`, which
+
+1. runs `make verify` again on the tagged commit — pushing a tag is a human
+   act and the commit under it need not be one CI has seen,
+2. builds `dowel` on a runner **of each published triple**, unpacks what it
+   just packed, and runs `--version` from inside the archive,
+3. publishes `dowel-<tag>-<triple>.tar.gz` beside its `.sha256`.
+
+Those names are the ones `dowelup` reconstructs
+([ADR-0036](adr/0036-prebuilt-distribution.md)); a mismatch makes it fall
+back to building from source without saying why, so the triples it expects
+(`dowel_up::prebuilt::PUBLISHED_TRIPLES`) and the ones the workflow builds
+are compared by a test.
+
+Adding a platform means adding a row to the workflow's matrix and a line to
+that list; the test refuses one without the other. What cannot be added that
+way is a triple no GitHub-hosted runner runs — the workflow builds each asset
+natively so that "it runs on that machine" is confirmed on that machine.
+
 ## 5. Conventions
 
 The dotfiles README is where the conventions live. Only project-specific

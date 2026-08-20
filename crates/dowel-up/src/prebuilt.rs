@@ -21,6 +21,21 @@ pub fn asset_name(tag: &str) -> String {
     format!("dowel-{tag}-{}.tar.gz", host_triple())
 }
 
+/// 資産が公開されている三つ組。
+///
+/// リリースの工程（`.github/workflows/release.yml`）が作る一覧と同じで
+/// なければならない。片方だけに足すと、dowelup は在ると思って探し、
+/// 404 を受けて**黙ってソースからのビルドへ落ちる**——利用者から見ると
+/// 「なぜか Rust ツールチェーンを要求された」になる。突き合わせは検査が
+/// 行う（`tests/dowelup.rs`）。
+pub const PUBLISHED_TRIPLES: &[&str] = &[
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+];
+
 /// この機械の三つ組。
 pub fn host_triple() -> String {
     // 構成の綴りは Rust の定数と三つ組で同じである。OS だけが違う。
@@ -62,6 +77,13 @@ pub struct Unavailable(pub String);
 /// 検証は**開く前**に行う。開くという操作は、書庫の中身に「どこへ置くか」
 /// を決めさせる操作である（ADR-0029 と同じ判断）。
 pub fn fetch(work: &Path, upstream: &str, tag: &str) -> Result<(PathBuf, String), Unavailable> {
+    // 公開していない三つ組では、取りに行く前にそう述べる。行けば 404 が
+    // 返るだけで、利用者は「網が悪いのか、この機械には無いのか」を
+    // 読み取れない——落ちる先はどちらもソースからのビルドである。
+    let triple = host_triple();
+    if !PUBLISHED_TRIPLES.contains(&triple.as_str()) {
+        return Err(Unavailable(format!("no asset is published for `{triple}`")));
+    }
     let url = asset_url(upstream, tag);
     let archive = work.join(asset_name(tag));
     std::fs::create_dir_all(work)
@@ -129,6 +151,27 @@ fn find_binary(dir: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 公開する三つ組の一覧と、リリースの工程が作る一覧が一致すること。
+    ///
+    /// ずれると dowelup は在ると思って探し、404 を受けて黙ってソースからの
+    /// ビルドへ落ちる。利用者から見えるのは「なぜか Rust ツールチェーンを
+    /// 要求された」であり、原因は工程表の1行である。
+    #[test]
+    fn every_published_triple_is_one_the_release_workflow_builds() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.github/workflows/release.yml");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let mut built: Vec<String> = text
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("triple:"))
+            .map(|t| t.trim().to_string())
+            .collect();
+        built.sort();
+        let published: Vec<String> = PUBLISHED_TRIPLES.iter().map(|t| t.to_string()).collect();
+        assert_eq!(built, published, "the release workflow and dowelup disagree on the triples");
+    }
 
     #[test]
     fn the_url_follows_the_upstream() {
