@@ -145,7 +145,16 @@ back to building from source without saying why, so the triples it expects
 are compared by a test.
 
 Adding a platform means adding a row to the workflow's matrix and a line to
-that list; the test refuses one without the other. What cannot be added that
+that list; the test refuses one without the other.
+
+A pinned action must be a commit that exists. Nothing local can check that —
+`make verify` does not reach the network — and a wrong pin fails in
+"Set up job" with `unable to find version`, which reads like a runner
+problem rather than a typo. The first `v0.1.0` run failed exactly this way.
+When a tag is already published and only the workflow needs fixing, fix it on
+`main` and re-run from **Actions → release → Run workflow** with the tag as
+the input: the definition comes from the branch you dispatch, the code from
+the tag. What cannot be added that
 way is a triple no GitHub-hosted runner runs — the workflow builds each asset
 natively so that "it runs on that machine" is confirmed on that machine.
 

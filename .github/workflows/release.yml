@@ -121,7 +121,11 @@ jobs:
           cat "$name.sha256"
 
       - name: Publish
-        uses: softprops/action-gh-release@f2ed4fca66d3d2eb1b2bfaa5b95ff5e51d1a4b95 # v2.4.1
+        # ピンは実在する commit でなければならない。綴りが違っても「その版が
+        # 無い」としか出ず、しかも落ちるのは "Set up job"——利用者から見ると
+        # 実行機のラベルが悪いのか、アクションが悪いのかが読み取れない。
+        # v0.1.0 の初回はここで落ちた（実在しない SHA が書かれていた）。
+        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
