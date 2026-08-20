@@ -24,10 +24,10 @@ switches versions for you, verifying each against the checksum published
 beside it:
 
 ```sh
-tag=v0.1.0; triple=x86_64-unknown-linux-gnu
+tag=v0.1.1; triple=x86_64-unknown-linux-gnu
 curl -fsSL "https://github.com/sabas0ba/dowel/releases/download/$tag/dowel-$tag-$triple.tar.gz" | tar xz
 ./dowelup shim ~/.local/bin    # a `dowel` that selects a version on each launch
-./dowelup default 0.1.0
+./dowelup default 0.1.1
 ```
 
 Anywhere else — or to build the compiler yourself — build from source, which

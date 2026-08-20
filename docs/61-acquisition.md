@@ -12,10 +12,10 @@ all ([ADR-0036](adr/0036-prebuilt-distribution.md)): a Rust toolchain should
 not stand between a C project and its first build.
 
 ```sh
-tag=v0.1.0; triple=x86_64-unknown-linux-gnu
+tag=v0.1.1; triple=x86_64-unknown-linux-gnu
 curl -fsSL "https://github.com/sabas0ba/dowel/releases/download/$tag/dowel-$tag-$triple.tar.gz" | tar xz
 ./dowelup shim ~/.local/bin              # create a link named `dowel`
-./dowelup default 0.1.0                  # fetch it and make it the default
+./dowelup default 0.1.1                  # fetch it and make it the default
 ```
 
 On a platform with no published archive, build from this repository instead:
@@ -42,7 +42,7 @@ dowelup shim ~/.local/bin                # create a link named `dowel`
 
 Every form is resolved to a commit sha at `install` / `pin` / `default` time;
 from then on the sha is the source of truth. `stable` and `X.Y.Z` resolve
-against the release tags upstream, which start at `v0.1.0`. The pin holds
+against the release tags upstream, which start at `v0.1.1`. The pin holds
 the sha whichever way the binary arrived, so a project pinned to a sha gets
 the same version whether its developers took the published binary or built
 it themselves.
@@ -63,8 +63,8 @@ avoid. Adding a platform is [50-development.md](50-development.md) section
 ## Commands
 
 ```sh
-dowelup install 0.1.0              # a release: takes the published binary
-dowelup install 0.1.0 --from-source    # ... or builds it instead
+dowelup install 0.1.1              # a release: takes the published binary
+dowelup install 0.1.1 --from-source    # ... or builds it instead
 dowelup install nightly            # resolve, build, place under versions/<sha>/
 dowelup install branch:feature     # a specific upstream branch
 dowelup install 2915da5ab          # a specific commit (prefix suffices)

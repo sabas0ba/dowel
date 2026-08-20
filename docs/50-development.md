@@ -117,12 +117,12 @@ Adding a dependency at all is confirmed in advance.
 ## 4.1 Cutting a release
 
 ```sh
-scripts/release.sh 0.1.0
+scripts/release.sh 0.1.1
 ```
 
 The script writes the version into `Cargo.toml`'s `[workspace.package]` — the
 one place that holds it — refreshes `Cargo.lock`, runs the full verification,
-commits, and creates an annotated `v0.1.0` tag. **It pushes nothing.**
+commits, and creates an annotated `v0.1.1` tag. **It pushes nothing.**
 Pushing the tag is what publishes the assets, so the irreversible step stays
 with a person; the script prints the two commands to run.
 
@@ -150,7 +150,7 @@ that list; the test refuses one without the other.
 A pinned action must be a commit that exists. Nothing local can check that —
 `make verify` does not reach the network — and a wrong pin fails in
 "Set up job" with `unable to find version`, which reads like a runner
-problem rather than a typo. The first `v0.1.0` run failed exactly this way.
+problem rather than a typo. The first release run failed exactly this way.
 When a tag is already published and only the workflow needs fixing, fix it on
 `main` and re-run from **Actions → release → Run workflow** with the tag as
 the input: the definition comes from the branch you dispatch, the code from
