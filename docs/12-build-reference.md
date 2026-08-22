@@ -357,6 +357,65 @@ with no `artifacts` block never requires `objcopy` to exist. Because the
 tool's command is part of the action's command line, changing the
 declaration rebuilds the derived file.
 
+### `[<kind>.<name>.generate]` — making sources with a program
+
+A parser from `bison`, a scanner from `flex`, message types from `protoc`,
+a table from a script: sources that are produced rather than written. A
+`generate` block puts that step **inside** the build graph, so the outputs
+are made by `dowel build`, remade when what they are made from changes, and
+compiled into the target that declares them
+([ADR-0054](adr/0054-generated-sources.md)).
+
+```toml
+[bin.calc]
+sources = glob("src/*.c")
+
+[bin.calc.generate]
+parser = { command = "bison", args = ["-d", "-o", "parser.c"],
+           inputs = [file("src/parser.y")], outputs = ["parser.c", "parser.h"] }
+```
+
+Each key names the generation. It is also the name of the directory the
+outputs land in:
+
+```
+<build>/generated/<package>/<target>/<name>/
+```
+
+**The program runs with that directory as its working directory.** So
+`outputs` are plain relative names, `-o parser.c` means what it says, and
+two generations cannot write over each other. An output naming a path
+outside its directory is `invalid-output`.
+
+| Property | Type | Meaning |
+|---|---|---|
+| `command` | `Str` | required. The program to run. It runs on the **build machine**, so it is a command, not a toolchain tool: `[toolchain]` does not supply it and a cross build does not rename it. A command that is not on `PATH` is `missing-generator`, reported when the plan is made |
+| `args` | `List<Word>` | arguments placed before the inputs. `dir()` and `file()` expand to absolute paths — the working directory is on the output side, so a relative path would not reach the package |
+| `inputs` | `List<Path>` | what the generation reads. Appended to the command line, and what its freshness is judged against |
+| `outputs` | `List<Str>` | required. What it writes, named relative to the directory it runs in. The ones that are sources are compiled into this target |
+| `public` | `Bool` | put the output directory on the include path of this target's dependents too, the way `public.includes` propagates. Absent means this target only |
+
+The command run is `<command> <args...> <inputs...>` — the inputs are
+appended positionally, the same rule `artifacts` and runner transfers follow
+([ADR-0008](adr/0008-runner-transfer.md)).
+
+Which outputs become sources is the same closed question as anywhere else
+([ADR-0051](adr/0051-source-language-is-closed.md)): `parser.c` is compiled,
+`parser.h` is not. The output directory joins the target's include path
+without being declared, so a generated header is included by name.
+
+- Every generated output is an input of every compile that can see it, not
+  only of the compiles that include it. That is what orders the generation
+  before them under ninja, which reads file relations and not the plan's
+  edges.
+- A generation whose `outputs` is empty in the current configuration is
+  `generates-nothing`. A step that cannot add anything to its target is a
+  declaration error, not something to discover at run time.
+- The generator is re-run when its `inputs` change, not when the program
+  itself changes: upgrading `bison` in place invalidates nothing.
+- A generation with more than one output needs `--backend=ninja` or
+  `--backend=direct`; the make backend takes one output per step and says so.
+
 ### `[<kind>.<name>.inspect]` — reporting on the artifact
 
 The counterpart of `artifacts`: tools that report rather than produce.

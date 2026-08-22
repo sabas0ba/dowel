@@ -129,8 +129,11 @@ fn extract(t: &Json, source_dir: &Path) -> Option<Imported> {
                 None => push_unique(&mut out.skipped_sources, path.to_string()),
             }
         }
-        // 生成されたソースは写せない。生成する規則は dowel 側に無く、
-        // 黙って落とすと下書きが「組めるように見えて足りない」形になる。
+        // 生成されたソースは写せない。dowel の側には規則がある
+        // （[ADR-0054](../../../../docs/adr/0054-generated-sources.md)）が、
+        // 内省が答えるのは**出来上がったファイルの道**だけであり、それを
+        // 作った命令は無い。黙って落とすと下書きが「組めるように見えて
+        // 足りない」形になるので、飛ばしたものとして述べる。
         for s in group.get("generated_sources").and_then(Json::as_array).unwrap_or(&[]) {
             if let Some(path) = s.as_str() {
                 push_unique(&mut out.skipped_sources, format!("{path} (generated)"));

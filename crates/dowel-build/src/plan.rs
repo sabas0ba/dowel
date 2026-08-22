@@ -316,6 +316,11 @@ pub fn plan(
     let mut abi_against_build: Vec<AbiAgainstBuild> = Vec::new();
     // 変換の道具も同じ扱い。使う宣言があったときに1度だけ確かめる
     let mut probed_tools: BTreeSet<String> = BTreeSet::new();
+    // 生成の program も同じ。こちらはビルド機械の側を探す（ADR-0054）
+    let mut probed_generators: BTreeSet<String> = BTreeSet::new();
+    // ターゲット → 依存側へ渡る生成。`public` を宣言した分と、公開の依存を
+    // 辿って渡ってきた分である（`public.includes` と同じ届き方）
+    let mut generated_iface: BTreeMap<TargetId, Reach> = BTreeMap::new();
 
     // 共有ライブラリと、位置独立に翻訳するターゲット（ADR-0030）。
     //
@@ -370,7 +375,38 @@ pub fn plan(
             continue;
         }
 
-        let sources = collect_sources(sess, tid, cfg, &mut diags);
+        // --- ソースの生成（`generate` ブロック、ADR-0054） ---
+        //
+        // 翻訳より前に置く。生成されたソースは `sources` に加わり、言語の
+        // 判定もリンカの選択もそれを見る——後から足すと、`.cpp` を生成する
+        // ターゲットが C としてリンクされる。
+        let generated = plan_generate(
+            sess,
+            tid,
+            cfg,
+            &build_dir,
+            &mut plan,
+            &mut probed_generators,
+            &mut diags,
+        );
+        // 自身の分と、依存から届いた分。届き方は `public.includes` と同じで
+        // あり、直接の依存はすべて、その先は公開の依存だけを辿る。
+        let mut reached = generated.own.clone();
+        for e in graph.deps_of(tid) {
+            if let Some(r) = generated_iface.get(&e.to) {
+                reached.extend(r);
+            }
+        }
+        let mut iface = generated.public.clone();
+        for e in graph.public_deps_of(tid) {
+            if let Some(r) = generated_iface.get(&e.to) {
+                iface.extend(r);
+            }
+        }
+        generated_iface.insert(tid, iface);
+
+        let mut sources = collect_sources(sess, tid, cfg, &mut diags);
+        sources.extend(generated.sources.iter().cloned());
         has_cxx.insert(tid, sources.iter().any(|s| is_cxx(s)));
         has_unmarked_asm.insert(
             tid,
@@ -404,7 +440,15 @@ pub fn plan(
             continue;
         }
 
-        let includes = collect_includes(sess, &env, cfg, &build_dir, &mut diags);
+        let mut includes = collect_includes(sess, &env, cfg, &build_dir, &mut diags);
+        // 生成の落ちる先は宣言せずに探索路へ載る。載せなければ、生成した
+        // 頭部を `#include` した翻訳が「そんなファイルは無い」で落ちる
+        // ——書いた覚えのない `includes` を書かせないための扱いである。
+        for dir in &reached.dirs {
+            if !includes.contains(dir) {
+                includes.push(dir.clone());
+            }
+        }
         let defines = collect_defines(&env);
         let flags = collect_flags(sess, &env, cfg, &build_dir, "flags", &mut diags);
         // 言語標準は型付きのプロパティであり、`-std=` はここで組み立てる。
@@ -531,6 +575,12 @@ pub fn plan(
                 ));
             }
 
+            // 生成されたものは、この翻訳より前に在らなければならない。辺だけ
+            // では足りない——ninja が読むのは入力と出力の関係である。頭部を
+            // 入力に置くのは正しい依存でもあり、書き換えれば翻訳し直される。
+            let mut inputs = vec![src.clone()];
+            inputs.extend(reached.outputs.iter().filter(|p| *p != src).cloned());
+
             let id = ActionId(plan.actions.len());
             plan.actions.push(Action {
                 id,
@@ -538,11 +588,12 @@ pub fn plan(
                 target: tid,
                 program: compiler.to_string(),
                 args: args.clone(),
-                inputs: vec![src.clone()],
+                inputs,
                 outputs: vec![obj.clone()],
                 depfile: wants_depfile.then_some(depfile),
                 description: format!("{tool} {}", rel_display(&build_dir, &obj)),
-                deps: Vec::new(),
+                deps: reached.actions.clone(),
+                cwd: None,
             });
             let mut arguments = vec![compiler.to_string()];
             arguments.extend(args);
@@ -689,6 +740,7 @@ pub fn plan(
                     depfile: None,
                     description: format!("SHLIB {}", rel_display(&build_dir, &out)),
                     deps,
+                    cwd: None,
                 });
                 log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
                 producer.insert(tid, id);
@@ -743,6 +795,7 @@ pub fn plan(
                     depfile: None,
                     description: format!("AR {}", rel_display(&build_dir, &archive)),
                     deps: compile_ids.clone(),
+                    cwd: None,
                 });
                 log_trace!("  action[{}] {}", aid.0, plan.actions[aid.0].command_line());
                 sibling_inputs.insert(tid, (archive, aid));
@@ -770,6 +823,7 @@ pub fn plan(
                     depfile: None,
                     description: format!("AR {}", rel_display(&build_dir, &out)),
                     deps: compile_ids.clone(),
+                    cwd: None,
                 });
                 log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
                 producer.insert(tid, id);
@@ -852,6 +906,7 @@ pub fn plan(
                     depfile: None,
                     description: format!("LINK {}", rel_display(&build_dir, &out)),
                     deps,
+                    cwd: None,
                 });
                 log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
                 producer.insert(tid, id);
@@ -914,6 +969,7 @@ pub fn plan(
                     rel_display(&build_dir, &out)
                 ),
                 deps: vec![producer_id],
+                cwd: None,
             });
             log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
             plan.derived.entry(tid).or_default().push(out);
@@ -924,12 +980,13 @@ pub fn plan(
     diags.extend(abi_against_build.into_iter().map(AbiAgainstBuild::into_diagnostic));
 
     log_debug!(
-        "{} actions ({} compile, {} archive, {} link, {} transform)",
+        "{} actions ({} compile, {} archive, {} link, {} transform, {} generate)",
         plan.actions.len(),
         count(&plan, ActionKind::Compile),
         count(&plan, ActionKind::Archive),
         count(&plan, ActionKind::Link),
-        count(&plan, ActionKind::Transform)
+        count(&plan, ActionKind::Transform),
+        count(&plan, ActionKind::Generate)
     );
 
     (plan, diags)
@@ -1080,6 +1137,180 @@ fn closure_link_flags(
         }
     }
     out
+}
+
+/// 生成が翻訳へ渡すもの
+/// （[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
+///
+/// ディレクトリだけでは足りない。生成された頭部を読むのは翻訳であり、
+/// 「先に走っていること」を言うには出力そのものが要る——ninja が読むのは
+/// 入力と出力の関係であって、こちらが持つ辺ではない。
+#[derive(Clone, Default)]
+struct Reach {
+    /// 出力の落ちるディレクトリ。探索路に載る
+    dirs: Vec<PathBuf>,
+    /// すべての出力。翻訳の入力に加わる
+    outputs: Vec<PathBuf>,
+    /// 生成のアクション
+    actions: Vec<ActionId>,
+}
+
+impl Reach {
+    fn extend(&mut self, other: &Reach) {
+        self.dirs.extend(other.dirs.iter().cloned());
+        self.outputs.extend(other.outputs.iter().cloned());
+        self.actions.extend(other.actions.iter().copied());
+    }
+}
+
+/// 1つのターゲットの生成の結果。
+#[derive(Default)]
+struct Generated {
+    /// 翻訳できる綴りの出力。宣言したターゲットのソースに加わる
+    sources: Vec<PathBuf>,
+    /// 宣言したターゲット自身に効く分
+    own: Reach,
+    /// `public = true` を持つ項目の分。依存側へ渡る
+    public: Reach,
+}
+
+/// `[<kind>.<name>.generate]` からアクションを起こす（ADR-0054）。
+///
+/// 走らせる program はビルド機械のものである。ツールチェインから採らないのは、
+/// 交差ビルドで「組んだ機械で動かないもの」を走らせることになるためである。
+///
+/// 出力はこの宣言のための場所へ落とし、program の作業ディレクトリをそこにする。
+/// 宣言の側が絶対パスを組み立てずに済み、出力の落ちる先が宣言ごとに分かれる
+/// ——同じ名前を書く2つの生成が、互いの出力を踏まない。
+fn plan_generate(
+    sess: &Session,
+    tid: TargetId,
+    cfg: &Config,
+    build_dir: &Path,
+    plan: &mut Plan,
+    probed: &mut BTreeSet<String>,
+    diags: &mut Vec<Diagnostic>,
+) -> Generated {
+    let target = sess.target(tid);
+    let pkg = sess.package(target.package);
+    // 具体化は宣言したパッケージで行う（ADR-0017）。
+    let cfg_pkg = cfg.for_package(&pkg.name);
+    let mut generated = Generated::default();
+
+    for decl in &target.generated {
+        let dir = build_dir.join("generated").join(&pkg.name).join(&target.name).join(&decl.name);
+
+        // 出力は宣言のディレクトリの中でなければならない。外へ出るものを
+        // 通すと、宣言した場所と書かれる場所が食い違い、増分ビルドは
+        // 「宣言した出力が現れない」を毎回見ることになる。
+        let Some(value) = decl.outputs.as_ref().and_then(|v| dowel_eval::specialize(v, &cfg_pkg))
+        else {
+            continue;
+        };
+        let mut outputs = Vec::new();
+        for item in flatten(&value) {
+            let Some(name) = item.as_str() else { continue };
+            let rel = Path::new(name);
+            if rel.is_absolute() || rel.components().any(|c| c == std::path::Component::ParentDir) {
+                diags.push(
+                    Diagnostic::error(
+                        "invalid-output",
+                        format!("`{name}` leaves the directory the generation writes to"),
+                    )
+                    .at(decl.site.file, decl.site.span, "declared here")
+                    .note(format!(
+                        "outputs are named relative to {}, which is where the program runs",
+                        rel_display(build_dir, &dir)
+                    ))
+                    .note("dowel has to know where each output lands to make it an input of the compiles"),
+                );
+                continue;
+            }
+            outputs.push(dir.join(rel));
+        }
+        if outputs.is_empty() {
+            // 走らせても何も増えないものは、走らせる前に述べる。宣言の側に
+            // 誤りがあるのに、失敗するのは「作られないはずの成果物」の
+            // リンクの段になる（ADR-0051 と同じ立場）。
+            diags.push(
+                Diagnostic::error(
+                    "generates-nothing",
+                    format!("`{}` writes nothing in this configuration", decl.name),
+                )
+                .at(decl.site.file, decl.site.span, "`outputs` is empty here")
+                .note("a generation that writes nothing adds nothing to the target"),
+            );
+            continue;
+        }
+
+        // 入力。読むものであり、命令行の末尾にも位置で置く（ADR-0008）。
+        let mut inputs = Vec::new();
+        if let Some(value) = decl.inputs.as_ref().and_then(|v| dowel_eval::specialize(v, &cfg_pkg))
+        {
+            for item in flatten(&value) {
+                if let Some(abs) = absolute_path(sess, &item, cfg, build_dir, diags) {
+                    inputs.push(abs);
+                }
+            }
+        }
+
+        let mut args: Vec<String> = Vec::new();
+        if let Some(value) = decl.args.as_ref().and_then(|v| dowel_eval::specialize(v, &cfg_pkg)) {
+            for item in flatten(&value) {
+                // `dir()` や `file()` は絶対パスへ開く。作業ディレクトリが
+                // 出力の側にあるので、パッケージの中を相対で指しても届かない。
+                if let Some(abs) = absolute_path(sess, &item, cfg, build_dir, diags) {
+                    args.push(abs.display().to_string());
+                } else if let Some(s) = item.as_str() {
+                    args.push(s.to_string());
+                }
+            }
+        }
+        args.extend(inputs.iter().map(|p| p.display().to_string()));
+
+        // program はビルド機械のものである。無ければここで述べる——実行の段の
+        // 「cannot start」は、マニフェストのどの行が書いたのかを示さない。
+        if probed.insert(decl.command.clone()) && !crate::exec::program_exists(&decl.command) {
+            diags.push(
+                Diagnostic::error("missing-generator", format!("cannot find `{}`", decl.command))
+                    .at(decl.site.file, decl.site.span, "declared here")
+                    .note(
+                        "a generation runs on the build machine, so the program has to be on PATH",
+                    )
+                    .note("it is not a toolchain tool: `[toolchain]` does not supply it"),
+            );
+        }
+
+        let id = ActionId(plan.actions.len());
+        plan.actions.push(Action {
+            id,
+            kind: ActionKind::Generate,
+            target: tid,
+            program: decl.command.clone(),
+            args,
+            inputs,
+            outputs: outputs.clone(),
+            depfile: None,
+            description: format!("GEN {}", rel_display(build_dir, &dir)),
+            deps: Vec::new(),
+            cwd: Some(dir.clone()),
+        });
+        log_trace!("  action[{}] {}", id.0, plan.actions[id.0].command_line());
+
+        // 翻訳できる綴りの出力だけが、このターゲットのソースになる。
+        // 頭部（`.h`）は出力のまま——探索路に載り、翻訳の入力になる。
+        for out in &outputs {
+            if language(out).is_some() && accept_source(out, Some(decl.site), &cfg_pkg, diags) {
+                generated.sources.push(out.clone());
+            }
+        }
+        let reach = Reach { dirs: vec![dir], outputs, actions: vec![id] };
+        generated.own.extend(&reach);
+        if decl.public {
+            generated.public.extend(&reach);
+        }
+    }
+    generated
 }
 
 fn collect_sources(
@@ -1747,7 +1978,13 @@ fn object_path(
     src: &Path,
     cfg: &Config,
 ) -> PathBuf {
-    let rel = src.strip_prefix(pkg_root).unwrap_or(src);
+    // 生成されたソースはパッケージの外——ビルドディレクトリの中——に在る。
+    // 剥がさずに畳むと、絶対パスをそのまま潰した名前になり、長さが
+    // ファイル名の上限に触れる（ADR-0054）。
+    // ビルドディレクトリを先に見る。それはパッケージの中に在るのが既定で
+    // あり、パッケージから剥がすと `.dowel/build/<triple>/...` がそのまま
+    // 名前になる。
+    let rel = src.strip_prefix(build_dir).or_else(|_| src.strip_prefix(pkg_root)).unwrap_or(src);
     // パッケージ外のソースでも衝突しないよう、区切りを潰した名前にする。
     let flat = rel.to_string_lossy().replace(['/', '\\', ':'], "_");
     let ext = toolstyle::object_extension(cfg);

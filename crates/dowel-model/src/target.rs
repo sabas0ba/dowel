@@ -45,6 +45,8 @@ pub struct TargetDecl {
     /// `[test.<name>.harness]`。実行ファイル自身に事例を列挙させる宣言。
     /// `cases` と同時には書けない——どちらも「事例は何か」に答えるものである
     pub harness: Option<HarnessDecl>,
+    /// `[<kind>.<name>.generate]`。ソースを作る規則。宣言順
+    pub generated: Vec<GenerateDecl>,
 }
 
 /// セッションの中に置かれたターゲット。宣言そのものは共有される。
@@ -96,6 +98,36 @@ pub struct CaseDecl {
     pub site: Site,
 }
 
+/// `[<kind>.<name>.generate]` の1項目
+/// （[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
+///
+/// ソースを作る規則である。走らせる program はビルド機械の上で走るものであり、
+/// ツールチェインの道具ではない——`bison` も `protoc` も、交差ビルドで動くのは
+/// 組む側の機械である。
+///
+/// 出力はこの宣言のための場所（`<build>/generated/<パッケージ>/<ターゲット>/<名前>`）
+/// へ落ちる。program はそこを作業ディレクトリとして走るので、`outputs` は
+/// そこからの相対名で足りる。宣言の側に絶対パスの組み立てを持ち込まないための
+/// 分割である。
+#[derive(Clone, Debug)]
+pub struct GenerateDecl {
+    /// 項目の鍵。出力が落ちるディレクトリの名前になる
+    pub name: String,
+    /// 走らせる program。ビルド機械の上で走る
+    pub command: String,
+    /// 入力の前に置く引数。具体化前であり、`when` / `match` を含みうる
+    pub args: Option<Value>,
+    /// 読むもの。命令行の末尾にも置かれる。具体化前
+    pub inputs: Option<Value>,
+    /// 書くもの。出力ディレクトリからの相対名。具体化前
+    pub outputs: Option<Value>,
+    /// 出力ディレクトリを依存側の探索路にも載せるか。
+    /// `public.includes` と同じ伝播であり、既定は自身のみ
+    pub public: bool,
+    /// 項目の位置
+    pub site: Site,
+}
+
 /// 成果物に対して道具を1つ走らせる宣言（issue #60）。
 ///
 /// `artifacts` の項目（変換）と `inspect` の項目（検査）が同じ形を採る。
@@ -138,6 +170,7 @@ impl TargetDecl {
             inspections: Vec::new(),
             cases: Vec::new(),
             harness: None,
+            generated: Vec::new(),
         }
     }
 

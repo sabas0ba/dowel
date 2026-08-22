@@ -362,7 +362,16 @@ fn build_decls_fingerprint(decls: &BuildDecls) -> Fingerprint {
             t.inspections.len() as u64,
             t.cases.len() as u64,
             t.harness.is_some(),
+            t.generated.len() as u64,
         )));
+        for g in &t.generated {
+            parts.push(fingerprint_str(&g.name));
+            parts.push(fingerprint_str(&g.command));
+            parts.push(dowel_query::fingerprint_of(&g.public));
+            for v in [&g.args, &g.inputs, &g.outputs] {
+                parts.push(v.as_ref().map(dowel_eval::value_digest).unwrap_or(0));
+            }
+        }
         for c in &t.cases {
             parts.push(fingerprint_str(&c.name));
             parts.push(dowel_eval::value_digest(&c.value));

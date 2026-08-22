@@ -11,7 +11,8 @@ use crate::persist::Cache;
 use crate::query::{self, Key};
 use crate::runner::Runner;
 use crate::target::{
-    label, ArtifactDecl, CaseDecl, HarnessDecl, PackageId, PropMap, Target, TargetDecl, TargetId,
+    label, ArtifactDecl, CaseDecl, GenerateDecl, HarnessDecl, PackageId, PropMap, Target,
+    TargetDecl, TargetId,
 };
 use dowel_eval::schema::{self, Block, TableKind};
 use dowel_eval::{Data, Document, Ns, Site, Value};
@@ -52,6 +53,9 @@ const CASES_BLOCK: &str = schema::CASES;
 
 /// `[test.<name>.harness]` の見出し。実行ファイル自身に事例を列挙させる宣言
 const HARNESS_BLOCK: &str = schema::HARNESS;
+
+/// `[<kind>.<name>.generate]` の見出し。ソースを作る規則（ADR-0054）
+const GENERATE_BLOCK: &str = schema::GENERATE;
 
 /// 読み込みの時点で分かっている機能フラグの選択。
 ///
@@ -1042,10 +1046,13 @@ impl TargetSink<'_> {
             let is_inspect = table.path.len() == 3 && table.path[2] == INSPECT_BLOCK;
             let is_cases = table.path.len() == 3 && table.path[2] == CASES_BLOCK;
             let is_harness = table.path.len() == 3 && table.path[2] == HARNESS_BLOCK;
+            let is_generate = table.path.len() == 3 && table.path[2] == GENERATE_BLOCK;
 
             let block = match table.path.len() {
                 2 => Block::Root,
-                3 if is_artifacts || is_inspect || is_cases || is_harness => Block::Root,
+                3 if is_artifacts || is_inspect || is_cases || is_harness || is_generate => {
+                    Block::Root
+                }
                 3 => match Block::parse(&table.path[2]) {
                     Some(b) => b,
                     None => {
@@ -1056,7 +1063,7 @@ impl TargetSink<'_> {
                         .at(
                             doc.file,
                             table.site.span,
-                            "only `public`, `private`, `artifacts`, `inspect`, `cases`, or `harness`",
+                            "only `public`, `private`, `artifacts`, `inspect`, `cases`, `harness`, or `generate`",
                         )
                         .note("propagating and non-propagating properties are separated syntactically (docs/10-manifest.md)");
                         if let (Some(c), Some(&span)) = (
@@ -1069,6 +1076,7 @@ impl TargetSink<'_> {
                                     INSPECT_BLOCK,
                                     CASES_BLOCK,
                                     HARNESS_BLOCK,
+                                    GENERATE_BLOCK,
                                 ],
                             ),
                             table.path_spans.get(2),
@@ -1094,7 +1102,10 @@ impl TargetSink<'_> {
                             // 一段深く書いてしまう先は、項目を持つブロックである。
                             // 「深すぎる」とだけ言われても、何が正しい形なのかは
                             // 読み取れない（issue #98）。
-                            Some(CASES_BLOCK) | Some(ARTIFACTS_BLOCK) | Some(INSPECT_BLOCK) => {
+                            Some(CASES_BLOCK)
+                            | Some(ARTIFACTS_BLOCK)
+                            | Some(INSPECT_BLOCK)
+                            | Some(GENERATE_BLOCK) => {
                                 format!(
                                     "the items of `{}` are inline tables inside it, not tables of their own: `<name> = {{ ... }}`",
                                     table.path[2]
@@ -1160,6 +1171,10 @@ impl TargetSink<'_> {
             }
             if is_artifacts || is_inspect {
                 self.declare_tool_runs(tid, table, is_artifacts);
+                continue;
+            }
+            if is_generate {
+                self.declare_generate(tid, table);
                 continue;
             }
 
@@ -1476,6 +1491,104 @@ impl TargetSink<'_> {
             return;
         }
         self.targets[tid.0].harness = Some(HarnessDecl { fields, site: table.site });
+    }
+
+    /// `[<kind>.<name>.generate]` を取り込む
+    /// （[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
+    ///
+    /// 各項目はインラインテーブルであり、鍵は出力の落ちる場所の名前になる。
+    /// `command` はビルド機械の上で走る program の名前であり、道具の名前
+    /// （`dowel_eval::config::TOOLS`）ではない——`bison` を交差ビルドの
+    /// ツールチェインから採ると、組んだ機械で動かないものを走らせることになる。
+    fn declare_generate(&mut self, tid: TargetId, table: &dowel_eval::Table) {
+        let known = schema::generate_props();
+        for entry in &table.entries {
+            let name = entry.key.join(".");
+            let Data::Map(fields) = &entry.value.data else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "type-mismatch",
+                        format!(
+                            "`{name}` is an inline table but {} was given",
+                            entry.value.ty.display()
+                        ),
+                    )
+                    .at(entry.site.file, entry.site.span, "expected `{ command = \"...\", ... }`")
+                    .note(
+                        "write for example `parser = { command = \"bison\", \
+                         inputs = [\"src/parser.y\"], outputs = [\"parser.c\"] }`",
+                    ),
+                );
+                continue;
+            };
+
+            let names: Vec<&str> = known.iter().map(|p| p.name).collect();
+            for (prop, value) in fields {
+                match known.iter().find(|p| p.name == prop) {
+                    Some(def) if !def.ty.accepts(&value.ty) => self.diagnostics.push(
+                        Diagnostic::error(
+                            "type-mismatch",
+                            format!(
+                                "`{prop}` is {} but {} was given",
+                                def.ty.display(),
+                                value.ty.display()
+                            ),
+                        )
+                        .at(
+                            entry.site.file,
+                            entry.site.span,
+                            format!("this value has type {}", value.ty.display()),
+                        ),
+                    ),
+                    Some(_) => {}
+                    None => {
+                        let mut d = Diagnostic::error(
+                            "unknown-property",
+                            format!("unknown property `{prop}`"),
+                        )
+                        .at(entry.site.file, entry.site.span, "a generation has no such property")
+                        .note(format!("a generation accepts: {}", names.join(", ")));
+                        if let Some(c) = closest(prop, names.iter().copied()) {
+                            d = d.note(format!("did you mean `{c}`?"));
+                        }
+                        self.diagnostics.push(d);
+                    }
+                }
+            }
+
+            let Some(command) = fields.get("command").and_then(|v| v.as_str()) else {
+                self.diagnostics.push(
+                    Diagnostic::error("missing-field", format!("`{name}` has no `command`"))
+                        .at(entry.site.file, entry.site.span, "write `command = \"...\"`")
+                        .note("the program runs on the build machine, so name it directly"),
+                );
+                continue;
+            };
+
+            // 書くものが宣言されていない生成は、走らせても計画に届かない。
+            // 「走ったのに何も増えない」を組む前に述べる（ADR-0051 と同じ
+            // 立場——何も書かない道具は失敗である）。
+            let outputs = fields.get("outputs").cloned();
+            if outputs.is_none() {
+                self.diagnostics.push(
+                    Diagnostic::error("missing-field", format!("`{name}` has no `outputs`"))
+                        .at(entry.site.file, entry.site.span, "write `outputs = [\"...\"]`")
+                        .note("a generation that declares no output adds nothing to the target")
+                        .note("name the files it writes, relative to the directory it runs in"),
+                );
+                continue;
+            }
+
+            self.targets[tid.0].generated.push(GenerateDecl {
+                name,
+                command: command.to_string(),
+                args: fields.get("args").cloned(),
+                inputs: fields.get("inputs").cloned(),
+                outputs,
+                public: fields.get("public").and_then(|v| v.as_bool()).unwrap_or(false),
+                site: entry.site,
+            });
+        }
     }
 
     /// `[<kind>.<name>.artifacts]` / `[<kind>.<name>.inspect]` を取り込む

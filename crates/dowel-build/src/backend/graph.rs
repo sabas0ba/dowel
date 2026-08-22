@@ -84,6 +84,10 @@ pub fn render(g: &BuildGraph) -> String {
         if let Some(d) = &s.depfile {
             w.field_str("depfile", &d.display().to_string());
         }
+        // 作業ディレクトリも同じく、在るときだけ書く（ADR-0054）。
+        if let Some(d) = &s.cwd {
+            w.field_str("cwd", &d.display().to_string());
+        }
         w.key("deps").begin_array();
         for d in &s.deps {
             w.u64(*d as u64);
@@ -142,6 +146,7 @@ pub fn parse(text: &str) -> Result<BuildGraph, String> {
                 .iter()
                 .map(|v| v.as_i64().map(|n| n as usize).ok_or("a dependency is not a number"))
                 .collect::<Result<_, _>>()?,
+            cwd: s.get("cwd").and_then(|v| v.as_str()).map(PathBuf::from),
         });
     }
 
@@ -204,6 +209,7 @@ mod tests {
                     outputs: vec![PathBuf::from("/b/a.o")],
                     depfile: Some(PathBuf::from("/b/a.o.d")),
                     deps: vec![],
+                    cwd: None,
                 },
                 Step {
                     id: 1,
@@ -216,6 +222,22 @@ mod tests {
                     outputs: vec![PathBuf::from("/b/app")],
                     depfile: None,
                     deps: vec![0],
+                    cwd: None,
+                },
+                // 生成は作業ディレクトリを持つ（ADR-0054）。それが往復で
+                // 落ちると、読み直した文書は同じ命令を別の場所で走らせる。
+                Step {
+                    id: 2,
+                    kind: ActionKind::Generate,
+                    target: "app:app".into(),
+                    description: "GEN parser.c".into(),
+                    program: "bison".into(),
+                    arguments: vec!["-o".into(), "parser.c".into(), "/s/parser.y".into()],
+                    inputs: vec![PathBuf::from("/s/parser.y")],
+                    outputs: vec![PathBuf::from("/b/generated/app/app/parser/parser.c")],
+                    depfile: None,
+                    deps: vec![],
+                    cwd: Some(PathBuf::from("/b/generated/app/app/parser")),
                 },
             ],
             artifacts: vec![("app:app".into(), PathBuf::from("/b/app"))],
@@ -243,6 +265,12 @@ mod tests {
         let text = render(&sample());
         // 鍵として数える。`deps` の値も同じ綴りを持つ。
         assert_eq!(text.matches("\"depfile\":").count(), 1, "{text}");
+    }
+
+    #[test]
+    fn a_step_without_a_working_directory_has_no_cwd_field() {
+        let text = render(&sample());
+        assert_eq!(text.matches("\"cwd\":").count(), 1, "{text}");
     }
 
     #[test]

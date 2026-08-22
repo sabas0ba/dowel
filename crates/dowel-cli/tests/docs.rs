@@ -350,6 +350,7 @@ fn every_property_the_schema_accepts_is_in_the_reference() {
         schema::INSPECT => "`[<kind>.<name>.inspect]`",
         schema::CASES => "`[test.<name>.cases]`",
         schema::HARNESS => "`[test.<name>.harness]`",
+        schema::GENERATE => "`[<kind>.<name>.generate]`",
         other => panic!("`{other}` has no section in docs/12-build-reference.md"),
     };
     let mut sections: Vec<(String, Vec<schema::PropDef>)> = vec![

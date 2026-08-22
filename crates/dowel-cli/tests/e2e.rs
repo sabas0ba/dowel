@@ -2315,6 +2315,136 @@ fn a_bin_target_can_derive_artifacts_with_objcopy() {
     );
 }
 
+/// `[<kind>.<name>.generate]` — ソースを作る
+/// （[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
+///
+/// 生成器は `sh` の小さな台本にする。bison も protoc も持ち込まずに、
+/// 「作られたものが翻訳へ渡る」経路そのものを通せる。
+#[test]
+fn a_target_compiles_the_sources_it_generates() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    let p = Project::new("generate-sources");
+    p.write("dowel.toml", "[package]\nname = \"calc\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.calc]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.calc.generate]\n\
+         table = { command = \"sh\", args = [file(\"gen.sh\")], \
+         inputs = [file(\"src/table.txt\")], outputs = [\"table.c\", \"table.h\"] }\n",
+    );
+    // 作業ディレクトリは出力の置き場所である。台本は相対名で書けば足りる。
+    p.write(
+        "gen.sh",
+        "set -eu\nn=$(cat \"$1\")\n\
+         printf 'int table_size(void);\\n' > table.h\n\
+         printf '#include \"table.h\"\\nint table_size(void) { return %s; }\\n' \"$n\" > table.c\n",
+    );
+    p.write("src/table.txt", "7\n");
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"table.h\"\n\
+         int main(void) { printf(\"n=%d\\n\", table_size()); return 0; }\n",
+    );
+
+    let r = p.run(".", &["build"]);
+    r.success();
+    let dir = build_dir(&p.path("."), "debug");
+    assert!(dir.join("generated/calc/calc/table/table.c").exists(), "{r}");
+    assert_eq!(run_artifact(&dir.join("bin/calc")), "n=7\n");
+
+    // 読むものが変われば作り直し、それを読んだ翻訳も走り直す。
+    p.write("src/table.txt", "9\n");
+    p.run(".", &["build"]).success();
+    assert_eq!(run_artifact(&dir.join("bin/calc")), "n=9\n");
+
+    // 変わらなければ何もしない。生成の出力を毎回作り直すと、それを入力に
+    // 持つ翻訳も毎回走る——増分ビルドがターゲットごと成り立たなくなる。
+    let r = p.run(".", &["build", "--backend=direct", "--log-level=debug"]);
+    r.success();
+    r.stderr_contains("ran 0 steps");
+}
+
+/// 生成された頭部は、それを読みうる翻訳より先に作られなければならない。
+///
+/// ninja が読むのは入力と出力の関係であり、計画の持つ辺ではない。頭部を
+/// 翻訳の入力に置かなければ、順序は言われていないのと同じである（ADR-0054）。
+#[test]
+fn a_generated_header_is_made_before_the_compiles_that_may_read_it() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    let p = Project::new("generate-header-only");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.generate]\n\
+         limits = { command = \"sh\", args = [file(\"gen.sh\")], \
+         inputs = [file(\"src/limit.txt\")], outputs = [\"limits.h\"] }\n",
+    );
+    p.write("gen.sh", "set -eu\nprintf '#define LIMIT %s\\n' \"$(cat \"$1\")\" > limits.h\n");
+    p.write("src/limit.txt", "5\n");
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"limits.h\"\n\
+         int main(void) { printf(\"%d\\n\", LIMIT); return 0; }\n",
+    );
+
+    p.run(".", &["build"]).success();
+    let dir = build_dir(&p.path("."), "debug");
+    assert_eq!(run_artifact(&dir.join("bin/app")), "5\n");
+}
+
+/// 出力の場所が依存側へ届くのは `public` を宣言したときだけである。
+/// 届き方は `public.includes` と同じ（ADR-0054）。
+#[test]
+fn a_generated_directory_reaches_dependents_only_when_it_is_public() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    let p = Project::new("generate-public");
+    p.write(
+        "app/dowel.toml",
+        "[package]\nname = \"app\"\nversion = \"0\"\n\n\
+         [[dependencies]]\nname = \"lib\"\npath = \"../lib\"\n",
+    );
+    p.write(
+        "app/dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.private]\ndeps = [dep(\"lib\")]\n",
+    );
+    p.write(
+        "app/src/main.c",
+        "#include <stdio.h>\n#include \"limits.h\"\nint lib_limit(void);\n\
+         int main(void) { printf(\"%d %d\\n\", LIMIT, lib_limit()); return 0; }\n",
+    );
+    p.write("lib/dowel.toml", "[package]\nname = \"lib\"\nversion = \"0\"\n");
+    p.write("lib/gen.sh", "set -eu\nprintf '#define LIMIT %s\\n' \"$(cat \"$1\")\" > limits.h\n");
+    p.write("lib/src/limit.txt", "5\n");
+    p.write("lib/src/lib.c", "#include \"limits.h\"\nint lib_limit(void) { return LIMIT; }\n");
+
+    let declaration = |public: &str| {
+        format!(
+            "[lib.lib]\nsources = glob(\"src/*.c\")\n\n\
+             [lib.lib.generate]\n\
+             limits = {{ command = \"sh\", args = [file(\"gen.sh\")], \
+             inputs = [file(\"src/limit.txt\")], outputs = [\"limits.h\"]{public} }}\n"
+        )
+    };
+
+    p.write("lib/dowel.build", &declaration(""));
+    // 依存側は「そんな頭部は無い」で落ちる。届いていないことの証拠である。
+    p.run("app", &["build"]).failure();
+
+    p.write("lib/dowel.build", &declaration(", public = true"));
+    p.run("app", &["build"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("app"), "debug").join("bin/app")), "5 5\n");
+}
+
 #[test]
 fn the_transform_tool_is_selected_by_the_toolchain_declaration() {
     // 変換の道具もトリプルごとに選べる。宣言した実体が呼ばれることを、

@@ -187,6 +187,7 @@ mod tests {
             outputs: vec![PathBuf::from(out)],
             depfile: None,
             deps: vec![],
+            cwd: None,
         }
     }
 

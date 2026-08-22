@@ -667,6 +667,31 @@ changes, only the speed.
   - A source with no extension is refused too, and there is no `-x c` escape
     hatch. Nothing checks that an artifact is *correct*, only that it is
     there
+- **A target may declare how its sources are made**
+  ([ADR-0054](adr/0054-generated-sources.md)). A `generate` block names a
+  program on the build machine, what it reads, and what it writes; the
+  outputs that are sources are compiled into the declaring target and the
+  output directory joins its include path. A parser from `bison` or a table
+  from a script is inside the build graph instead of being run by hand
+  beforehand.
+  - Each generation gets `<build>/generated/<package>/<target>/<name>/` and
+    **runs in it**, so `outputs` are plain relative names, `-o parser.c`
+    means what it says, and two generations cannot collide. An output
+    naming a path outside that directory is `invalid-output`
+  - `command` is a command, not a toolchain tool: it runs on the machine
+    doing the building, which in a cross build is not the target. Absent
+    from `PATH` it is `missing-generator`, reported when the plan is made
+  - Every generated output is an input of every compile that can see it.
+    ninja reads file relations and not the plan's edges, so a generated
+    header that no compile lists as an input is not ordered at all — the
+    compile ran first and the generation never ran
+  - `public = true` propagates the output directory to dependents, the way
+    `public.includes` propagates. An empty `outputs` in the current
+    configuration is `generates-nothing`
+  - The generator is not sandboxed, and a generation is re-run when its
+    `inputs` change, not when the program itself changes. `make` still takes
+    one output per step, so a multi-output generation needs ninja or the
+    direct backend
 - **A `lib` may name a library that already exists**
   ([ADR-0049](adr/0049-prebuilt-libraries.md)). `prebuilt` takes the place
   of `sources`, so a Rust `staticlib`, a Zig `build-lib`, a Go `c-archive`,
@@ -1265,19 +1290,19 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (746 tests):
+Current breakdown (750 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 364 |
+| `unit-*` | per-crate unit tests | 365 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 282 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 285 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
-| `diagnostics` | diagnostics reaching the CLI (81 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
+| `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
 | `up` | `dowelup` resolution, acquisition, and switching against an upstream fixture | 10 |
 | `docs` | link resolution, index consistency, and reference completeness | 8 |
