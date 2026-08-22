@@ -777,6 +777,37 @@ const CASES: &[Case] = &[
         )],
         args: CHECK,
     },
+    // --- ソースの生成（ADR-0054）------------------------------------------
+    Case {
+        code: "missing-generator",
+        why: "the program a generation names is not on the build machine's PATH",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.generate]\n\
+             table = { command = \"no-such-generator\", outputs = [\"table.c\"] }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "invalid-output",
+        why: "an output is named outside the directory the generation writes to",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.generate]\n\
+             table = { command = \"true\", outputs = [\"../table.c\"] }\n",
+        )],
+        args: CHECK,
+    },
+    Case {
+        code: "generates-nothing",
+        why: "`outputs` is written but holds nothing in this configuration (ADR-0054)",
+        files: &[(
+            "app/dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n[bin.app.generate]\n\
+             table = { command = \"true\", outputs = [] }\n",
+        )],
+        args: CHECK,
+    },
 ];
 
 /// 事例を組み立てて起動し、出た診断コードを集める。

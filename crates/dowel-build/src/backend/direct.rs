@@ -61,7 +61,9 @@ fn run_step(g: &BuildGraph, step: &Step) -> Result<(), Failure> {
 
     let mut cmd = Command::new(&step.program);
     cmd.args(&step.arguments);
-    cmd.current_dir(&g.build_dir);
+    // 生成は自分の出力の置き場所で走る（ADR-0054）。上で親を作ってあるので
+    // 在ることは保証されている。
+    cmd.current_dir(step.cwd.as_deref().unwrap_or(&g.build_dir));
     let out = cmd.output().map_err(|e| {
         Failure::of(
             &step.description,

@@ -235,6 +235,7 @@ pub const ARTIFACTS: &str = "artifacts";
 pub const INSPECT: &str = "inspect";
 pub const CASES: &str = "cases";
 pub const HARNESS: &str = "harness";
+pub const GENERATE: &str = "generate";
 
 pub const NESTED_TABLES: &[NestedTable] = &[
     NestedTable {
@@ -260,6 +261,14 @@ pub const NESTED_TABLES: &[NestedTable] = &[
         doc: "several tests from one binary, each a separate launch of it (ADR-0022)",
         item: "the name of the case; `dowel test <target>/<case>` selects it",
         props: case_props,
+    },
+    NestedTable {
+        word: GENERATE,
+        dump_key: "generate_properties",
+        keyed: true,
+        doc: "files this target's sources are made from by running a program (ADR-0054)",
+        item: "a name for the generation; it names the directory the outputs land in",
+        props: generate_props,
     },
     NestedTable {
         word: HARNESS,
@@ -399,6 +408,65 @@ pub fn runner_props() -> Vec<PropDef> {
             ty: Type::Str,
             merge: Merge::Replace,
             doc: "where the debugger attaches, such as `localhost:1234`. dowel does not parse the runner's flags, so this cannot be derived from `debug_args`",
+            domain: None,
+        },
+    ]
+}
+
+/// `[<kind>.<name>.generate]` の1項目に置けるプロパティ
+/// （[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
+///
+/// ```toml
+/// [lib.parser.generate]
+/// grammar = { command = "bison", args = ["-d", "-o", "parser.c"],
+///             inputs = [file("src/parser.y")], outputs = ["parser.c", "parser.h"] }
+/// ```
+///
+/// 実行される列は `<command> <args...> <inputs...>` である。作業ディレクトリは
+/// 出力の置き場であり、`outputs` はそこからの相対の名前である——生成器ごとに
+/// 出力の綴り方が違う以上、位置で渡す規則（[ADR-0008]）だけでは足りない。
+///
+/// [ADR-0008]: ../../../docs/adr/0008-runner-transfer.md
+pub fn generate_props() -> Vec<PropDef> {
+    vec![
+        PropDef {
+            name: "command",
+            ty: Type::Str,
+            merge: Merge::Replace,
+            doc: "the program to run. it runs on the build machine, so it is a command, \
+                  not one of the toolchain's tools",
+            domain: None,
+        },
+        PropDef {
+            name: "args",
+            ty: list(Type::Word),
+            merge: Merge::Append,
+            doc:
+                "arguments placed before the inputs. `dir()` and `file()` expand to absolute paths",
+            domain: None,
+        },
+        PropDef {
+            name: "inputs",
+            ty: list(Type::Path),
+            merge: Merge::Append,
+            doc:
+                "what the generation reads. appended to the command line, and what freshness reads",
+            domain: None,
+        },
+        PropDef {
+            name: "outputs",
+            ty: list(Type::Str),
+            merge: Merge::Append,
+            doc: "what it writes, named relative to the output directory it runs in. \
+                  the ones that are sources are compiled into this target",
+            domain: None,
+        },
+        PropDef {
+            name: "public",
+            ty: Type::Bool,
+            merge: Merge::Replace,
+            doc: "put the output directory on the include path of this target's dependents too, \
+                  the way `public.includes` propagates. absent means this target only",
             domain: None,
         },
     ]

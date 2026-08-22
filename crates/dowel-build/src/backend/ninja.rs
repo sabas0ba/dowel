@@ -84,6 +84,10 @@ pub fn generate(g: &BuildGraph) -> String {
     out.push_str("  command = $cmd\n");
     out.push_str("  description = $desc\n\n");
 
+    out.push_str("rule generate\n");
+    out.push_str("  command = $cmd\n");
+    out.push_str("  description = $desc\n\n");
+
     for step in &g.steps {
         let outputs: Vec<String> =
             step.outputs.iter().map(|p| path(&p.display().to_string())).collect();

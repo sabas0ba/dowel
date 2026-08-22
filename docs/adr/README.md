@@ -60,3 +60,4 @@ was originally written in.
 | [0051](0051-source-language-is-closed.md) | A source's language is a closed question, and a tool that writes nothing has failed | Accepted |
 | [0052](0052-transfer-record-drops-on-failure.md) | A run that did not pass drops the transfer record, not only a run that could not start | Accepted |
 | [0053](0053-unverified-import.md) | An imported target says so in the manifest, and only a person clears it | Accepted |
+| [0054](0054-generated-sources.md) | A source may be generated, and the generator runs where its output lands | Accepted |

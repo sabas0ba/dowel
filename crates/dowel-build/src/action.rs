@@ -17,11 +17,19 @@ pub enum ActionKind {
     Link,
     /// 成果物から別の成果物を作る（`artifacts` ブロック、issue #60）
     Transform,
+    /// ソースを作る（`generate` ブロック、
+    /// [ADR-0054](../../../docs/adr/0054-generated-sources.md)）
+    Generate,
 }
 
 /// 種別の全て。`name` と `parse` が食い違わないことをこの表で確かめる。
-pub const ALL_KINDS: &[ActionKind] =
-    &[ActionKind::Compile, ActionKind::Archive, ActionKind::Link, ActionKind::Transform];
+pub const ALL_KINDS: &[ActionKind] = &[
+    ActionKind::Compile,
+    ActionKind::Archive,
+    ActionKind::Link,
+    ActionKind::Transform,
+    ActionKind::Generate,
+];
 
 impl ActionKind {
     pub fn name(self) -> &'static str {
@@ -30,6 +38,7 @@ impl ActionKind {
             ActionKind::Archive => "ar",
             ActionKind::Link => "link",
             ActionKind::Transform => "transform",
+            ActionKind::Generate => "generate",
         }
     }
 
@@ -54,6 +63,11 @@ pub struct Action {
     pub description: String,
     /// このアクションより前に完了していなければならないアクション
     pub deps: Vec<ActionId>,
+    /// 起動するときの作業ディレクトリ。`None` はビルドディレクトリである。
+    ///
+    /// 生成だけがこれを使う（ADR-0054）。出力の置き場所を作業ディレクトリに
+    /// することで、宣言の側は絶対パスを組み立てずに済む
+    pub cwd: Option<PathBuf>,
 }
 
 impl Action {
@@ -66,7 +80,20 @@ impl Action {
     }
 
     pub fn command_line(&self) -> String {
-        self.command().iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ")
+        command_line(&self.command(), self.cwd.as_deref())
+    }
+}
+
+/// シェルへ渡す1行。作業ディレクトリが要るなら `cd` を前に置く。
+///
+/// バックエンド（ninja / make）はコマンドをシェルに渡すだけで、作業
+/// ディレクトリを指定する術を持たない。行の側で言う——`Step::command_line`
+/// と綴りを1つに保つため、ここに置く。
+pub fn command_line(command: &[String], cwd: Option<&std::path::Path>) -> String {
+    let line = command.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
+    match cwd {
+        Some(dir) => format!("cd {} && {line}", shell_quote(&dir.display().to_string())),
+        None => line,
     }
 }
 

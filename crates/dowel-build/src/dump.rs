@@ -41,6 +41,7 @@ pub fn dot(sess: &Session, plan: &Plan) -> String {
             ActionKind::Archive => "folder",
             ActionKind::Link => "component",
             ActionKind::Transform => "note",
+            ActionKind::Generate => "parallelogram",
         };
         out.push_str(&format!(
             "  a{} [shape={shape},label=\"{}\\n{}\"];\n",

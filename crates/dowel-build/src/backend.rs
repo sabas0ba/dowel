@@ -14,7 +14,7 @@ pub mod graph;
 pub mod make;
 pub mod ninja;
 
-use crate::action::{shell_quote, ActionKind};
+use crate::action::ActionKind;
 use crate::exec::{CommandLog, Failure};
 use crate::plan::Plan;
 use dowel_model::Session;
@@ -58,6 +58,8 @@ pub struct Step {
     pub depfile: Option<PathBuf>,
     /// 先に終わっていなければならないステップの `id`
     pub deps: Vec<usize>,
+    /// 起動するときの作業ディレクトリ。`None` はビルドディレクトリ（ADR-0054）
+    pub cwd: Option<PathBuf>,
 }
 
 impl Step {
@@ -69,7 +71,7 @@ impl Step {
     }
 
     pub fn command_line(&self) -> String {
-        self.command().iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ")
+        crate::action::command_line(&self.command(), self.cwd.as_deref())
     }
 }
 
@@ -90,6 +92,7 @@ impl BuildGraph {
                 outputs: a.outputs.clone(),
                 depfile: a.depfile.clone(),
                 deps: a.deps.iter().map(|d| d.0).collect(),
+                cwd: a.cwd.clone(),
             })
             .collect();
         BuildGraph {
@@ -253,6 +256,7 @@ mod tests {
             outputs: vec![PathBuf::from(format!("{id}.o"))],
             depfile: None,
             deps,
+            cwd: None,
         }
     }
 
