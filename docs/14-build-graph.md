@@ -25,7 +25,7 @@ document.
 ```json
 {
   "format": "dowel-build-graph",
-  "version": 1,
+  "version": 2,
   "build_dir": "/home/me/p/.dowel/build/x86_64-unknown-linux-gnu-debug",
   "steps": [
     {
@@ -53,18 +53,20 @@ document.
     }
   ],
   "artifacts": [{ "target": "app:app", "path": "…/bin/app" }],
-  "default_outputs": ["…/bin/app"]
+  "default_outputs": ["…/bin/app"],
+  "tool_stamps": [{ "path": "…/tools/cc-3f9a1c04.stamp", "identity": "/usr/bin/cc:1023032:1766091591" }]
 }
 ```
 
 | Key | Type | Meaning |
 |---|---|---|
 | `format` | string | always `dowel-build-graph`. A reader that does not find this must refuse the file |
-| `version` | integer | the format version. Bumped on any change a version-1 reader would misread. Refuse an unknown version rather than guessing |
+| `version` | integer | the format version. Bumped on any change a reader of the previous version would misread. Refuse an unknown version rather than guessing. Version 2 added `cwd` and `tool_stamps`, both of which change what running the document does |
 | `build_dir` | string | the working directory every step is run in. Also where a backend puts its own files |
 | `steps` | array | the process launches, described below |
 | `artifacts` | array | `{"target", "path"}` — the final artifact of each target that is in this graph |
 | `default_outputs` | array of strings | what to build when nothing is named. Not the same as "every output": a derived file is here even though nothing consumes it |
+| `tool_stamps` | array | `{"path", "identity"}` — files that record which program each step launches ([ADR-0055](adr/0055-tool-identity-in-freshness.md)). They appear in the steps' `inputs`, and **a reader has to write them before running anything**; see below. Empty when the graph has no steps |
 
 ## A step
 
@@ -73,7 +75,7 @@ One step is one process launch.
 | Key | Type | Meaning |
 |---|---|---|
 | `id` | integer | identifies the step within this document. `deps` refers to it. Not stable across runs |
-| `kind` | string | `cc` / `ar` / `link` / `transform`. Informational — the command is complete on its own — except that `ar` requires the removal below |
+| `kind` | string | `cc` / `ar` / `link` / `transform` / `generate`. Informational — the command is complete on its own — except that `ar` requires the removal below |
 | `target` | string | the target this step belongs to, in `<package>:<target>` form. The same string diagnostics use |
 | `description` | string | one line for progress output |
 | `program` | string | the command to launch. A bare name is looked up on `PATH`; a name containing a separator is a path |
@@ -81,12 +83,19 @@ One step is one process launch.
 | `inputs` | array of strings | the files this step reads, as absolute paths. Complete except for headers, which arrive via `depfile` |
 | `outputs` | array of strings | the files this step writes, as absolute paths. Their directories may not exist yet — create them |
 | `depfile` | string | absent when the step declares no header dependencies. Present for `cc`: a **make-format** file the compiler writes, listing the headers actually read. It is written by the step itself, so it does not exist before the first run |
+| `cwd` | string | absent for almost every step, which runs in `build_dir`. Present for `generate`, which runs in the directory its outputs land in ([ADR-0054](adr/0054-generated-sources.md)) so that they can be named relatively |
 | `deps` | array of integers | steps that must complete first. Usually implied by `inputs`, but not always — a step may depend on one whose output it does not read |
 
 ## What a reader must do
 
-- **Run each step in `build_dir`.** Some tools resolve relative paths in
-  their own output against the working directory
+- **Run each step in `build_dir`, or in its `cwd` when it has one.** Some
+  tools resolve relative paths in their own output against the working
+  directory, and a `generate` step's outputs are named that way on purpose
+- **Write `tool_stamps` before running any step.** Each entry's file must
+  hold exactly its `identity` string. Write one **only when its contents
+  differ** — the file's timestamp is what tells the steps their tool
+  changed, so rewriting an unchanged stamp rebuilds everything, every time.
+  A step whose stamp is missing has no rule to make it
 - **Create output directories.** Steps do not create their own
 - **Delete an `ar` output before running it.** `ar` appends; rebuilding into
   a stale archive leaves objects that are no longer part of the target

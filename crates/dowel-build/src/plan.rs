@@ -56,6 +56,10 @@ pub struct Plan {
     /// （[ADR-0039](../../../docs/adr/0039-exports-are-checked.md)）。
     /// ビルドの後、出来上がったものに聞いて突き合わせる
     pub declared_exports: Vec<DeclaredExports>,
+    /// 道具の刻印と、その中身
+    /// （[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
+    /// 走らせる前に書かれ、走らせるアクションの入力になる
+    pub tool_stamps: Vec<(PathBuf, String)>,
 }
 
 impl Plan {
@@ -289,6 +293,7 @@ pub fn plan(
         deps: toolstyle::deps(cfg),
         shared_libraries: Vec::new(),
         declared_exports: Vec::new(),
+        tool_stamps: Vec::new(),
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
@@ -979,6 +984,8 @@ pub fn plan(
     // 溜めた分をここで出す。宣言1つに1件である（issue #158）。
     diags.extend(abi_against_build.into_iter().map(AbiAgainstBuild::into_diagnostic));
 
+    stamp_tools(&mut plan);
+
     log_debug!(
         "{} actions ({} compile, {} archive, {} link, {} transform, {} generate)",
         plan.actions.len(),
@@ -994,6 +1001,51 @@ pub fn plan(
 
 fn count(plan: &Plan, kind: ActionKind) -> usize {
     plan.actions.iter().filter(|a| a.kind == kind).count()
+}
+
+/// 走らせる program の同一性を、それを走らせるアクションの入力にする
+/// （[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
+///
+/// 同一性は命令行に現れない。`cc` は入れ替わっても `cc` のままであり、
+/// ninja も make も直接実行も「入力は変わっていない」と読む——古い翻訳器が
+/// 作った目的ファイルが最新のまま残る。
+///
+/// 辺ではなく**ファイル**にするのは、ninja が読むのが入力と出力の関係だから
+/// である（[ADR-0054](../../../docs/adr/0054-generated-sources.md) で測った
+/// のと同じ理由）。刻印の中身が変わったときだけ書き直され、そのとき初めて
+/// mtime が動く。
+///
+/// 計画の全アクションを1箇所で通す。作った場所ごとに足すと、後から増えた
+/// 種類が抜ける——それは「入れ替えても組み直らない」に戻ることである。
+fn stamp_tools(plan: &mut Plan) {
+    let mut stamps: BTreeMap<String, (PathBuf, String)> = BTreeMap::new();
+    for action in &mut plan.actions {
+        let (path, _) = stamps.entry(action.program.clone()).or_insert_with(|| {
+            let identity = match crate::exec::resolve(&action.program) {
+                Some(p) => dowel_store::facts::identity(&p),
+                // 在らないものは在らないと刻む。診断は既に出ているが、
+                // 後で現れたときに組み直らないのでは同じ穴である。
+                None => format!("{}:absent", action.program),
+            };
+            (stamp_path(&plan.build_dir, &action.program), identity)
+        });
+        action.inputs.push(path.clone());
+    }
+    plan.tool_stamps = stamps.into_values().collect();
+}
+
+/// 1つの program の刻印の道。
+///
+/// 名前は読めるものにし、綴りの潰し合いは要約が分ける。`cc` と `/usr/bin/cc`
+/// は別の宣言であり、同じ実体を指していても別の刻印を持つ——同じ中身なので
+/// 組み直しは起きない。
+fn stamp_path(build_dir: &Path, program: &str) -> PathBuf {
+    let name = Path::new(program).file_name().map(|n| n.to_string_lossy().to_string());
+    let name = name.unwrap_or_else(|| "tool".to_string());
+    let readable: String =
+        name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let digest = &dowel_support::sha256::hex_of(program.as_bytes())[..8];
+    build_dir.join("tools").join(format!("{readable}-{digest}.stamp"))
 }
 
 /// 構成から来る既定のフラグ。マニフェストの `flags` より前に置き、
