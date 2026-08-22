@@ -626,7 +626,13 @@ changes, only the speed.
     `-o out in` for `nasm`, `/c /Fo<out> in` for `ml64`
   - A `.asm` source with nothing declared is `missing-assembler`, naming the
     file and the declaration to write. Handed to the driver it comes back as
-    "file format not recognized" from the *linker*, two stages later
+    "file format not recognized" from the *linker*, two stages later. The
+    check sits in `collect_sources` beside `unknown-source-language`: the two
+    answer the same question — this source cannot be built here — and only
+    there is the site of the element still in hand. It used to underline the
+    target's heading while saying "declared as a source here", which in a
+    target with thirty sources meant hunting through the message text and no
+    way to jump to the line from an editor (issue #172)
   - **Executable stack is refused at the link instead.** dowel cannot ask a
     tool whose spelling it does not know for `-Wa,--noexecstack`, but it
     knows the linker's: a link closure containing objects from a declared
@@ -1259,7 +1265,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (745 tests):
+Current breakdown (746 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1268,7 +1274,7 @@ Current breakdown (745 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 281 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 282 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (81 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
