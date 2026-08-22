@@ -7527,6 +7527,51 @@ fn assembly_the_c_driver_cannot_take_says_which_declaration_is_missing() {
 }
 
 #[test]
+fn a_source_that_cannot_be_built_is_underlined_where_it_is_written() {
+    // 「このソースはここでは組めない」に答える診断は2つある——アセンブラが
+    // 無い `.asm`（ADR-0050）と、そもそも言語でない綴り（ADR-0051）。
+    // 対になる以上、指す位置も揃っていなければならない。片方が目標の見出しを
+    // 指していた（issue #172）: 註は「declared as a source here」と言うのに、
+    // そこにソースは書かれていない。30 のソースを持つ目標では、どれが問題か
+    // を本文の文字列から探すことになり、編集器からはその行へ飛べない。
+    let p = Project::new("source-underline");
+    p.write("dowel.toml", "[package]\nname = \"u\"\nversion = \"0\"\n");
+    let sources =
+        "sources = [file(\"src/main.c\"), file(\"src/five.asm\"), file(\"src/note.txt\")]";
+    p.write("dowel.build", &format!("[bin.app]\n{sources}\n"));
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.write("src/five.asm", "\t.text\n");
+    p.write("src/note.txt", "not a source\n");
+
+    let r = p.run(".", &["check", "--message-format=json"]);
+    r.failure();
+    // 期待する列は、その要素が書かれた位置そのものである。診断の側から
+    // 導かず、原文を数えて突き合わせる。
+    let column_of = |needle: &str| sources.find(needle).expect("the fixture changed") + 1;
+    let reported = |code: &str| -> (u64, u64) {
+        let line = r
+            .stdout
+            .lines()
+            .chain(r.stderr.lines())
+            .find(|l| l.contains(&format!("\"code\":\"{code}\"")))
+            .unwrap_or_else(|| panic!("no {code} diagnostic:\n{}\n{}", r.stdout, r.stderr));
+        let json = dowel_support::json::parse(line).expect("the diagnostic is not JSON");
+        let label = &json.get("labels").and_then(|l| l.as_array()).expect("no labels")[0];
+        let at = |k: &str| {
+            label.get(k).and_then(|v| v.as_f64()).unwrap_or_else(|| panic!("no {k}")) as u64
+        };
+        (at("line"), at("column"))
+    };
+
+    // 2行目が `sources = ...` である。どちらも自分の `file(...)` を指す。
+    assert_eq!(reported("missing-assembler"), (2, column_of("file(\"src/five.asm\")") as u64));
+    assert_eq!(
+        reported("unknown-source-language"),
+        (2, column_of("file(\"src/note.txt\")") as u64)
+    );
+}
+
+#[test]
 fn objects_from_a_declared_assembler_do_not_ask_for_an_executable_stack() {
     // 別のアセンブラの出力に `.note.GNU-stack` は無く、dowel はその道具の
     // 綴りで印を頼めない。リンカの綴りは知っているので、そこで断る

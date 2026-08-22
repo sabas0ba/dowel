@@ -463,21 +463,9 @@ pub fn plan(
             // アセンブリは既定では C の driver に渡す。driver が gas を呼ぶ
             // ので、それで足りる（ADR-0048）。`[toolchain] asm` が宣言されて
             // いればそちらへ行く（ADR-0050）。
+            // 宣言された道具が無い `.asm` は `collect_sources` が既に断って
+            // いる（ADR-0050、issue #172）。ここに来るのは組めるものだけである。
             let separate_asm = lang == Language::Asm && cfg.assembler().is_some();
-            if lang == Language::Asm && !separate_asm && is_masm_syntax(src) {
-                // driver に渡しても「ファイルの形式が分からない」と言われる。
-                // 何が要るかは分かっているので、そう述べる。
-                diags.push(
-                    Diagnostic::error(
-                        "missing-assembler",
-                        format!("`{}` needs an assembler", rel_display(&pkg.root, src)),
-                    )
-                    .at(target.site.file, target.site.span, "declared as a source here")
-                    .note("`.asm` is MASM or NASM syntax, which the C compiler driver does not accept")
-                    .note("declare one, as in `[toolchain] asm = \"nasm\"` in dowel.toml"),
-                );
-                continue;
-            }
             let (compiler, tool) = match lang {
                 Language::Cxx => (cfg.tool("cxx"), "CXX"),
                 Language::Asm => (cfg.assembler().unwrap_or_else(|| cfg.tool("c")), "AS"),
@@ -1126,7 +1114,7 @@ fn collect_sources(
                 out.extend(
                     hits.into_iter()
                         .map(|rel| pkg_root.join(rel))
-                        .filter(|p| accept_source(p, site, diags)),
+                        .filter(|p| accept_source(p, site, &cfg, diags)),
                 );
             }
             Data::Path(p) if p.base == PathBase::Package => {
@@ -1151,7 +1139,7 @@ fn collect_sources(
                         )));
                     }
                     Ok(_) => {
-                        if accept_source(&path, site, diags) {
+                        if accept_source(&path, site, &cfg, diags) {
                             out.push(path);
                         }
                     }
@@ -1193,7 +1181,28 @@ fn collect_sources(
 /// ディレクトリの中のパスについての言葉になり、元のファイルの名前も行も
 /// 残らない。現れない出力を宣言したことにもなるので、増分ビルドは収束
 /// しなくなる（issue #157、#112 と同じ形）。
-fn accept_source(path: &Path, site: Option<Site>, diags: &mut Vec<Diagnostic>) -> bool {
+fn accept_source(
+    path: &Path,
+    site: Option<Site>,
+    cfg: &Config,
+    diags: &mut Vec<Diagnostic>,
+) -> bool {
+    // MASM / NASM の綴りは、組み立てる道具が宣言されていなければ組めない
+    // （[ADR-0050](../../../docs/adr/0050-separate-assembler.md)）。判定は
+    // 言語を決める段——ここ——で済む。目標の見出しではなく、書かれた要素を
+    // 指せるのもここだけである（issue #172）。
+    if is_masm_syntax(path) && cfg.assembler().is_none() {
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let mut d = Diagnostic::error("missing-assembler", format!("`{name}` needs an assembler"));
+        if let Some(s) = site {
+            d = d.at(s.file, s.span, "declared as a source here");
+        }
+        diags.push(
+            d.note("`.asm` is MASM or NASM syntax, which the C compiler driver does not accept")
+                .note("declare one, as in `[toolchain] asm = \"nasm\"` in dowel.toml"),
+        );
+        return false;
+    }
     if language(path).is_some() {
         return true;
     }
