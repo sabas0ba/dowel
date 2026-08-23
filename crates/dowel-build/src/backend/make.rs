@@ -198,6 +198,7 @@ mod tests {
             artifacts: vec![],
             deps: Deps::Depfile,
             default_outputs: vec![PathBuf::from("/b/app")],
+            tool_stamps: vec![],
         }
     }
 

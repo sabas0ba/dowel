@@ -25,7 +25,13 @@ pub const FILE: &str = "build-graph.json";
 pub const FORMAT: &str = "dowel-build-graph";
 
 /// 形式の版。互換でない変更のたびに上げる。
-pub const VERSION: u64 = 1;
+///
+/// 2 は作業ディレクトリ（`cwd`、[ADR-0054](../../../../docs/adr/0054-generated-sources.md)）
+/// と道具の刻印（`tool_stamps`、
+/// [ADR-0055](../../../../docs/adr/0055-tool-identity-in-freshness.md)）を
+/// 加えた版である。どちらも版1の読み手が読み飛ばすと**別のビルドになる**
+/// ——生成が違う場所で走り、刻印の無い入力に規則が無いと言われる。
+pub const VERSION: u64 = 2;
 
 impl Backend for Graph {
     fn name(&self) -> &'static str {
@@ -105,6 +111,16 @@ pub fn render(g: &BuildGraph) -> String {
     }
     w.end_array();
     w.field_strs("default_outputs", g.default_outputs.iter().map(|p| p.to_str().unwrap_or("")));
+    // 道具の刻印（ADR-0055）。ステップの入力に現れるので、この文書を受け取った
+    // 側が書けなければグラフは走らない。
+    w.key("tool_stamps").begin_array();
+    for (path, identity) in &g.tool_stamps {
+        w.begin_object();
+        w.field_str("path", &path.display().to_string());
+        w.field_str("identity", identity);
+        w.end_object();
+    }
+    w.end_array();
     w.end_object();
     w.finish()
 }
@@ -155,19 +171,26 @@ pub fn parse(text: &str) -> Result<BuildGraph, String> {
         artifacts.push((str_field(a, "target")?.to_string(), PathBuf::from(str_field(a, "path")?)));
     }
 
-    // 欄が無い文書は、この欄より前の版が書いたものである。`.d` を読む形が
-    // 当時の唯一の機構だった。
     let deps = match doc.get("deps").and_then(|v| v.as_str()) {
         Some("show-includes") => Deps::ShowIncludes,
         Some("depfile") | None => Deps::Depfile,
         Some(other) => return Err(format!("`deps` is `{other}`, which this build does not know")),
     };
+    // 刻印を持たないビルドはありうる（アクションが1つも無い）。版が合って
+    // いる以上、無いことは「書くものが無い」であって古い文書ではない。
+    let mut tool_stamps = Vec::new();
+    for t in doc.get("tool_stamps").and_then(|v| v.as_array()).unwrap_or(&[]) {
+        tool_stamps
+            .push((PathBuf::from(str_field(t, "path")?), str_field(t, "identity")?.to_string()));
+    }
+
     Ok(BuildGraph {
         build_dir,
         steps,
         artifacts,
         default_outputs: strings(&doc, "default_outputs")?.into_iter().map(PathBuf::from).collect(),
         deps,
+        tool_stamps,
     })
 }
 
@@ -243,6 +266,10 @@ mod tests {
             artifacts: vec![("app:app".into(), PathBuf::from("/b/app"))],
             deps: Deps::Depfile,
             default_outputs: vec![PathBuf::from("/b/app")],
+            tool_stamps: vec![(
+                PathBuf::from("/b/tools/cc-0badcafe.stamp"),
+                "/usr/bin/cc:12:34".into(),
+            )],
         }
     }
 
@@ -257,7 +284,7 @@ mod tests {
     fn a_document_names_its_format_and_version() {
         let text = render(&sample());
         assert!(text.contains("\"format\": \"dowel-build-graph\""), "{text}");
-        assert!(text.contains("\"version\": 1"), "{text}");
+        assert!(text.contains("\"version\": 2"), "{text}");
     }
 
     #[test]
@@ -275,9 +302,9 @@ mod tests {
 
     #[test]
     fn a_future_version_is_refused_rather_than_guessed() {
-        let text = render(&sample()).replace("\"version\": 1", "\"version\": 2");
+        let text = render(&sample()).replace("\"version\": 2", "\"version\": 3");
         let e = parse(&text).unwrap_err();
-        assert!(e.contains("version 2"), "{e}");
+        assert!(e.contains("version 3"), "{e}");
     }
 
     #[test]
@@ -288,7 +315,7 @@ mod tests {
 
     #[test]
     fn a_truncated_document_says_what_is_missing() {
-        let e = parse("{\"format\": \"dowel-build-graph\", \"version\": 1}").unwrap_err();
+        let e = parse("{\"format\": \"dowel-build-graph\", \"version\": 2}").unwrap_err();
         assert!(e.contains("build_dir"), "{e}");
     }
 }

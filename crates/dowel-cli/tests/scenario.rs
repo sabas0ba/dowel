@@ -641,8 +641,58 @@ fn build_directories_are_listed_and_collected_by_age() {
     assert_eq!(dirs(&p), 1);
 }
 
-/// ディレクトリの更新時刻を過去にする。`touch -d` へ委譲する——
-/// 時刻の設定は std に無く、この検査のためだけに依存を増やさない。
+/// 道具そのものが入れ替われば組み直す
+/// （[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
+///
+/// 命令行は変わらない。`cc` は入れ替わっても `cc` のままであり、これを
+/// 見ていなかった頃は古い翻訳器の産物が最新のまま残った。
+///
+/// 2つのラッパは**同じ長さ**にしてある。同一性は道すじ・大きさ・更新時刻で
+/// あり（[ADR-0028](../../../docs/adr/0028-probe-facts.md)）、長さを変えると
+/// 更新時刻を見ていなくても通ってしまう。
+#[test]
+#[cfg(unix)]
+fn replacing_the_compiler_rebuilds_what_it_produced() {
+    let p = Project::new("scenario-tool-identity");
+    let wrapper = p.path("mycc");
+    let write_wrapper = |answer: u8| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&wrapper, format!("#!/bin/sh\nexec cc -DANSWER={answer} \"$@\"\n")).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    write_wrapper(1);
+    p.write(
+        "dowel.toml",
+        &format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[toolchain]\nc = \"{}\"\n",
+            wrapper.display()
+        ),
+    );
+    p.write("dowel.build", "[bin.app]\nsources = glob(\"src/*.c\")\n");
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", ANSWER); return 0; }\n",
+    );
+
+    p.run(".", &["build", "--backend=direct"]).success();
+    let bin = build_dir(&p.path("."), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "1\n");
+    p.run(".", &["build", "--backend=direct", "--log-level=debug"])
+        .success()
+        .stderr_contains("ran 0 steps");
+
+    write_wrapper(2);
+    // 更新時刻だけを違えて、それだけで足りることを見る。
+    filetime_set(&wrapper, std::time::SystemTime::now() + std::time::Duration::from_secs(60));
+
+    let r = p.run(".", &["build", "--backend=direct", "--log-level=debug"]);
+    r.success();
+    assert!(!r.stderr.contains("ran 0 steps"), "the swapped compiler did not rebuild\n{r}");
+    assert_eq!(run_artifact(&bin), "2\n");
+}
+
+/// 更新時刻を指定の時刻にする。`touch -d` へ委譲する——時刻の設定は std に
+/// 無く、この検査のためだけに依存を増やさない。
 fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
     let secs = when.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let out = std::process::Command::new("touch")

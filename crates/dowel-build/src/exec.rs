@@ -54,12 +54,20 @@ impl std::fmt::Display for Failure {
 /// （起動予算は 10ms、docs/20-architecture.md 5.4）。区切りを含む名前は
 /// パスとして扱う。
 pub fn program_exists(name: &str) -> bool {
+    resolve(name).is_some()
+}
+
+/// 起動される実体の道。
+///
+/// 名前だけでは同一性を採れない。`PATH` の前の方に別の `cc` が現れれば、
+/// 同じ名前で別のものが走る（[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
+pub fn resolve(name: &str) -> Option<PathBuf> {
     let p = Path::new(name);
     if p.components().count() > 1 {
-        return is_executable(p);
+        return is_executable(p).then(|| p.to_path_buf());
     }
-    let Some(path) = std::env::var_os("PATH") else { return false };
-    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(name)))
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|dir| dir.join(name)).find(|p| is_executable(p))
 }
 
 fn is_executable(p: &Path) -> bool {

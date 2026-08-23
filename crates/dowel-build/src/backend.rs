@@ -36,6 +36,10 @@ pub struct BuildGraph {
     /// ヘッダ依存の取り方（ADR-0027）。1回のビルドで様式は1つなので、
     /// ステップごとではなくグラフが持つ
     pub deps: crate::toolstyle::Deps,
+    /// 道具の刻印と、その中身
+    /// （[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
+    /// ステップの入力に現れるので、走らせる前に書かれていなければならない
+    pub tool_stamps: Vec<(PathBuf, String)>,
 }
 
 /// 1回のプロセス起動。
@@ -101,6 +105,7 @@ impl BuildGraph {
             artifacts: plan.artifacts.iter().map(|(t, p)| (sess.label(*t), p.clone())).collect(),
             default_outputs: plan.default_outputs(),
             deps: plan.deps,
+            tool_stamps: plan.tool_stamps.clone(),
         }
     }
 
@@ -200,6 +205,7 @@ pub fn select(
 /// できたものまで最新扱いにすると、次の実行が古い成果物を残したまま成功する。
 pub fn run(backend: &dyn Backend, g: &BuildGraph, jobs: Option<usize>) -> Result<(), Failure> {
     let _phase = dowel_support::log::Phase::start("execute");
+    write_tool_stamps(g);
     let result = backend.run(g, jobs);
     if result.is_ok() && backend.builds() {
         // 前回の記録に**重ねて**書く。今回のグラフに無かった成果物は、この実行が
@@ -210,6 +216,30 @@ pub fn run(backend: &dyn Backend, g: &BuildGraph, jobs: Option<usize>) -> Result
         log.save(&g.build_dir);
     }
     result
+}
+
+/// 道具の刻印を書く（ADR-0055）。
+///
+/// **中身が変わったときだけ書く。** 書き直せば mtime が動き、その道具を
+/// 使うすべてのアクションが組み直される——変わっていないのに書けば、
+/// 毎回すべてが組み直される。
+///
+/// 走らせる前である必要がある。刻印はステップの入力であり、無ければ ninja は
+/// 「作る規則が無い」と言う。
+pub fn write_tool_stamps(g: &BuildGraph) {
+    for (path, identity) in &g.tool_stamps {
+        if std::fs::read_to_string(path).ok().as_deref() == Some(identity.as_str()) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                continue;
+            }
+        }
+        if std::fs::write(path, identity).is_err() {
+            log_debug!("cannot write the tool stamp {}", path.display());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +262,38 @@ mod tests {
             let b = find(name).unwrap();
             assert_eq!(b.builds(), *name != "graph", "`{name}` reports the wrong kind");
         }
+    }
+
+    #[test]
+    fn a_stamp_is_rewritten_only_when_the_identity_changes() {
+        // 変わっていないのに書き直すと mtime が動き、その道具を使うすべての
+        // アクションが毎回組み直される——刻印を入れた目的の逆になる。
+        let dir = std::env::temp_dir().join("dowel-tool-stamp-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("tools/cc-0.stamp");
+        let graph = |identity: &str| BuildGraph {
+            build_dir: dir.clone(),
+            steps: vec![],
+            artifacts: vec![],
+            deps: Deps::Depfile,
+            default_outputs: vec![],
+            tool_stamps: vec![(path.clone(), identity.to_string())],
+        };
+
+        write_tool_stamps(&graph("cc:1:1"));
+        let first = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "cc:1:1");
+
+        // 同じ同一性では触らない。時刻の分解能に頼らず、書き込みの有無を
+        // 中身の差し替えで見る。
+        std::fs::write(&path, "cc:1:1").unwrap();
+        let marker = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(marker >= first);
+        write_tool_stamps(&graph("cc:1:1"));
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), marker);
+
+        write_tool_stamps(&graph("cc:2:2"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "cc:2:2");
     }
 
     #[test]
@@ -267,6 +329,7 @@ mod tests {
             artifacts: vec![],
             deps: Deps::Depfile,
             default_outputs: vec![],
+            tool_stamps: vec![],
         }
     }
 

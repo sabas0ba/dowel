@@ -814,6 +814,25 @@ changes, only the speed.
   parseable back into an equal graph, and the same document
   `dowel graph --kind=action --format=json` prints. There is one JSON
   description of an action graph, not two
+- **A tool's identity is an input**
+  ([ADR-0055](adr/0055-tool-identity-in-freshness.md)). `<build>/tools/` holds
+  one stamp per program the graph launches, containing its path, size, and
+  mtime as resolved on `PATH`; each action takes the stamp of its own program
+  as an input. Replacing the compiler, the linker, the archiver, an
+  assembler, a transform's `objcopy`, or a generation's program rebuilds what
+  it produced — measured before this, a wrapper rewritten in place left every
+  object current under all three backends.
+  - It is a **file**, not an edge in the plan. ninja reads input–output
+    relations and not the plan's `deps`, so an ordering that is not a file
+    relation is not an ordering (the same measurement ADR-0054 made)
+  - The stamp is written only when its contents change, in `backend::run`
+    before the backend starts. Rewriting it moves its mtime, which is right
+    when the tool changed and wrong when it did not. `dowel check` resolves
+    the tools and writes nothing
+  - The identity is ADR-0028's: path, size, and mtime, at one-second
+    resolution and without reading the file. A tool replaced in the same
+    second at the same size is missed, and a compiler replaced *behind* an
+    unchanged driver is not seen at all
 - The record of "which command produced this output" belongs to the layer,
   not to a backend, so it stays consistent across switching between them. It
   is **merged** into the previous record rather than replacing it: an output
@@ -1290,17 +1309,17 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (750 tests):
+Current breakdown (752 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 365 |
+| `unit-*` | per-crate unit tests | 366 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
 | `e2e` | compile real C, C++, and assembly, run it, check the output | 285 |
-| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 28 |
+| `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
 | `example` | build the real `examples/hello` and run its tests | 3 |
