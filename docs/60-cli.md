@@ -183,7 +183,7 @@ every `bin` and `test`. Naming accepts `<target>` or `<package>:<target>`.
 | Option | Values | Default | Meaning |
 |---|---|---|---|
 | `--backend <name>` | `ninja` / `direct` / `make` / `graph` | `ninja` when available | who runs the build (below) |
-| `-j, --jobs <n>` | number | the backend's default | parallelism, passed to the backend |
+| `-j, --jobs <n>` | number | the backend's default | how many steps run at once, passed to the backend. For `direct` the default is the machine's available parallelism ([ADR-0056](adr/0056-direct-backend-parallelism.md)) |
 | `--no-compdb` | — | — | do not write `compile_commands.json` |
 
 The backend is the output stage ([ADR-0018](adr/0018-backend-layer.md)). All
@@ -193,7 +193,7 @@ change what gets built.
 | Backend | What it does |
 |---|---|
 | `ninja` | writes `build.ninja` into the build directory and runs ninja. The default where ninja is on PATH |
-| `direct` | runs the steps in process, one at a time, judging freshness by mtime, depfiles, and the command line itself. Needs no external generator. The fallback when ninja is absent |
+| `direct` | runs the steps in process, judging freshness by mtime, depfiles, and the command line itself. Needs no external generator. The fallback when ninja is absent. It runs `--jobs` steps at once, ordered by both the graph's edges and the files the steps read ([ADR-0056](adr/0056-direct-backend-parallelism.md)) |
 | `make` | writes `Makefile` and runs `make`. Refuses a build whose paths make cannot name (whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, `]`) rather than writing a makefile that builds something else |
 | `graph` | writes `build-graph.json` — the backend-neutral description ([14-build-graph.md](14-build-graph.md)) — and stops. Nothing is compiled; the document is for a tool of your own. `dowel test` and `dowel inspect` refuse it |
 

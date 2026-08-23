@@ -91,6 +91,60 @@ fn the_direct_backend_produces_the_same_artifact() {
     assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
 }
 
+/// direct バックエンドは `--jobs` を受け取り、順序を守ったまま同時に走らせる
+/// （[ADR-0056](../../../docs/adr/0056-direct-backend-parallelism.md)）。
+///
+/// 順序の誤りは競合なので、1回の実行で必ず出るとは限らない。ここが見るのは
+/// 「同時に走らせても同じものが出来る」ことと、2回目に何も走らないこと——
+/// 前提を無視して走らせれば、どちらかが崩れる。
+#[test]
+fn the_direct_backend_builds_in_parallel_and_still_gets_the_same_artifact() {
+    let p = two_package_project("direct-jobs");
+    let r = p.run("app", &["build", "--backend=direct", "--jobs=4", "--log-level=debug"]);
+    r.success().stderr_contains("with 4 job(s)");
+    let bin = build_dir(&p.path("app"), "debug").join("bin/app");
+    assert_eq!(run_artifact(&bin), "sum=5 opt=0 api=1\n");
+
+    let second = p.run("app", &["build", "--backend=direct", "--jobs=4", "--log-level=debug"]);
+    second.success().stderr_contains("ran 0 steps");
+}
+
+/// 生成が翻訳より先に走ること。同時に走らせても変わらない
+/// （ADR-0054 の順序を、ADR-0056 の走らせ方で確かめる）。
+#[test]
+fn a_generation_still_precedes_the_compiles_when_jobs_run_in_parallel() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    let p = Project::new("direct-jobs-generate");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+         [bin.app.generate]\n\
+         limits = { command = \"sh\", args = [file(\"gen.sh\")], \
+         inputs = [file(\"src/limit.txt\")], outputs = [\"limits.h\"] }\n",
+    );
+    p.write("gen.sh", "set -eu\nprintf '#define LIMIT %s\\n' \"$(cat \"$1\")\" > limits.h\n");
+    p.write("src/limit.txt", "5\n");
+    // 翻訳単位を増やして、生成と同時に走りうる相手を作る。
+    for i in 0..6 {
+        p.write(
+            &format!("src/part{i}.c"),
+            &format!("#include \"limits.h\"\nint part{i}(void) {{ return LIMIT; }}\n"),
+        );
+    }
+    p.write(
+        "src/main.c",
+        "#include <stdio.h>\n#include \"limits.h\"\nint part0(void);\n\
+         int main(void) { printf(\"%d %d\\n\", LIMIT, part0()); return 0; }\n",
+    );
+
+    p.run(".", &["build", "--backend=direct", "--jobs=8"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "5 5\n");
+}
+
 #[test]
 fn changing_the_configuration_changes_the_flags() {
     let p = two_package_project("configs");
