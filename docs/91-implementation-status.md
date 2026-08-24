@@ -885,6 +885,14 @@ changes, only the speed.
   all, silently keeping stale artifacts (issue #41). As a backstop, the
   direct backend treats an output whose declared depfile is missing as stale
   instead of fresh
+- **A command a backend cannot spell is refused, never altered**
+  ([ADR-0058](adr/0058-a-command-a-backend-cannot-spell.md)). ninja used to
+  replace a newline inside a command with a space, so a generation writing
+  `#define A 1\n#define B 2\n` produced one macro on one line — and the build
+  succeeded. make wrote the newline through and failed with `missing
+  separator` at a line of a file dowel had generated. Both now check before
+  writing anything and name the character, the step, and `--backend=direct`,
+  which passes `argv` to the program and has no such limit
 - `make` has limits ninja does not: it cannot name a path containing
   whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, or `]`. The
   backend refuses such a build, naming the path, instead of writing a
@@ -1348,16 +1356,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (762 tests):
+Current breakdown (765 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 371 |
+| `unit-*` | per-crate unit tests | 373 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 290 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 291 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

@@ -97,6 +97,26 @@ pub fn command_line(command: &[String], cwd: Option<&std::path::Path>) -> String
     }
 }
 
+/// 1行に収まらない綴りを見つける
+/// （[ADR-0058](../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+///
+/// ninja の変数値も make のレシピ行も**1行**である。行を終わらせる文字が
+/// 命令やパスに含まれていると、綴った先は別の命令になる——ninja は改行を
+/// 空白に置き換えており、`printf '#define A 1\n#define B 2\n'` が
+/// マクロ1つ分の行を書いていた。
+pub fn breaks_the_line(text: &str) -> Option<char> {
+    text.chars().find(|c| *c == '\n' || *c == '\r')
+}
+
+/// 綴れない文字の見せ方。制御文字はそのまま出しても読めない。
+pub fn show_char(c: char) -> String {
+    match c {
+        '\n' => "a newline".to_string(),
+        '\r' => "a carriage return".to_string(),
+        c => format!("`{c}`"),
+    }
+}
+
 /// POSIX シェル向けの引用。ninja も `compile_commands.json` も
 /// 最終的にシェルへ渡すため、1箇所で行う。
 pub fn shell_quote(s: &str) -> String {

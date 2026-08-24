@@ -8,7 +8,7 @@
 //! 限られ、空白を含むパスは表現できない。書けないものを書いて黙って別のものを
 //! ビルドするより、そのパスを名指して断る。
 
-use crate::action::ActionKind;
+use crate::action::{breaks_the_line, show_char, ActionKind};
 use crate::backend::{Backend, BuildGraph, Step};
 use crate::exec::{drive, Failure};
 use dowel_support::log_debug;
@@ -101,6 +101,23 @@ fn rule(g: &BuildGraph, step: &Step) -> Result<String, Failure> {
                  `--backend=ninja` has no such limit",
                 step.description,
                 step.outputs.len()
+            ),
+        ));
+    }
+    // レシピは1行である。行を終わらせる文字が命令に在ると、続きは make に
+    // とって別の行になり、`missing separator` で止まる——生成した Makefile の
+    // 行番号を指す言葉であり、マニフェストのどこが原因かは読み取れない
+    // （[ADR-0058](../../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+    let line = step.command_line();
+    if let Some(c) = breaks_the_line(&line) {
+        return Err(Failure::of(
+            "generating the makefile",
+            line.clone(),
+            format!(
+                "make cannot spell {} inside a recipe, and `{}` contains one. \
+                 `--backend=direct` runs the command without a shell",
+                show_char(c),
+                step.description
             ),
         ));
     }
@@ -200,6 +217,18 @@ mod tests {
             default_outputs: vec![PathBuf::from("/b/app")],
             tool_stamps: vec![],
         }
+    }
+
+    #[test]
+    fn a_command_with_a_newline_is_refused_before_the_makefile_is_written() {
+        // 書いてしまうと、失敗するのは make であり、その言葉は生成した
+        // Makefile の行番号を指す（ADR-0058）。
+        let mut s = step(ActionKind::Generate, "/b/cfg.h", &[]);
+        s.arguments = vec!["-c".into(), "printf 'a\nb'".into()];
+        let e = generate(&graph(vec![s])).expect_err("a newline is not spellable");
+        let text = format!("{e}");
+        assert!(text.contains("newline"), "{text}");
+        assert!(text.contains("--backend=direct"), "{text}");
     }
 
     #[test]
