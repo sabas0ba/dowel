@@ -855,6 +855,23 @@ changes, only the speed.
     resolution and without reading the file. A tool replaced in the same
     second at the same size is missed, and a compiler replaced *behind* an
     unchanged driver is not seen at all
+- **Progress is output, not a log**
+  ([ADR-0057](adr/0057-progress-is-shown-while-it-runs.md)). One line per
+  step, on stderr, at every log level except `off`.
+  - It is written **while the build runs**. `drive` used to collect the
+    generator's stdout with `Command::output` and replay it after the process
+    exited: eleven lines of a 1.3-second build arrived inside nineteen
+    milliseconds, at the end. It now forwards them line by line, reading the
+    child's stderr on its own thread so neither pipe can fill and stall the
+    other
+  - `direct` said nothing at all. It announced steps with `log_info!`, which
+    the default `warn` level discards — and that backend is the fallback
+    wherever ninja is absent. It now prints `[n/m] <description>`, numbered
+    when a step finishes, under the lock that records it
+  - The count belongs to whoever schedules: dowel supplies it for `direct`,
+    ninja supplies its own, `make` has none. `m` is the size of the graph,
+    not a forecast of how much of it needs doing — predicting that means
+    deciding freshness before running, which ADR-0056 does not do
 - The record of "which command produced this output" belongs to the layer,
   not to a backend, so it stays consistent across switching between them. It
   is **merged** into the previous record rather than replacing it: an output
@@ -1331,7 +1348,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (759 tests):
+Current breakdown (762 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1340,7 +1357,7 @@ Current breakdown (759 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 287 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 290 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

@@ -6,8 +6,9 @@
 
 use crate::backend::{BuildGraph, Step};
 use dowel_support::{log_debug, log_trace};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[derive(Debug)]
 pub struct Failure {
@@ -98,7 +99,31 @@ pub fn responds_to_version(program: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 生成器（ninja / make）を起動する。進捗は stdout に出るのでそのまま見せる。
+/// 進捗の1行。
+///
+/// ログではなく**出力**である。段階を追えることは走らせている間に見えなければ
+/// 意味がなく、ログの既定（`warn`）では見えない
+/// （[ADR-0057](../../../docs/adr/0057-progress-is-shown-while-it-runs.md)）。
+///
+/// stderr へ出す。stdout は機械向けの出力に取ってある（docs/60-cli.md）ので、
+/// `dowel graph --format=dot | dot` の途中に進捗が混ざることはない。黙るのは
+/// `--log-level=off` のときだけ——利用者が黙らせる術はそれ1つである。
+pub fn progress(line: &str) {
+    if dowel_support::log::level() == dowel_support::log::Level::Off {
+        return;
+    }
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "{line}");
+}
+
+/// 生成器（ninja / make）を起動し、その進捗を**届いた端から**見せる。
+///
+/// 溜めてから出していた頃は、1.3 秒のビルドの 11 行が最後の 19ms に固まって
+/// 現れた。走っている間は何も出ないので、大きなビルドでは止まって見える
+/// （ADR-0057）。
+///
+/// 子の stdout と stderr は別の糸で読む。1つの糸で順に読むと、片方の管が
+/// 一杯になったときにもう片方が進まず、子ごと止まる。
 pub fn drive(program: &str, args: &[String], build_dir: &Path) -> Result<(), Failure> {
     let shown = format!("{program} {}", args.join(" "));
     let mut cmd = Command::new(program);
@@ -108,28 +133,42 @@ pub fn drive(program: &str, args: &[String], build_dir: &Path) -> Result<(), Fai
     // 散らかる。生成したファイル内のパスは全て絶対であり、作業ディレクトリを
     // 変えても解決結果は変わらない。
     cmd.current_dir(build_dir);
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     dowel_support::log_info!("{shown}");
-    let out = cmd.output().map_err(|e| {
+    let start = |e: std::io::Error| {
         Failure::of(
             &format!("starting {program}"),
             shown.clone(),
             format!("{e}. `--backend=direct` runs without an external generator"),
         )
-    })?;
+    };
+    let mut child = cmd.spawn().map_err(start)?;
+    let out = child.stdout.take().expect("stdout is piped");
+    let err = child.stderr.take().expect("stderr is piped");
 
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    if !stdout.trim().is_empty() {
-        eprint!("{stdout}");
+    let collecting = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = BufReader::new(err).read_to_string(&mut text);
+        text
+    });
+    for line in BufReader::new(out).lines().map_while(Result::ok) {
+        progress(&line);
     }
-    if out.status.success() {
+    let status = child.wait().map_err(start)?;
+    let stderr = collecting.join().unwrap_or_default();
+
+    if status.success() {
         return Ok(());
     }
     Err(Failure {
         description: program.to_string(),
         command: shown,
-        status: out.status.code(),
-        stdout,
-        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+        // 子の stdout は既に流し終えている。失敗の報告に重ねて入れると、
+        // 同じ行が画面に2度並ぶ。
+        stdout: String::new(),
+        status: status.code(),
+        stderr,
     })
 }
 

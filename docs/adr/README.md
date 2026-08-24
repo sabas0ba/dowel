@@ -63,3 +63,4 @@ was originally written in.
 | [0054](0054-generated-sources.md) | A source may be generated, and the generator runs where its output lands | Accepted |
 | [0055](0055-tool-identity-in-freshness.md) | A tool's identity is an input, recorded as a file the actions depend on | Accepted |
 | [0056](0056-direct-backend-parallelism.md) | The direct backend runs steps concurrently, and every backend orders by both edges and files | Accepted |
+| [0057](0057-progress-is-shown-while-it-runs.md) | Progress is output, shown while the build runs, one line per step | Accepted |

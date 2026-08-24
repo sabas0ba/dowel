@@ -28,6 +28,13 @@ dowel <command> [options] [args]
 Because of this split, `dowel graph --format=dot | dot -Tsvg` works at any
 log level.
 
+Progress is **output, not a log** ([ADR-0057](adr/0057-progress-is-shown-while-it-runs.md)):
+one line per step, written while the build runs rather than collected and
+replayed at the end, and shown at every log level except `off`. The line's
+shape is `<description>`, preceded by `[n/m]` where the backend running the
+steps supplies a count — `direct` counts the steps it has run out of the
+steps in the graph, ninja supplies its own, and make supplies none.
+
 ### Exit status
 
 | Status | Meaning |
