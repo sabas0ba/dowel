@@ -820,6 +820,13 @@ changes, only the speed.
     Sequentially either sufficed; concurrently an ordering present in only
     one of the two is a race, and a graph read back from `build-graph.json`
     carries no promise that `deps` is complete
+  - The other backends take the same union. `make` already did, as
+    prerequisites. `ninja` did not — it emitted only `inputs`, so an edge no
+    file carried was no ordering at all under the default backend; it now
+    emits those as **order-only** prerequisites (`|| …`), which says ordering
+    without saying freshness. ninja had been correct only because every
+    `deps` the planner writes happens to be implied by a file relation, which
+    is a property of the planner and not of the format
   - Freshness is judged when a step is about to run, since a predecessor may
     have just rewritten an input. The first failure stops scheduling and
     steps already running finish; nothing bounds memory, which is what
@@ -1324,12 +1331,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (757 tests):
+Current breakdown (759 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 369 |
+| `unit-*` | per-crate unit tests | 371 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |

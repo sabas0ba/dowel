@@ -84,7 +84,7 @@ One step is one process launch.
 | `outputs` | array of strings | the files this step writes, as absolute paths. Their directories may not exist yet — create them |
 | `depfile` | string | absent when the step declares no header dependencies. Present for `cc`: a **make-format** file the compiler writes, listing the headers actually read. It is written by the step itself, so it does not exist before the first run |
 | `cwd` | string | absent for almost every step, which runs in `build_dir`. Present for `generate`, which runs in the directory its outputs land in ([ADR-0054](adr/0054-generated-sources.md)) so that they can be named relatively |
-| `deps` | array of integers | steps that must complete first. Usually implied by `inputs`, but not always — a step may depend on one whose output it does not read |
+| `deps` | array of integers | steps that must complete first. Usually implied by `inputs`, but not always — a step may depend on one whose output it does not read. Neither field alone is the whole ordering; see below |
 
 ## What a reader must do
 
@@ -102,6 +102,17 @@ One step is one process launch.
 - **Read the depfile if you decide freshness yourself.** A `cc` step whose
   `depfile` is missing has *no* known header dependencies — treat it as out
   of date rather than up to date, or a header edit is silently missed
+- **Order by `deps` *and* by the files.** A step must wait both for every
+  step in its `deps` and for every step that writes one of its `inputs`.
+  Neither list contains the other: `deps` carries orderings no file
+  expresses, and `inputs` carries orderings the graph does not repeat as
+  edges. Running one step at a time in an order that satisfies either list
+  happens to satisfy both; **running steps concurrently does not**, and an
+  ordering present in only one of the two then becomes a race
+  ([ADR-0056](adr/0056-direct-backend-parallelism.md)). dowel's own backends
+  each take the union — `direct` in its scheduler, `make` as prerequisites,
+  `ninja` by emitting the edges its inputs do not already carry as
+  order-only prerequisites
 - **Refuse an unknown `format` or `version`.** Executing a build description
   you half-understand is the shortest path to silently building the wrong
   thing

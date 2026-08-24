@@ -1,4 +1,4 @@
-# ADR-0056: The direct backend runs steps concurrently, ordered by both edges and files
+# ADR-0056: The direct backend runs steps concurrently, and every backend orders by both edges and files
 
 **Status**: Accepted
 
@@ -49,6 +49,18 @@ race. It is also what makes a graph read back from `build-graph.json` safe to
 run: that format's own reference says `deps` is "usually implied by `inputs`,
 but not always", which promises nothing in the other direction.
 
+The other backends are brought to the same union, since the graph is one
+value and the four of them are supposed to build the same thing
+([ADR-0018](0018-backend-layer.md)). `make` already took it — its
+prerequisites are the inputs plus the dependencies' outputs. `ninja` did
+not: it emitted only `inputs`, so an edge no file carried was not an
+ordering under the default backend at all. It now emits those edges as
+**order-only** prerequisites (`|| …`), which says ordering without saying
+freshness — matching `direct`, whose staleness check reads `inputs` alone.
+Until now ninja was correct only because every `deps` dowel writes happens
+to be implied by a file relation, which is a property of the planner rather
+than of the format.
+
 **Freshness is decided when a step is about to run, not when it is
 scheduled.** A predecessor may have just rewritten an input. This is what the
 sequential loop already did, and it is the reason the decision cannot be
@@ -81,6 +93,12 @@ choice is preserved here rather than reopened.
   by sequential execution. Unioning the two orderings is what keeps dowel's
   own graphs safe; a graph from outside that declares neither kind of
   ordering was already wrong and is now visibly so.
+- A reader of `build-graph.json` has to take the same union, and the format's
+  reference now says so ([14-build-graph.md](../14-build-graph.md)). It
+  previously said only that `deps` is "usually implied by `inputs`, but not
+  always", which is true and insufficient: it does not tell a reader that
+  running concurrently by `deps` alone is unsafe. Both fields were always in
+  the document; what was missing was the instruction to use both.
 - `--jobs` still means different things per backend — ninja and make hand it
   to their own scheduler. That was already true and is not changed here.
 - Nothing limits memory. A link step and eight compiles can run together on

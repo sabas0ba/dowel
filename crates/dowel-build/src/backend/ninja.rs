@@ -9,7 +9,8 @@ use crate::backend::{Backend, BuildGraph};
 use crate::exec::{drive, Failure};
 use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
 use dowel_support::log_debug;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 pub struct Ninja;
 
@@ -93,12 +94,39 @@ pub fn generate(g: &BuildGraph) -> String {
             step.outputs.iter().map(|p| path(&p.display().to_string())).collect();
         let inputs: Vec<String> =
             step.inputs.iter().map(|p| path(&p.display().to_string())).collect();
+        // 宣言された辺のうち、入力に現れないものを順序専用の前提として置く。
+        //
+        // ninja が読むのはファイルの関係だけであり、計画の持つ `deps` は
+        // 見ない（[ADR-0054](../../../../docs/adr/0054-generated-sources.md)
+        // で測ったとおり）。ここに書かなければ、入力に現れない順序は ninja に
+        // 伝わらない——make は前提条件として、direct は走らせる側の待ち行列と
+        // して既に両方を見ており、揃えるのはこの1箇所である
+        // （[ADR-0056](../../../../docs/adr/0056-direct-backend-parallelism.md)）。
+        //
+        // `||` にするのは、順序だけを言い、鮮度には効かせないためである。
+        // 最新性が読むのは `inputs` であり、そこは direct と同じ判断にする。
+        let known: BTreeSet<&Path> = step.inputs.iter().map(|p| p.as_path()).collect();
+        let mut ordered: Vec<String> = step
+            .deps
+            .iter()
+            .filter_map(|d| g.steps.get(*d))
+            .flat_map(|dep| &dep.outputs)
+            .filter(|o| !known.contains(o.as_path()))
+            .map(|o| path(&o.display().to_string()))
+            .collect();
+        ordered.sort();
+        ordered.dedup();
+
         out.push_str(&format!(
-            "build {}: {} {}\n",
+            "build {}: {} {}",
             outputs.join(" "),
             step.kind.name(),
             inputs.join(" ")
         ));
+        if !ordered.is_empty() {
+            out.push_str(&format!(" || {}", ordered.join(" ")));
+        }
+        out.push('\n');
         out.push_str(&format!("  cmd = {}\n", value(&step.command_line())));
         out.push_str(&format!("  desc = {}\n", value(&step.description)));
         if step.kind == ActionKind::Compile && g.deps == Deps::Depfile {
@@ -148,5 +176,59 @@ mod tests {
     #[test]
     fn variable_value_escaping() {
         assert_eq!(value("cc -DX=$HOME"), "cc -DX=$$HOME");
+    }
+
+    fn step(
+        id: usize,
+        inputs: &[&str],
+        outputs: &[&str],
+        deps: Vec<usize>,
+    ) -> crate::backend::Step {
+        crate::backend::Step {
+            id,
+            kind: ActionKind::Compile,
+            target: "p:t".into(),
+            description: format!("step {id}"),
+            program: "true".into(),
+            arguments: vec![],
+            inputs: inputs.iter().map(PathBuf::from).collect(),
+            outputs: outputs.iter().map(PathBuf::from).collect(),
+            depfile: None,
+            deps,
+            cwd: None,
+        }
+    }
+
+    fn graph_of(steps: Vec<crate::backend::Step>) -> BuildGraph {
+        BuildGraph {
+            build_dir: PathBuf::from("/b"),
+            steps,
+            artifacts: vec![],
+            deps: Deps::Depfile,
+            default_outputs: vec![],
+            tool_stamps: vec![],
+        }
+    }
+
+    #[test]
+    fn a_declared_edge_no_file_carries_becomes_an_order_only_prerequisite() {
+        // ninja は計画の辺を読まない。書かなければ、入力に現れない順序は
+        // 伝わらないままである（ADR-0056）。
+        let text = generate(&graph_of(vec![
+            step(0, &[], &["/b/gen/x.h"], vec![]),
+            step(1, &["/s/b.c"], &["/b/b.o"], vec![0]),
+        ]));
+        assert!(text.contains("build /b/b.o: cc /s/b.c || /b/gen/x.h\n"), "{text}");
+    }
+
+    #[test]
+    fn an_edge_the_inputs_already_carry_is_not_repeated() {
+        // 入力に在るものを順序専用にも並べると、同じ関係が2つの綴りで
+        // 書かれる。読み手にとっては同じだが、意味の重複は取り除く。
+        let text = generate(&graph_of(vec![
+            step(0, &["/s/a.c"], &["/b/a.o"], vec![]),
+            step(1, &["/b/a.o"], &["/b/app"], vec![0]),
+        ]));
+        assert!(text.contains("build /b/app: cc /b/a.o\n"), "{text}");
     }
 }
