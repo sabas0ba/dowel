@@ -1,7 +1,9 @@
-//! direct バックエンド。逐次実行。
+//! direct バックエンド。外部の生成器を使わずに、この処理系自身が走らせる。
 //!
 //! 外部の生成器が無い環境でも動き、何より「生成器の挙動に依存せず
-//! ビルドグラフ自体が正しいか」を切り分けられる。
+//! ビルドグラフ自体が正しいか」を切り分けられる。ninja が居ない機械では
+//! ここが既定になる（`backend::select`）ので、速さも役目のうちである
+//! （[ADR-0056](../../../docs/adr/0056-direct-backend-parallelism.md)）。
 //!
 //! 最新性は素朴な mtime 比較で判定する。ヘッダ依存はコンパイラが書いた
 //! depfile を読む。ここで作った機構は将来、内容アドレスによるアクション
@@ -12,8 +14,10 @@ use crate::backend::{Backend, BuildGraph, Step};
 use crate::exec::{CommandLog, Failure};
 use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
 use dowel_support::{log_debug, log_info, log_trace};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Condvar, Mutex};
 use std::time::SystemTime;
 
 pub struct Direct;
@@ -28,26 +32,185 @@ impl Backend for Direct {
         Ok(Vec::new())
     }
 
-    fn run(&self, g: &BuildGraph, _jobs: Option<usize>) -> Result<(), Failure> {
-        let mut ran = 0usize;
-        let mut skipped = 0usize;
+    fn run(&self, g: &BuildGraph, jobs: Option<usize>) -> Result<(), Failure> {
+        let jobs = jobs.unwrap_or_else(default_jobs).max(1).min(g.steps.len().max(1));
+        log_debug!("running {} steps with {jobs} job(s)", g.steps.len());
         let previous = CommandLog::load(&g.build_dir);
+        let waits = dependencies(g);
+
+        let mut remaining = vec![0usize; g.steps.len()];
+        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); g.steps.len()];
+        for (i, on) in waits.iter().enumerate() {
+            remaining[i] = on.len();
+            for &d in on {
+                dependents[d].push(i);
+            }
+        }
+        // 種は `order()` の並び。1本で走らせたときの出力を、辺の張り方に
+        // 依らず同じ順にするため
+        let ready: VecDeque<usize> = g.order().into_iter().filter(|&i| remaining[i] == 0).collect();
+
+        let shared = Mutex::new(State {
+            ready,
+            remaining,
+            running: 0,
+            done: vec![false; g.steps.len()],
+            ran: 0,
+            skipped: 0,
+            failure: None,
+        });
+        let wake = Condvar::new();
+        std::thread::scope(|scope| {
+            for _ in 0..jobs {
+                scope.spawn(|| worker(g, &previous, &dependents, &shared, &wake));
+            }
+        });
+
+        let mut state = shared.into_inner().expect("the scheduler mutex is poisoned");
+        if let Some(failure) = state.failure.take() {
+            return Err(failure);
+        }
+        // 循環があれば、その中のステップは前提が揃わないまま残る。落として
+        // しまうと「理由なく実行されないステップ」になるので、`order()` が
+        // 末尾に並べたのと同じ扱いで、残りを順に走らせる。
         for i in g.order() {
-            let step = &g.steps[i];
-            // コマンドが変わっていれば、時刻を見るまでもなく作り直す。
-            if !previous.matches(step) {
-                log_trace!("  stale: the command changed since the last run");
-            } else if is_up_to_date(step) {
-                log_trace!("up to date: {}", step.description);
-                skipped += 1;
+            if state.done[i] {
                 continue;
             }
-            run_step(g, step)?;
-            ran += 1;
+            log_trace!("  running {} outside the schedule (its inputs never settled)", i);
+            if execute(g, &previous, &g.steps[i])? {
+                state.ran += 1;
+            } else {
+                state.skipped += 1;
+            }
         }
-        log_debug!("ran {ran} steps, skipped {skipped} already up to date");
+        log_debug!("ran {} steps, skipped {} already up to date", state.ran, state.skipped);
         Ok(())
     }
+}
+
+/// 走らせる本数の既定。
+///
+/// ninja に合わせて「その機械が同時に進められる数」を採る。翻訳は CPU を
+/// 使い切るので、これ以上並べても待ち行列が伸びるだけである。読めなければ
+/// 1本——並列にできない機械で当て推量に走るより、遅い方を選ぶ。
+fn default_jobs() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
+
+/// 走らせる側の共有状態。
+struct State {
+    /// 前提の揃ったステップ
+    ready: VecDeque<usize>,
+    /// 各ステップの、まだ終わっていない前提の数
+    remaining: Vec<usize>,
+    /// いま走っているステップの数。0 になり `ready` も空なら、もう増えない
+    running: usize,
+    done: Vec<bool>,
+    ran: usize,
+    skipped: usize,
+    /// 最初の失敗。以後は新たに走らせない
+    failure: Option<Failure>,
+}
+
+fn worker(
+    g: &BuildGraph,
+    previous: &CommandLog,
+    dependents: &[Vec<usize>],
+    shared: &Mutex<State>,
+    wake: &Condvar,
+) {
+    loop {
+        let mut state = shared.lock().expect("the scheduler mutex is poisoned");
+        // 走っているものが在る限り、`ready` は増えうる。両方尽きて初めて
+        // 「もう何も来ない」と言える。
+        while state.ready.is_empty() && state.running > 0 && state.failure.is_none() {
+            state = wake.wait(state).expect("the scheduler mutex is poisoned");
+        }
+        if state.failure.is_some() {
+            break;
+        }
+        let Some(i) = state.ready.pop_front() else { break };
+        state.running += 1;
+        drop(state);
+
+        let result = execute(g, previous, &g.steps[i]);
+
+        let mut state = shared.lock().expect("the scheduler mutex is poisoned");
+        state.running -= 1;
+        state.done[i] = true;
+        match result {
+            Ok(true) => state.ran += 1,
+            Ok(false) => state.skipped += 1,
+            Err(e) => {
+                if state.failure.is_none() {
+                    state.failure = Some(e);
+                }
+            }
+        }
+        if state.failure.is_none() {
+            for &d in &dependents[i] {
+                state.remaining[d] -= 1;
+                if state.remaining[d] == 0 {
+                    state.ready.push_back(d);
+                }
+            }
+        }
+        drop(state);
+        // 待っている者を起こす。前提が減ったかもしれず、尽きたかもしれない。
+        wake.notify_all();
+    }
+    // 抜ける前にもう一度起こす。失敗と枯渇はどちらも全員に伝える必要がある。
+    wake.notify_all();
+}
+
+/// 1つのステップを、要るなら走らせる。戻り値は「走らせたか」。
+///
+/// 最新性の判定は走らせる直前に行う。前提が書き直した入力を見なければ
+/// ならず、計画の時点で決めておくことはできない。
+fn execute(g: &BuildGraph, previous: &CommandLog, step: &Step) -> Result<bool, Failure> {
+    // コマンドが変わっていれば、時刻を見るまでもなく作り直す。
+    if !previous.matches(step) {
+        log_trace!("  stale: the command changed since the last run");
+    } else if is_up_to_date(step) {
+        log_trace!("up to date: {}", step.description);
+        return Ok(false);
+    }
+    run_step(g, step)?;
+    Ok(true)
+}
+
+/// 各ステップが待つべきステップ。
+///
+/// 宣言された辺（`deps`）と、ファイルの関係（入力を作るステップ）の**両方**を
+/// 採る。逐次に走らせていた頃はどちらか片方で足りたが、同時に走らせる以上、
+/// 片方にしか現れない順序は競合になる。`build-graph.json` を読み直した
+/// グラフも同じ経路を通る——外から来た文書の `deps` が完全である保証は
+/// 無い（docs/14-build-graph.md）。
+fn dependencies(g: &BuildGraph) -> Vec<Vec<usize>> {
+    let mut producer: HashMap<&Path, usize> = HashMap::new();
+    for (i, s) in g.steps.iter().enumerate() {
+        for out in &s.outputs {
+            producer.insert(out.as_path(), i);
+        }
+    }
+    g.steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mut on: BTreeSet<usize> =
+                s.deps.iter().copied().filter(|&d| d < g.steps.len() && d != i).collect();
+            for input in &s.inputs {
+                match producer.get(input.as_path()) {
+                    Some(&p) if p != i => {
+                        on.insert(p);
+                    }
+                    _ => {}
+                }
+            }
+            on.into_iter().collect()
+        })
+        .collect()
 }
 
 fn run_step(g: &BuildGraph, step: &Step) -> Result<(), Failure> {
@@ -244,6 +407,62 @@ mod tests {
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch");
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn step(id: usize, inputs: &[&str], outputs: &[&str], deps: Vec<usize>) -> Step {
+        Step {
+            id,
+            kind: ActionKind::Compile,
+            target: "p:t".into(),
+            description: format!("step {id}"),
+            program: "true".into(),
+            arguments: vec![],
+            inputs: inputs.iter().map(PathBuf::from).collect(),
+            outputs: outputs.iter().map(PathBuf::from).collect(),
+            depfile: None,
+            deps,
+            cwd: None,
+        }
+    }
+
+    fn graph_of(steps: Vec<Step>) -> BuildGraph {
+        BuildGraph {
+            build_dir: PathBuf::from("/b"),
+            steps,
+            artifacts: vec![],
+            deps: Deps::Depfile,
+            default_outputs: vec![],
+            tool_stamps: vec![],
+        }
+    }
+
+    #[test]
+    fn a_step_waits_for_the_one_that_writes_its_input() {
+        // 宣言された辺が無くても、入力を作る側は前提である。同時に走らせる
+        // 以上、片方にしか現れない順序は競合になる（ADR-0056）。
+        let g = graph_of(vec![
+            step(0, &["/s/a.c"], &["/b/a.o"], vec![]),
+            step(1, &["/b/a.o"], &["/b/app"], vec![]),
+        ]);
+        assert_eq!(dependencies(&g), vec![Vec::<usize>::new(), vec![0]]);
+    }
+
+    #[test]
+    fn a_declared_edge_counts_even_when_no_file_connects_the_steps() {
+        // 生成された頭部を読む翻訳のように、出力を読まない前提もある。
+        let g = graph_of(vec![
+            step(0, &[], &["/b/gen/x.h"], vec![]),
+            step(1, &["/s/b.c"], &["/b/b.o"], vec![0]),
+        ]);
+        assert_eq!(dependencies(&g), vec![Vec::<usize>::new(), vec![0]]);
+    }
+
+    #[test]
+    fn a_step_does_not_wait_for_itself_or_for_a_step_that_is_not_there() {
+        // 自分の出力を読み直すステップと、範囲外を指す `deps`。どちらも
+        // そのまま数えると前提が永久に減らず、走らせる側が止まる。
+        let g = graph_of(vec![step(0, &["/b/a.o"], &["/b/a.o"], vec![0, 7])]);
+        assert_eq!(dependencies(&g), vec![Vec::<usize>::new()]);
     }
 
     #[test]
