@@ -11,9 +11,9 @@
 
 use crate::action::ActionKind;
 use crate::backend::{Backend, BuildGraph, Step};
-use crate::exec::{CommandLog, Failure};
+use crate::exec::{progress, CommandLog, Failure};
 use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
-use dowel_support::{log_debug, log_info, log_trace};
+use dowel_support::{log_debug, log_trace};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -80,6 +80,7 @@ impl Backend for Direct {
             log_trace!("  running {} outside the schedule (its inputs never settled)", i);
             if execute(g, &previous, &g.steps[i])? {
                 state.ran += 1;
+                progress(&format!("[{}/{}] {}", state.ran, g.steps.len(), g.steps[i].description));
             } else {
                 state.skipped += 1;
             }
@@ -140,7 +141,13 @@ fn worker(
         state.running -= 1;
         state.done[i] = true;
         match result {
-            Ok(true) => state.ran += 1,
+            Ok(true) => {
+                state.ran += 1;
+                // 番号を振るのは終わったときである。始めたときに振ると、
+                // 同時に走っている分だけ番号が飛び飛びに現れる。錠を持った
+                // まま書くので、番号の順と行の順が食い違うこともない。
+                progress(&format!("[{}/{}] {}", state.ran, g.steps.len(), g.steps[i].description));
+            }
             Ok(false) => state.skipped += 1,
             Err(e) => {
                 if state.failure.is_none() {
@@ -219,7 +226,6 @@ fn run_step(g: &BuildGraph, step: &Step) -> Result<(), Failure> {
             let _ = std::fs::create_dir_all(parent);
         }
     }
-    log_info!("{}", step.description);
     log_debug!("  {}", step.command_line());
 
     let mut cmd = Command::new(&step.program);

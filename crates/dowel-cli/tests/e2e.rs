@@ -7,6 +7,8 @@
 
 mod common;
 
+use std::io::BufRead;
+
 use common::{build_dir, run_artifact, Project};
 
 /// libfoo（静的ライブラリ）と app（実行ファイル）の2パッケージ。
@@ -143,6 +145,112 @@ fn a_generation_still_precedes_the_compiles_when_jobs_run_in_parallel() {
 
     p.run(".", &["build", "--backend=direct", "--jobs=8"]).success();
     assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "5 5\n");
+}
+
+/// どのバックエンドで組んでも、走ったステップが1行ずつ見える
+/// （[ADR-0057](../../../docs/adr/0057-progress-is-shown-while-it-runs.md)）。
+///
+/// direct は `log_info!` で述べていた——既定のログ水準は `warn` なので、
+/// 誰にも届いていなかった。ninja が居ない機械ではそこが既定である。
+#[test]
+fn every_backend_that_builds_shows_one_line_per_step() {
+    for backend in ["ninja", "direct", "make"] {
+        if backend != "direct" && !program_exists(backend) {
+            eprintln!("skipping {backend}: it is not on PATH");
+            continue;
+        }
+        let p = two_package_project(&format!("progress-{backend}"));
+        // ログ水準は既定のまま。見えるかどうかがここの検査対象である。
+        let r = p.run("app", &["build", &format!("--backend={backend}")]);
+        r.success();
+        assert!(r.stderr.contains("CC "), "{backend} showed no compile\n{r}");
+        assert!(r.stderr.contains("LINK "), "{backend} showed no link\n{r}");
+        // 走らせる側が段数を持つなら、それも見える。
+        if backend != "make" {
+            assert!(r.stderr.contains("[1/"), "{backend} showed no count\n{r}");
+        }
+    }
+}
+
+/// 黙らせる術は1つだけである（ADR-0057）。
+#[test]
+fn only_the_off_level_silences_progress() {
+    let p = two_package_project("progress-off");
+    let r = p.run("app", &["build", "--backend=direct", "--log-level=off"]);
+    r.success();
+    assert!(!r.stderr.contains("CC "), "`off` still showed progress\n{r}");
+}
+
+/// 進捗は走っている**間**に出る。溜めてから出していた頃は、1.3 秒のビルドの
+/// 11 行が最後の 19ms に固まって現れた
+/// （[ADR-0057](../../../docs/adr/0057-progress-is-shown-while-it-runs.md)）。
+///
+/// 速い生成と遅い生成を **2本並べて**走らせ、速い方の行が遅い方の眠りの間に
+/// 届くことを見る。「終わる前に届いた」では足りない——溜めてから出す実装でも、
+/// 出すのは終了の直前だからである。
+#[test]
+fn progress_appears_while_the_build_is_still_running() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    // 遅い方が眠る長さ。1行目はこれより前に来なければならない。
+    const SLOW: std::time::Duration = std::time::Duration::from_secs(3);
+
+    for backend in ["direct", "ninja", "make"] {
+        if backend != "direct" && !program_exists(backend) {
+            eprintln!("skipping {backend}: it is not on PATH");
+            continue;
+        }
+        let p = Project::new(&format!("progress-live-{backend}"));
+        p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+        p.write(
+            "dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+             [bin.app.generate]\n\
+             quick = { command = \"sh\", args = [file(\"quick.sh\")], outputs = [\"a.c\"] }\n\
+             slow = { command = \"sh\", args = [file(\"slow.sh\")], outputs = [\"b.c\"] }\n",
+        );
+        p.write("quick.sh", "printf 'int a(void){return 1;}\\n' > a.c\n");
+        p.write("slow.sh", "sleep 3\nprintf 'int b(void){return 2;}\\n' > b.c\n");
+        p.write("src/main.c", "int a(void);\nint b(void);\nint main(void){return a()+b()-3;}\n");
+
+        // 2本で走らせる。どちらを先に選ぶかは走らせる側の裁量であり、
+        // 1本にすると ninja と make で順序を仮定することになる。
+        let start = std::time::Instant::now();
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_dowel"))
+            .args(["build", &format!("--backend={backend}"), "--jobs=2"])
+            .current_dir(&p.root)
+            .env_remove("DOWEL_LOG")
+            .env_remove("DOWEL_CACHE")
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("cannot start dowel");
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let mut lines = std::io::BufReader::new(stderr).lines();
+        let first = lines
+            .by_ref()
+            .map_while(Result::ok)
+            .find(|l| l.contains("GEN "))
+            .unwrap_or_else(|| panic!("{backend} wrote no progress line"));
+        let at_first = start.elapsed();
+        // 残りは読み切る。読み手が居なくなると子は stderr に書けなくなる。
+        for _ in lines.by_ref().map_while(Result::ok) {}
+        let status = child.wait().expect("cannot wait for dowel");
+        let total = start.elapsed();
+
+        assert!(status.success(), "the {backend} build failed");
+        assert!(
+            total >= SLOW,
+            "{backend}: the slow generation did not run; this proves nothing ({total:?})"
+        );
+        assert!(
+            at_first < SLOW,
+            "{backend}: the first progress line ({first}) arrived after {at_first:?}, \
+             with the slow step sleeping {SLOW:?} — it was buffered, not live"
+        );
+    }
 }
 
 #[test]
