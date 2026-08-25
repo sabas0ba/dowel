@@ -893,6 +893,11 @@ changes, only the speed.
   separator` at a line of a file dowel had generated. Both now check before
   writing anything and name the character, the step, and `--backend=direct`,
   which passes `argv` to the program and has no such limit
+  - The diagnostic names the fix, because most of the time this is a typo:
+    the declaration wanted `printf` to receive the two characters `\n` and
+    expand them itself, and the manifest's string escape turned them into the
+    character first. Spelled `\\n`, the same declaration builds under all
+    three backends
 - `make` has limits ninja does not: it cannot name a path containing
   whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, or `]`. The
   backend refuses such a build, naming the path, instead of writing a
@@ -1356,16 +1361,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (765 tests):
+Current breakdown (768 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 373 |
+| `unit-*` | per-crate unit tests | 375 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 291 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 292 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

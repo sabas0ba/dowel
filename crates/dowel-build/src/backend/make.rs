@@ -8,7 +8,7 @@
 //! 限られ、空白を含むパスは表現できない。書けないものを書いて黙って別のものを
 //! ビルドするより、そのパスを名指して断る。
 
-use crate::action::{breaks_the_line, show_char, ActionKind};
+use crate::action::{breaks_the_line, cannot_spell, ActionKind};
 use crate::backend::{Backend, BuildGraph, Step};
 use crate::exec::{drive, Failure};
 use dowel_support::log_debug;
@@ -113,12 +113,7 @@ fn rule(g: &BuildGraph, step: &Step) -> Result<String, Failure> {
         return Err(Failure::of(
             "generating the makefile",
             line.clone(),
-            format!(
-                "make cannot spell {} inside a recipe, and `{}` contains one. \
-                 `--backend=direct` runs the command without a shell",
-                show_char(c),
-                step.description
-            ),
+            cannot_spell("make", "a recipe", c, &step.description),
         ));
     }
     let target = path(&step.outputs[0])?;

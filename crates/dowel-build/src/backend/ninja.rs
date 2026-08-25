@@ -4,7 +4,7 @@
 //! ninja の変数展開に分散させず、1箇所（`Step::command_line`）に閉じるためである。
 //! ninja 側の引用規則と自前の引用規則が二重に効く事故を避ける。
 
-use crate::action::{breaks_the_line, show_char, ActionKind};
+use crate::action::{breaks_the_line, cannot_spell, ActionKind};
 use crate::backend::{Backend, BuildGraph};
 use crate::exec::{drive, Failure};
 use crate::toolstyle::{Deps, SHOW_INCLUDES_PREFIX};
@@ -169,12 +169,7 @@ fn spellable(step: &crate::backend::Step) -> Result<(), Failure> {
         return Err(Failure::of(
             "generating the ninja file",
             step.command_line(),
-            format!(
-                "ninja cannot spell {} inside a build edge, and `{}` contains one. \
-                 `--backend=direct` runs the command without a shell",
-                show_char(c),
-                step.description
-            ),
+            cannot_spell("ninja", "a build edge", c, &step.description),
         ));
     }
     Ok(())

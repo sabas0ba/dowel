@@ -207,7 +207,10 @@ change what gets built.
 Neither `ninja` nor `make` can put a **line terminator** inside a command —
 both spell one step as one line — and both refuse such a step rather than
 rewriting it ([ADR-0058](adr/0058-a-command-a-backend-cannot-spell.md)).
-`direct` passes `argv` to the program and has no such limit.
+`direct` passes `argv` to the program and has no such limit. Usually the fix
+is in the manifest: `"printf 'a\nb'"` puts a real newline in the argument,
+while `"printf 'a\\nb'"` passes the two characters `\n` for `printf` to
+expand, which every backend can spell. The diagnostic says so.
 
 `--executor`, the previous spelling, is refused with a message naming
 `--backend`: the set of values it takes has changed.

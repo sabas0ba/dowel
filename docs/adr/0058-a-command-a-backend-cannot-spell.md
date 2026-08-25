@@ -46,11 +46,18 @@ backend has to produce a single line: the command, the step's description,
 and the paths in a build edge. ninja and make both check before writing
 anything; a half-written build file would leave the previous one broken.
 
-The message names the character, the step, and the way out:
+**The message names the fix, because most of the time this is a typo.** The
+declaration above does not want a newline at all: it wants `printf` to
+receive the two characters `\` and `n` and produce the newline itself. The
+manifest's string escape turned `\n` into the character before `printf` ever
+saw it. Spelled `\\n`, the same declaration builds under all three backends
+and writes the same file:
 
 ```
 ninja cannot spell a newline inside a build edge, and `GEN generated/app/app/g`
-contains one. `--backend=direct` runs the command without a shell
+contains one. if the program is meant to receive the two characters `\n`,
+write `\\n` — the manifest turns `\n` into the character itself.
+`--backend=direct` runs the command without a shell
 ```
 
 `--backend=direct` rather than `--backend=ninja`: unlike make's path limits,
@@ -66,10 +73,17 @@ file that fails loudly instead.
 ## Consequences
 
 - A project that needs a newline inside a command builds under `direct` and
-  not under ninja or make. That is a real restriction, and it is the honest
-  one: the alternative was building something else. Writing the script to a
-  file and running `sh script.sh` avoids it entirely, which is what the
-  repository's own tests do.
+  not under ninja or make. Measured against the cases that actually arise,
+  this is narrow: every tool that takes a `\n` escape — `printf`, `sed`,
+  `awk`, `echo -e` — is spelled `\\n` and works everywhere, and that spelling
+  is what the diagnostic points at. Writing the script to a file and running
+  `sh script.sh` avoids it entirely, which is what the repository's own tests
+  do.
+- If a case does turn up that genuinely needs a newline in an argument, the
+  shape of the answer is to stop building a shell line for it: write the
+  `argv` beside the build file and have the step launch it directly, the way
+  `direct` already does. That is machinery, and it is not written for a case
+  no one has hit — but it is the direction, not a wider escape.
 - `build-graph.json` carries such a command without trouble — JSON strings
   hold newlines, and `arguments` is already an array a reader must not
   re-split. A reader that joins the array into a shell line inherits this
