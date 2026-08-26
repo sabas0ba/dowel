@@ -138,7 +138,9 @@ pub fn cannot_spell(who: &str, place: &str, c: char, description: &str) -> Strin
              write `\\{escape}` — the manifest turns `{escape}` into the character itself"
         ));
     }
-    reason.push_str(". `--backend=direct` runs the command without a shell");
+    // 逃げ道は1つしかない。direct は自分で走らせるので、1行に綴る場所が
+    // そもそも無い——命令の中の改行にも、パスの中の改行にも当てはまる。
+    reason.push_str(". `--backend=direct` runs the steps itself, with nothing spelled on one line");
     reason
 }
 

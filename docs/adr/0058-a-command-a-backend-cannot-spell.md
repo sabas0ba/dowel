@@ -66,7 +66,11 @@ write `\\n` — the manifest turns `\n` into the character itself.
 
 `--backend=direct` rather than `--backend=ninja`: unlike make's path limits,
 this one is not a limit only make has. Both shell-line backends have it and
-only the one that execs `argv` does not.
+only the one that execs `argv` does not. That distinction has to be kept in
+make's *existing* path check too: it classified a newline as whitespace and
+sent the reader to ninja, which now refuses the same path — advice that ends
+in a second refusal is worse than none. A path that make cannot name for its
+own reasons still points at ninja.
 
 **The silent rewrite is removed, not kept as a fallback.** ninja's `value`
 now escapes `$` and nothing else. Leaving the newline replacement in place

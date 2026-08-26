@@ -165,23 +165,34 @@ fn paths(ps: &[PathBuf]) -> Result<Vec<String>, Failure> {
 }
 
 /// ターゲット・前提条件の位置に書けるパスか。書けなければ、その文字を名指す。
+///
+/// 逃げ道は制約の広さで決まる。空白や `:` は make だけが綴れないので ninja を
+/// 勧めてよいが、行を終わらせる文字は ninja も綴れない
+/// （[ADR-0058](../../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+/// そこで ninja を勧めると、勧めた先でもう一度断られる。
 fn path(p: &Path) -> Result<String, Failure> {
     let s = p.display().to_string();
-    let bad = s.chars().find(|c| c.is_whitespace() || FORBIDDEN.contains(c));
-    match bad {
-        None => Ok(s),
-        Some(c) => {
-            let shown = if c.is_whitespace() { "whitespace".to_string() } else { format!("`{c}`") };
-            Err(Failure::of(
-                "generating the makefile",
-                s.clone(),
-                format!(
-                    "make cannot name a path containing {shown}: {s}. \
-                     `--backend=ninja` builds this project"
-                ),
-            ))
-        }
+    let Some(c) = s.chars().find(|c| c.is_whitespace() || FORBIDDEN.contains(c)) else {
+        return Ok(s);
+    };
+    // 名指すのは行を終わらせた文字そのものである。空白が先に見つかっていても、
+    // 逃げ道を決めているのはこちらの方である。
+    if let Some(terminator) = breaks_the_line(&s) {
+        return Err(Failure::of(
+            "generating the makefile",
+            s.clone(),
+            cannot_spell("make", "a path", terminator, &s),
+        ));
     }
+    let shown = if c.is_whitespace() { "whitespace".to_string() } else { format!("`{c}`") };
+    Err(Failure::of(
+        "generating the makefile",
+        s.clone(),
+        format!(
+            "make cannot name a path containing {shown}: {s}. \
+             `--backend=ninja` builds this project"
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -227,6 +238,26 @@ mod tests {
         let text = format!("{e}");
         assert!(text.contains("newline"), "{text}");
         assert!(text.contains("--backend=direct"), "{text}");
+    }
+
+    #[test]
+    fn a_path_with_a_newline_sends_the_user_somewhere_that_works() {
+        // 改行を含むパスは ninja も断る（ADR-0058）。`--backend=ninja` を
+        // 勧めると、勧めた先でもう一度断られる。
+        let e = path(Path::new("/b/a\n.o")).expect_err("a newline is not nameable");
+        let text = format!("{e}");
+        assert!(text.contains("newline"), "{text}");
+        assert!(text.contains("--backend=direct"), "{text}");
+        assert!(!text.contains("--backend=ninja"), "{text}");
+    }
+
+    #[test]
+    fn a_path_with_a_space_still_points_at_ninja() {
+        // ninja は空白を綴れる。行を終わらせない制約は make だけのもので
+        // あり、そちらの案内は変えない。
+        let e = path(Path::new("/b/a b.o")).expect_err("a space is not nameable");
+        let text = format!("{e}");
+        assert!(text.contains("--backend=ninja"), "{text}");
     }
 
     #[test]

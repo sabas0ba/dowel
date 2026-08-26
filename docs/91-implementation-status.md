@@ -893,6 +893,11 @@ changes, only the speed.
   separator` at a line of a file dowel had generated. Both now check before
   writing anything and name the character, the step, and `--backend=direct`,
   which passes `argv` to the program and has no such limit
+  - make's own path check had to learn the difference too: it called a
+    newline "whitespace" and sent the reader to ninja, which now refuses the
+    same path. Advice that ends in a second refusal is worse than none, so a
+    line terminator points at `direct` while make's other path limits still
+    point at ninja
   - The check covers everything a backend writes as one line, not only the
     command: ninja's `depfile = <path>` and `default <paths>` sit outside the
     build edge, and make puts the step's description inside its `printf`
@@ -1365,12 +1370,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (771 tests):
+Current breakdown (773 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 378 |
+| `unit-*` | per-crate unit tests | 380 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
