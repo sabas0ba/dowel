@@ -149,6 +149,17 @@ pub fn generate(g: &BuildGraph) -> Result<String, Failure> {
     // 既定のターゲットは要求されたものの成果物と、計画に載った全ターゲットの
     // 派生。派生は誰の入力にもならないため、ここに並べなければ ninja からは
     // 到達せず、`artifacts` に書いた `.bin` が作られない（issue #60 / #64）。
+    // 既定のターゲットは辺の外に在る。ステップを1つずつ見るだけでは届かない。
+    for out in &g.default_outputs {
+        let shown = out.display().to_string();
+        if let Some(c) = breaks_the_line(&shown) {
+            return Err(Failure::of(
+                "generating the ninja file",
+                shown.clone(),
+                cannot_spell("ninja", "a default target", c, &shown),
+            ));
+        }
+    }
     let defaults: Vec<String> =
         g.default_outputs.iter().map(|p| path(&p.display().to_string())).collect();
     if !defaults.is_empty() {
@@ -162,8 +173,17 @@ pub fn generate(g: &BuildGraph) -> Result<String, Failure> {
 /// 落とせないものを黙って書き換えない。かつては命令の中の改行を空白に
 /// 置き換えており、`printf '#define A 1\n#define B 2\n'` はマクロ1つ分の
 /// 行を書いた——ビルドは成功し、出来上がったものだけが違った。
+///
+/// 見るのは**1行として書き出すものすべて**である。命令だけ、あるいは入出力
+/// だけを見ると、見ていない欄を通って同じ壊れ方が戻る——`depfile` は
+/// `depfile = <path>` という1行であり、辺の中には現れない。
 fn spellable(step: &crate::backend::Step) -> Result<(), Failure> {
-    let paths = step.inputs.iter().chain(&step.outputs).map(|p| p.display().to_string());
+    let paths = step
+        .inputs
+        .iter()
+        .chain(&step.outputs)
+        .chain(&step.depfile)
+        .map(|p| p.display().to_string());
     for text in [step.command_line(), step.description.clone()].into_iter().chain(paths) {
         let Some(c) = breaks_the_line(&text) else { continue };
         return Err(Failure::of(
@@ -257,6 +277,26 @@ mod tests {
         let text = format!("{e}");
         assert!(text.contains("newline"), "{text}");
         assert!(text.contains("--backend=direct"), "{text}");
+    }
+
+    #[test]
+    fn a_depfile_with_a_newline_is_refused() {
+        // `depfile = <path>` も1行である。ステップの入出力だけを見ていると
+        // ここを素通りし、壊れた ninja ファイルを書いてしまう。
+        let mut st = step(0, &["/s/a.c"], &["/b/a.o"], vec![]);
+        st.depfile = Some(PathBuf::from("/b/a\n.o.d"));
+        let e = generate(&graph_of(vec![st])).expect_err("a newline is not spellable");
+        assert!(format!("{e}").contains("newline"), "{e}");
+    }
+
+    #[test]
+    fn a_default_target_with_a_newline_is_refused() {
+        // `default <paths>` も1行である。辺の外に在るので、ステップを1つずつ
+        // 見るだけでは届かない。
+        let mut g = graph_of(vec![step(0, &["/s/a.c"], &["/b/a.o"], vec![])]);
+        g.default_outputs = vec![PathBuf::from("/b/a\npp")];
+        let e = generate(&g).expect_err("a newline is not spellable");
+        assert!(format!("{e}").contains("newline"), "{e}");
     }
 
     #[test]

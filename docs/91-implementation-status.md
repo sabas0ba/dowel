@@ -893,6 +893,10 @@ changes, only the speed.
   separator` at a line of a file dowel had generated. Both now check before
   writing anything and name the character, the step, and `--backend=direct`,
   which passes `argv` to the program and has no such limit
+  - The check covers everything a backend writes as one line, not only the
+    command: ninja's `depfile = <path>` and `default <paths>` sit outside the
+    build edge, and make puts the step's description inside its `printf`
+    recipe. Getting that list wrong is the same defect one field over
   - The diagnostic names the fix, because most of the time this is a typo:
     the declaration wanted `printf` to receive the two characters `\n` and
     expand them itself, and the manifest's string escape turned them into the
@@ -1361,12 +1365,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (768 tests):
+Current breakdown (771 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 375 |
+| `unit-*` | per-crate unit tests | 378 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |

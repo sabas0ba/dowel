@@ -108,8 +108,11 @@ fn rule(g: &BuildGraph, step: &Step) -> Result<String, Failure> {
     // とって別の行になり、`missing separator` で止まる——生成した Makefile の
     // 行番号を指す言葉であり、マニフェストのどこが原因かは読み取れない
     // （[ADR-0058](../../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+    // 説明もレシピの1行に入る（`@printf \'%s\\n\' \'<説明>\'`）。命令だけを
+    // 見ると、説明を通って同じ `missing separator` が戻る。
     let line = step.command_line();
-    if let Some(c) = breaks_the_line(&line) {
+    for text in [&line, &step.description] {
+        let Some(c) = breaks_the_line(text) else { continue };
         return Err(Failure::of(
             "generating the makefile",
             line.clone(),
@@ -224,6 +227,17 @@ mod tests {
         let text = format!("{e}");
         assert!(text.contains("newline"), "{text}");
         assert!(text.contains("--backend=direct"), "{text}");
+    }
+
+    #[test]
+    fn a_description_with_a_newline_is_refused() {
+        // 説明は `@printf '%s\n' '<説明>'` に入る。命令だけを見ていると
+        // ここを素通りし、レシピが2行に割れる——この変更が防ごうとしている
+        // `missing separator` そのものになる。
+        let mut st = step(ActionKind::Compile, "/b/a.o", &["/s/a.c"]);
+        st.description = "CC a\n.o".into();
+        let e = generate(&graph(vec![st])).expect_err("a newline is not spellable");
+        assert!(format!("{e}").contains("newline"), "{e}");
     }
 
     #[test]

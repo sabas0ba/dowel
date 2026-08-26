@@ -41,10 +41,14 @@ covered paths and stopped there.
 **A backend that cannot spell a command refuses the build and names what it
 cannot spell.** It never rewrites the command into one it can spell.
 
-The unspellable thing here is a line terminator — `\n` or `\r` — anywhere the
-backend has to produce a single line: the command, the step's description,
-and the paths in a build edge. ninja and make both check before writing
-anything; a half-written build file would leave the previous one broken.
+The unspellable thing here is a line terminator — `\n` or `\r` — **anywhere
+the backend writes a single line**, not only in the command. Getting that
+list wrong is the same defect one field over: ninja writes `depfile = <path>`
+and `default <paths>` outside the build edge, and make puts the step's
+description inside its `printf` recipe. Each is checked where it is written;
+make's existing path check already refuses whitespace, which covers its
+paths. Both backends check before writing anything — a half-written build
+file would leave the previous one broken.
 
 **The message names the fix, because most of the time this is a typo.** The
 declaration above does not want a newline at all: it wants `printf` to
