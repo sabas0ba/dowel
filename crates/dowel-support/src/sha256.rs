@@ -65,14 +65,12 @@ impl Sha256 {
             self.compress(&block);
             self.buf_len = 0;
         }
-        // 揃っている分は写さずに畳む。
-        let mut chunks = data.chunks_exact(64);
-        for block in &mut chunks {
-            let mut b = [0u8; 64];
-            b.copy_from_slice(block);
-            self.compress(&b);
+        // 揃っている分は写さずに畳む。`as_chunks` が返すのは配列そのものなので、
+        // 一時の `[u8; 64]` へ写す手間も要らない。
+        let (blocks, rest) = data.as_chunks::<64>();
+        for block in blocks {
+            self.compress(block);
         }
-        let rest = chunks.remainder();
         self.buf[..rest.len()].copy_from_slice(rest);
         self.buf_len = rest.len();
     }
