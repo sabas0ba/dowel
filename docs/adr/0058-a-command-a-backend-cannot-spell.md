@@ -98,7 +98,13 @@ file that fails loudly instead.
   problem; [14-build-graph.md](../14-build-graph.md) already tells it not to.
 - The check is per line terminator, not per "control character". A tab or an
   escape inside a command is spellable by both backends and is left alone;
-  refusing more than is broken would reject working builds.
+  refusing more than is broken would reject working builds. The same cut
+  applies to fields a backend does not always write: ninja emits
+  `depfile = <path>` only for a compile step under the depfile style
+  ([ADR-0027](0027-toolchain-style.md)), so the check consults the depfile
+  only then — and both sides read one predicate, because a check and an
+  emission that each carry their own copy of the condition drift into
+  refusing what is never written, or writing what was never checked.
 - Nothing checks descriptions or paths for the *other* things a backend
   cannot name — make's existing path check is still make's own, and ninja
   still escapes spaces and `:` in paths rather than refusing them. This

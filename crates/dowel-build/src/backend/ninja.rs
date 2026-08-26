@@ -92,7 +92,7 @@ pub fn generate(g: &BuildGraph) -> Result<String, Failure> {
     out.push_str("  description = $desc\n\n");
 
     for step in &g.steps {
-        spellable(step)?;
+        spellable(step, g.deps)?;
         let outputs: Vec<String> =
             step.outputs.iter().map(|p| path(&p.display().to_string())).collect();
         let inputs: Vec<String> =
@@ -132,7 +132,7 @@ pub fn generate(g: &BuildGraph) -> Result<String, Failure> {
         out.push('\n');
         out.push_str(&format!("  cmd = {}\n", value(&step.command_line())));
         out.push_str(&format!("  desc = {}\n", value(&step.description)));
-        if step.kind == ActionKind::Compile && g.deps == Deps::Depfile {
+        if writes_depfile(step, g.deps) {
             match &step.depfile {
                 Some(d) => {
                     out.push_str(&format!("  depfile = {}\n", value(&d.display().to_string())))
@@ -168,6 +168,18 @@ pub fn generate(g: &BuildGraph) -> Result<String, Failure> {
     Ok(out)
 }
 
+/// このステップの `depfile` を書き出すか。
+///
+/// 判定は1箇所に置く。書き出す側と綴れるか確かめる側が別々に条件を持つと、
+/// 片方だけが変わったときに「書かない値を弾く」か「弾かない値を書く」の
+/// どちらかになる（[ADR-0058](../../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+///
+/// MSVC の様式では `depfile =` を書かない。記録を書くのは実行する側であり、
+/// ninja には `deps = msvc` と伝える（[ADR-0027](../../../../docs/adr/0027-toolchain-style.md)）。
+fn writes_depfile(step: &crate::backend::Step, deps: Deps) -> bool {
+    step.kind == ActionKind::Compile && deps == Deps::Depfile
+}
+
 /// このステップを ninja の綴りに落とせるか（ADR-0058）。
 ///
 /// 落とせないものを黙って書き換えない。かつては命令の中の改行を空白に
@@ -176,14 +188,12 @@ pub fn generate(g: &BuildGraph) -> Result<String, Failure> {
 ///
 /// 見るのは**1行として書き出すものすべて**である。命令だけ、あるいは入出力
 /// だけを見ると、見ていない欄を通って同じ壊れ方が戻る——`depfile` は
-/// `depfile = <path>` という1行であり、辺の中には現れない。
-fn spellable(step: &crate::backend::Step) -> Result<(), Failure> {
-    let paths = step
-        .inputs
-        .iter()
-        .chain(&step.outputs)
-        .chain(&step.depfile)
-        .map(|p| p.display().to_string());
+/// `depfile = <path>` という1行であり、辺の中には現れない。書き出さない
+/// ときは見ない。壊れている以上に断れば、通るはずのビルドを弾く。
+fn spellable(step: &crate::backend::Step, deps: Deps) -> Result<(), Failure> {
+    let depfile = writes_depfile(step, deps).then_some(step.depfile.as_ref()).flatten();
+    let paths =
+        step.inputs.iter().chain(&step.outputs).chain(depfile).map(|p| p.display().to_string());
     for text in [step.command_line(), step.description.clone()].into_iter().chain(paths) {
         let Some(c) = breaks_the_line(&text) else { continue };
         return Err(Failure::of(
@@ -287,6 +297,18 @@ mod tests {
         st.depfile = Some(PathBuf::from("/b/a\n.o.d"));
         let e = generate(&graph_of(vec![st])).expect_err("a newline is not spellable");
         assert!(format!("{e}").contains("newline"), "{e}");
+    }
+
+    #[test]
+    fn an_unused_depfile_is_not_inspected() {
+        // `/showIncludes` の様式では `depfile =` を書かない（ADR-0027）。
+        // 書かない値を検査すると、通るはずのビルドを弾く。
+        let mut st = step(0, &["/s/a.c"], &["/b/a.o"], vec![]);
+        st.depfile = Some(PathBuf::from("/b/a\n.o.d"));
+        let mut g = graph_of(vec![st]);
+        g.deps = Deps::ShowIncludes;
+        let text = generate(&g).expect("the depfile is never written in this style");
+        assert!(!text.contains("depfile ="), "{text}");
     }
 
     #[test]

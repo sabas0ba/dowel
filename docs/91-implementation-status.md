@@ -898,6 +898,10 @@ changes, only the speed.
     same path. Advice that ends in a second refusal is worse than none, so a
     line terminator points at `direct` while make's other path limits still
     point at ninja
+  - It covers what a backend *writes*, no more: ninja emits `depfile =` only
+    for a compile step under the depfile style, so the check consults the
+    depfile only then, and both sides read one predicate rather than each
+    carrying a copy of the condition
   - The check covers everything a backend writes as one line, not only the
     command: ninja's `depfile = <path>` and `default <paths>` sit outside the
     build edge, and make puts the step's description inside its `printf`
@@ -1370,12 +1374,12 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (773 tests):
+Current breakdown (774 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 380 |
+| `unit-*` | per-crate unit tests | 381 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
