@@ -1202,6 +1202,11 @@ const UNCOVERED: &[(&str, &str)] = &[
         "raised by `dowel install`, for the same reason as `uninstallable-headers`: the case \
          harness cannot spell a `--prefix`. covered by the e2e",
     ),
+    (
+        "unreadable-surface",
+        "raised by `dowel install` after the copy, and needs a `--prefix` the case harness \
+         cannot spell. covered by the e2e",
+    ),
 ];
 
 /// ソースに現れる安定コードを集める。

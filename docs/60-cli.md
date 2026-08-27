@@ -369,6 +369,12 @@ installed: /opt/myapp/lib/libcore.so.2
   same package names it in `Requires`, in link order — a static archive
   cannot carry its own link requirements, so without that a consumer using
   pkg-config alone gets undefined references (issue #156)
+- After the copy, each installed header is **preprocessed against the
+  installed `include/` alone**, the way a consumer would
+  ([ADR-0060](adr/0060-the-surface-is-readable.md)). One that reaches a
+  header which was not installed is `unreadable-surface`, quoting the
+  compiler's own complaint — inside the build tree it compiles, because the
+  private include path is there too, so nothing else would catch it
 - Nothing is rebuilt: what was tested and what is shipped are the same bytes
 
 Installed executables find their libraries **relative to themselves**, so

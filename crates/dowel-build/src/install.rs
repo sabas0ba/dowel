@@ -17,6 +17,20 @@ use dowel_model::{Session, TargetId};
 use dowel_support::Diagnostic;
 use std::path::{Path, PathBuf};
 
+/// `entries` が答えるもの。
+///
+/// 写す一覧だけでは足りない。配った面が読めるかを確かめるのは写した**後**で
+/// あり（[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）、
+/// そのときには「どのヘッダを、どの宣言に従って配ったか」が要る。
+pub struct Entries {
+    pub items: Vec<Item>,
+    pub diagnostics: Vec<Diagnostic>,
+    /// 配ったヘッダ。写し終えてから読めるかを確かめる
+    pub headers: Vec<crate::surface::Header>,
+    /// 使う側が `-I` に載せる場所
+    pub include_root: PathBuf,
+}
+
 /// 入れる先に置く1件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -53,9 +67,10 @@ pub fn entries(
     prefix: &Path,
     destdir: Option<&Path>,
     targets: &[TargetId],
-) -> (Vec<Item>, Vec<Diagnostic>) {
+) -> Entries {
     let mut items: Vec<Item> = Vec::new();
     let mut diags = Vec::new();
+    let mut headers_out: Vec<crate::surface::Header> = Vec::new();
     let root = destdir.map(|d| join_prefix(d, prefix)).unwrap_or_else(|| prefix.to_path_buf());
 
     for &tid in targets {
@@ -74,7 +89,15 @@ pub fn entries(
             if plan.shared_libraries.contains(artifact) {
                 alias_of(cfg, &target.name, artifact, &root.join("lib"), &mut items);
             }
-            headers(sess, tid, cfg, &root.join("include"), &mut items, &mut diags);
+            headers(
+                sess,
+                tid,
+                cfg,
+                &root.join("include"),
+                &mut items,
+                &mut headers_out,
+                &mut diags,
+            );
         }
     }
 
@@ -114,7 +137,7 @@ pub fn entries(
 
     items.sort_by(|a, b| a.destination().cmp(b.destination()));
     items.dedup_by(|a, b| a.destination() == b.destination());
-    (items, diags)
+    Entries { include_root: root.join("include"), items, diagnostics: diags, headers: headers_out }
 }
 
 /// 版付きの共有ライブラリに添える、版を持たない名前（ADR-0040）。
@@ -143,6 +166,7 @@ fn headers(
     cfg: &Config,
     include_dir: &Path,
     items: &mut Vec<Item>,
+    shipped: &mut Vec<crate::surface::Header>,
     diags: &mut Vec<Diagnostic>,
 ) {
     for (dir, site) in crate::plan::public_include_dirs(sess, tid, cfg) {
@@ -163,7 +187,11 @@ fn headers(
         report_sources_among_headers(&dir, &files, site, diags);
         for file in &files {
             let Ok(rel) = file.strip_prefix(&dir) else { continue };
-            items.push(Item::Copy { from: file.clone(), to: include_dir.join(rel) });
+            let to = include_dir.join(rel);
+            // 配った面は、配ったものだけで読めなければならない（ADR-0060）。
+            // 直す先は、それを配ると決めたこの宣言である。
+            shipped.push(crate::surface::Header { at: to.clone(), site });
+            items.push(Item::Copy { from: file.clone(), to });
         }
     }
 }

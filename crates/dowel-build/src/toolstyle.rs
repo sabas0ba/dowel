@@ -392,6 +392,40 @@ pub fn link_shared(
 /// 出来上がった共有ライブラリに「何を書き出したか」を聞く引数
 /// （[ADR-0039](../../../docs/adr/0039-exports-are-checked.md)）。
 ///
+/// 前処理だけ行う綴り（[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+///
+/// 翻訳はしない。確かめたいのは「読めるか」——`#include` が届くか——であり、
+/// 型の整合は別の問いである。出力は捨てる。
+pub fn preprocess_only(cfg: &Config, include_dir: &Path, header: &Path) -> Vec<String> {
+    match cfg.style {
+        Style::Gnu => vec![
+            "-E".into(),
+            "-o".into(),
+            devnull(),
+            include(cfg, include_dir),
+            header.display().to_string(),
+        ],
+        // `/E` は標準出力へ出す。`/TC` を付けるのは、`.h` を渡された `cl` が
+        // 綴りから言語を決められないためである。
+        Style::Msvc => vec![
+            "/nologo".into(),
+            "/E".into(),
+            "/TC".into(),
+            include(cfg, include_dir),
+            header.display().to_string(),
+        ],
+    }
+}
+
+/// 捨て場の名前。
+fn devnull() -> String {
+    if cfg!(windows) {
+        "NUL".to_string()
+    } else {
+        "/dev/null".to_string()
+    }
+}
+
 /// 読むのは道具の出力であって、目的ファイルではない。形式の解読は道具の
 /// 側に残る（[ADR-0001](../../../docs/adr/0001-toolchain-vs-supply.md)）。
 pub fn list_exports(cfg: &Config, library: &Path) -> Vec<String> {

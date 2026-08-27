@@ -394,7 +394,7 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
                 return Ok(ExitCode::FAILURE);
             };
             let prefix = opts.prefix.clone().ok_or("`install` needs `--prefix=<dir>`")?;
-            let (items, diags) = dowel_build::install::entries(
+            let entries = dowel_build::install::entries(
                 &sess,
                 &p,
                 &g,
@@ -403,14 +403,24 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
                 opts.destdir.as_deref(),
                 &requested,
             );
-            if !diags.is_empty() {
-                sess.diagnostics.extend(diags);
+            if !entries.diagnostics.is_empty() {
+                sess.diagnostics.extend(entries.diagnostics.clone());
                 if report(&sess, opts) {
                     return Ok(ExitCode::FAILURE);
                 }
             }
-            dowel_build::install::perform(&items)?;
-            for item in &items {
+            dowel_build::install::perform(&entries.items)?;
+            // 配った面が読めるかは、写し終えてからでなければ確かめられない
+            // （ADR-0060）。`exports` の突き合わせと同じ位置である。
+            let surface =
+                dowel_build::surface::check(&entries.headers, &entries.include_root, &cfg);
+            if !surface.is_empty() {
+                sess.diagnostics.extend(surface);
+                if report(&sess, opts) {
+                    return Ok(ExitCode::FAILURE);
+                }
+            }
+            for item in &entries.items {
                 eprintln!("installed: {}", item.destination().display());
             }
             Ok(ExitCode::SUCCESS)
