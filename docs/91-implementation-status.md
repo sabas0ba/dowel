@@ -536,6 +536,16 @@ changes, only the speed.
     `public.includes` into `include/`. `test` and `bench` are not
     installed. Nothing is rebuilt, so what was tested and what ships are
     the same bytes.
+    - The include directory goes **whole and unfiltered**, because that is
+      what the declaration says a consumer compiles against. When it also
+      holds files dowel compiles, that is `source-among-headers`, pointing
+      at the declaration ([ADR-0059](adr/0059-an-interface-directory-holds-the-interface.md)).
+      Measured: `includes = [dir("src")]` shipped `core.c` and a *binary's*
+      `main.c` into the `include/` that `pkg-config --cflags` names.
+      Filtering by extension would break a single-file library that
+      `#include`s a `.c`, so dowel says it rather than guessing — and
+      recognising a source is not a guess, since that question is closed
+      (ADR-0051) and answered by the one predicate the compiler side uses
     - The obstacle was the run-time search path: an absolute path into the
       build tree keeps working while that tree exists, so the breakage
       appears at the receiver. Every artifact linking a shared library now
@@ -1374,7 +1384,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (774 tests):
+Current breakdown (776 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1383,7 +1393,7 @@ Current breakdown (774 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 292 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 294 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

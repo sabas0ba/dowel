@@ -1910,23 +1910,38 @@ impl AbiAgainstBuild {
 ///
 /// 合成済みの翻訳環境ではなく、**自分の `public` ブロック**を読む。前者には
 /// 依存が伝播させたものが混ざっており、それは依存が配るものである。
-pub fn public_include_dirs(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<PathBuf> {
+pub fn public_include_dirs(
+    sess: &Session,
+    tid: TargetId,
+    cfg: &Config,
+) -> Vec<(PathBuf, Option<dowel_eval::Site>)> {
     let target = sess.target(tid);
     let Some(value) = target.public.get("includes") else { return Vec::new() };
     let cfg = cfg.for_package(&sess.package(target.package).name);
     let Some(value) = dowel_eval::specialize(value, &cfg) else { return Vec::new() };
     // 解決できない基準は、翻訳の段で既に診断されている。
     let mut ignored = Vec::new();
-    let mut out = Vec::new();
+    let mut out: Vec<(PathBuf, Option<dowel_eval::Site>)> = Vec::new();
     for item in flatten(&value) {
         let Some(abs) = absolute_path(sess, &item, &cfg, Path::new(""), &mut ignored) else {
             continue;
         };
-        if !out.contains(&abs) {
-            out.push(abs);
+        if !out.iter().any(|(p, _)| *p == abs) {
+            // 書かれた位置も返す。配るものについて述べる診断は、ここを指す
+            // 以外に「どの宣言か」を言う術が無い
+            // （[ADR-0059](../../../docs/adr/0059-an-interface-directory-holds-the-interface.md)）。
+            out.push((abs, item.prov.nearest_site()));
         }
     }
     out
+}
+
+/// dowel が翻訳できる綴りか（[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)）。
+///
+/// 判定はこの1箇所に閉じている。配るものの中身について述べる側も同じ問いを
+/// 使う——「ソースとは何か」を2箇所で答えると、片方だけが増える。
+pub fn is_source(path: &Path) -> bool {
+    language(path).is_some()
 }
 
 /// 版付きの実体の隣に、版を持たない名前を置く

@@ -1197,6 +1197,11 @@ const UNCOVERED: &[(&str, &str)] = &[
         "raised by `dowel install`, whose `--prefix` is a path the case harness cannot spell \
          (its arguments are static). covered by the e2e",
     ),
+    (
+        "source-among-headers",
+        "raised by `dowel install`, for the same reason as `uninstallable-headers`: the case \
+         harness cannot spell a `--prefix`. covered by the e2e",
+    ),
 ];
 
 /// ソースに現れる安定コードを集める。

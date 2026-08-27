@@ -351,7 +351,12 @@ installed: /opt/myapp/lib/libcore.so.2
   targets overrides that default
 - A library brings the contents of its own `public.includes` directories
   under `include/`. That block is the declaration that says a consumer
-  compiles against those directories
+  compiles against those directories. The directory goes whole and
+  unfiltered; when it also holds files dowel compiles, that is
+  `source-among-headers`, pointing at the declaration
+  ([ADR-0059](adr/0059-an-interface-directory-holds-the-interface.md)) —
+  a warning, because a header-only library may `#include` a `.c` and dowel
+  does not guess which files are the interface
 - A versioned shared library brings its unversioned name as a symlink
   ([ADR-0040](adr/0040-shared-library-version.md)), and shared libraries a
   installed executable needs are copied too, including from other packages
