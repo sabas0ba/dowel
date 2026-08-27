@@ -6765,6 +6765,56 @@ fn a_published_include_path_that_is_not_a_directory_is_reported_when_installing(
     assert!(prefix.join("lib/libcore.a").is_file(), "the library is still installed");
 }
 
+/// 配る面の中にソースが在れば述べる。ただし濾さない
+/// （[ADR-0059](../../../docs/adr/0059-an-interface-directory-holds-the-interface.md)）。
+///
+/// `public.includes` がソースと同じディレクトリを指していると、`include/` に
+/// `.c` が並ぶ。`pkg-config --cflags` が指す先がそれである。
+#[test]
+fn sources_shipped_as_the_interface_are_reported_but_not_dropped() {
+    let p = Project::new("install-source-among-headers");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"src\")]\n",
+    );
+    p.write("src/core.h", "int core_open(void);\n");
+    p.write("src/core.c", "int core_open(void) { return 42; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    r.stderr_contains("source-among-headers");
+    r.stderr_contains("core.c");
+    // 宣言を指す。どのディレクトリの話かは、パスだけでは辿れない。
+    r.stderr_contains("includes = [dir(\"src\")]");
+
+    // 述べるだけで、配るものは変えない。一部だけ配ると、`#include \"impl.c\"`
+    // のような書き方をするライブラリが壊れる。
+    assert!(prefix.join("include/core.h").is_file(), "the header is installed");
+    assert!(prefix.join("include/core.c").is_file(), "the source is still installed");
+}
+
+/// ヘッダだけのディレクトリを指していれば、何も言わない。
+#[test]
+fn an_interface_directory_of_headers_is_not_reported() {
+    let p = Project::new("install-headers-only");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("include/core.h", "int core_open(void);\n");
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(void) { return 42; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    assert!(!r.stderr.contains("source-among-headers"), "a clean layout was reported\n{r}");
+}
+
 #[test]
 fn abi_components_constrain_only_where_both_sides_name_them() {
     // 粒度を大域に1つ決めると、粗すぎれば検証が無意味になり、細かすぎれば

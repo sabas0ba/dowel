@@ -65,3 +65,4 @@ was originally written in.
 | [0056](0056-direct-backend-parallelism.md) | The direct backend runs steps concurrently, and every backend orders by both edges and files | Accepted |
 | [0057](0057-progress-is-shown-while-it-runs.md) | Progress is output, shown while the build runs, one line per step | Accepted |
 | [0058](0058-a-command-a-backend-cannot-spell.md) | A command a backend cannot spell is refused, never altered | Accepted |
+| [0059](0059-an-interface-directory-holds-the-interface.md) | A directory shipped as an interface is reported when it holds sources, not filtered | Accepted |

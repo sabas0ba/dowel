@@ -145,25 +145,83 @@ fn headers(
     items: &mut Vec<Item>,
     diags: &mut Vec<Diagnostic>,
 ) {
-    for dir in crate::plan::public_include_dirs(sess, tid, cfg) {
+    for (dir, site) in crate::plan::public_include_dirs(sess, tid, cfg) {
         if !dir.is_dir() {
+            let mut d = Diagnostic::warning(
+                "uninstallable-headers",
+                format!("`{}` is not a directory; its headers are not installed", dir.display()),
+            );
+            if let Some(s) = site {
+                d = d.at(s.file, s.span, "a consumer compiles against this");
+            }
             diags.push(
-                Diagnostic::warning(
-                    "uninstallable-headers",
-                    format!(
-                        "`{}` is not a directory; its headers are not installed",
-                        dir.display()
-                    ),
-                )
-                .note("`public.includes` names the directories a consumer compiles against"),
+                d.note("`public.includes` names the directories a consumer compiles against"),
             );
             continue;
         }
-        for file in files_under(&dir) {
+        let files = files_under(&dir);
+        report_sources_among_headers(&dir, &files, site, diags);
+        for file in &files {
             let Ok(rel) = file.strip_prefix(&dir) else { continue };
             items.push(Item::Copy { from: file.clone(), to: include_dir.join(rel) });
         }
     }
+}
+
+/// 配る面の中に、dowel が翻訳できる綴りのファイルが在れば述べる
+/// （[ADR-0059](../../../docs/adr/0059-an-interface-directory-holds-the-interface.md)）。
+///
+/// **濾さずに述べる。** `public.includes` は「使う側の探索路に載る」と述べた
+/// 宣言であり、ディレクトリごと載る。一部だけ配れば、`#include "impl.c"` の
+/// ような書き方をする単一ファイルのライブラリが壊れる——何を配るかを
+/// 拡張子から決めるのは推測である。
+///
+/// 述べるのは、それが**版図の取り違え**だからである。ヘッダとソースが同じ
+/// ディレクトリに在る構成では、宣言が二役を負う——「翻訳時にどこを探すか」と
+/// 「何を配るか」——ことになり、配られる側からは `include/` に `.c` が並んで
+/// 見える。
+fn report_sources_among_headers(
+    dir: &Path,
+    files: &[PathBuf],
+    site: Option<dowel_eval::Site>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let sources: Vec<String> = files
+        .iter()
+        .filter(|f| crate::plan::is_source(f))
+        .filter_map(|f| f.strip_prefix(dir).ok())
+        .map(|r| r.display().to_string())
+        .collect();
+    if sources.is_empty() {
+        return;
+    }
+    // 宣言1つに1件。ファイルごとに出すと、木の大きさだけ同じことを言う
+    // （issue #158 と同じ判断）。
+    let shown = if sources.len() > 3 {
+        format!("{}, and {} more", sources[..3].join(", "), sources.len() - 3)
+    } else {
+        sources.join(", ")
+    };
+    let mut d = Diagnostic::warning(
+        "source-among-headers",
+        format!(
+            "`{}` holds {} that dowel compiles, and install ships them as the interface",
+            dir.display(),
+            if sources.len() == 1 {
+                "a file".to_string()
+            } else {
+                format!("{} files", sources.len())
+            }
+        ),
+    );
+    if let Some(s) = site {
+        d = d.at(s.file, s.span, "a consumer compiles against this directory");
+    }
+    diags.push(
+        d.note(format!("they land under `include/`: {shown}"))
+            .note("the whole directory is shipped, unfiltered: a header-only library may `#include` a `.c`, and dowel does not guess which files are the interface")
+            .note("put the headers in a directory of their own if that is not what you meant"),
+    );
 }
 
 /// 木の下のファイル。順序を決めておくのは、表示が走るたびに変わらないため。
