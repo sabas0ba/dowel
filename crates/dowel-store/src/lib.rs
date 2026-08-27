@@ -136,7 +136,7 @@ impl Store {
         let mut dropped = 0usize;
         // 端数は切り捨てる。書き込みは rename で差し替えるため通常は生じないが、
         // 外部から切り詰められた場合に備える。
-        for chunk in bytes.chunks_exact(RECORD_SIZE) {
+        for chunk in bytes.as_chunks::<RECORD_SIZE>().0 {
             let r = Record::read_from(chunk);
             // 値ログの外を指すレコードは読めない。捨てて先へ進む。
             if r.offset.saturating_add(r.len as u64) > values_len {

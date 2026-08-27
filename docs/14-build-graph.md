@@ -127,3 +127,11 @@ containing whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, or
 `]`, and the `make` backend refuses such a build, naming the path, instead of
 writing a Makefile that builds something else. `ninja` has no such limit.
 This is a property of the backend, not of the format.
+
+Neither `ninja` nor `make` can spell a **line terminator** inside a command,
+because both put the command on one line; both refuse such a step rather than
+altering it ([ADR-0058](adr/0058-a-command-a-backend-cannot-spell.md)). The
+format itself carries it without trouble — `arguments` is an array of strings,
+and a JSON string holds a newline. A reader that runs `arguments` as `argv`
+has nothing to do; a reader that joins them into a shell line inherits the
+same limit, which is one more reason not to join them.

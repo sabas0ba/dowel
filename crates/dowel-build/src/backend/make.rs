@@ -8,7 +8,7 @@
 //! 限られ、空白を含むパスは表現できない。書けないものを書いて黙って別のものを
 //! ビルドするより、そのパスを名指して断る。
 
-use crate::action::ActionKind;
+use crate::action::{breaks_the_line, cannot_spell, ActionKind};
 use crate::backend::{Backend, BuildGraph, Step};
 use crate::exec::{drive, Failure};
 use dowel_support::log_debug;
@@ -104,6 +104,21 @@ fn rule(g: &BuildGraph, step: &Step) -> Result<String, Failure> {
             ),
         ));
     }
+    // レシピは1行である。行を終わらせる文字が命令に在ると、続きは make に
+    // とって別の行になり、`missing separator` で止まる——生成した Makefile の
+    // 行番号を指す言葉であり、マニフェストのどこが原因かは読み取れない
+    // （[ADR-0058](../../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+    // 説明もレシピの1行に入る（`@printf \'%s\\n\' \'<説明>\'`）。命令だけを
+    // 見ると、説明を通って同じ `missing separator` が戻る。
+    let line = step.command_line();
+    for text in [&line, &step.description] {
+        let Some(c) = breaks_the_line(text) else { continue };
+        return Err(Failure::of(
+            "generating the makefile",
+            line.clone(),
+            cannot_spell("make", "a recipe", c, &step.description),
+        ));
+    }
     let target = path(&step.outputs[0])?;
 
     // 前提条件は入力と、依存ステップの出力。依存の出力は入力に現れるのが
@@ -150,23 +165,34 @@ fn paths(ps: &[PathBuf]) -> Result<Vec<String>, Failure> {
 }
 
 /// ターゲット・前提条件の位置に書けるパスか。書けなければ、その文字を名指す。
+///
+/// 逃げ道は制約の広さで決まる。空白や `:` は make だけが綴れないので ninja を
+/// 勧めてよいが、行を終わらせる文字は ninja も綴れない
+/// （[ADR-0058](../../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+/// そこで ninja を勧めると、勧めた先でもう一度断られる。
 fn path(p: &Path) -> Result<String, Failure> {
     let s = p.display().to_string();
-    let bad = s.chars().find(|c| c.is_whitespace() || FORBIDDEN.contains(c));
-    match bad {
-        None => Ok(s),
-        Some(c) => {
-            let shown = if c.is_whitespace() { "whitespace".to_string() } else { format!("`{c}`") };
-            Err(Failure::of(
-                "generating the makefile",
-                s.clone(),
-                format!(
-                    "make cannot name a path containing {shown}: {s}. \
-                     `--backend=ninja` builds this project"
-                ),
-            ))
-        }
+    let Some(c) = s.chars().find(|c| c.is_whitespace() || FORBIDDEN.contains(c)) else {
+        return Ok(s);
+    };
+    // 名指すのは行を終わらせた文字そのものである。空白が先に見つかっていても、
+    // 逃げ道を決めているのはこちらの方である。
+    if let Some(terminator) = breaks_the_line(&s) {
+        return Err(Failure::of(
+            "generating the makefile",
+            s.clone(),
+            cannot_spell("make", "a path", terminator, &s),
+        ));
     }
+    let shown = if c.is_whitespace() { "whitespace".to_string() } else { format!("`{c}`") };
+    Err(Failure::of(
+        "generating the makefile",
+        s.clone(),
+        format!(
+            "make cannot name a path containing {shown}: {s}. \
+             `--backend=ninja` builds this project"
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -200,6 +226,49 @@ mod tests {
             default_outputs: vec![PathBuf::from("/b/app")],
             tool_stamps: vec![],
         }
+    }
+
+    #[test]
+    fn a_command_with_a_newline_is_refused_before_the_makefile_is_written() {
+        // 書いてしまうと、失敗するのは make であり、その言葉は生成した
+        // Makefile の行番号を指す（ADR-0058）。
+        let mut s = step(ActionKind::Generate, "/b/cfg.h", &[]);
+        s.arguments = vec!["-c".into(), "printf 'a\nb'".into()];
+        let e = generate(&graph(vec![s])).expect_err("a newline is not spellable");
+        let text = format!("{e}");
+        assert!(text.contains("newline"), "{text}");
+        assert!(text.contains("--backend=direct"), "{text}");
+    }
+
+    #[test]
+    fn a_path_with_a_newline_sends_the_user_somewhere_that_works() {
+        // 改行を含むパスは ninja も断る（ADR-0058）。`--backend=ninja` を
+        // 勧めると、勧めた先でもう一度断られる。
+        let e = path(Path::new("/b/a\n.o")).expect_err("a newline is not nameable");
+        let text = format!("{e}");
+        assert!(text.contains("newline"), "{text}");
+        assert!(text.contains("--backend=direct"), "{text}");
+        assert!(!text.contains("--backend=ninja"), "{text}");
+    }
+
+    #[test]
+    fn a_path_with_a_space_still_points_at_ninja() {
+        // ninja は空白を綴れる。行を終わらせない制約は make だけのもので
+        // あり、そちらの案内は変えない。
+        let e = path(Path::new("/b/a b.o")).expect_err("a space is not nameable");
+        let text = format!("{e}");
+        assert!(text.contains("--backend=ninja"), "{text}");
+    }
+
+    #[test]
+    fn a_description_with_a_newline_is_refused() {
+        // 説明は `@printf '%s\n' '<説明>'` に入る。命令だけを見ていると
+        // ここを素通りし、レシピが2行に割れる——この変更が防ごうとしている
+        // `missing separator` そのものになる。
+        let mut st = step(ActionKind::Compile, "/b/a.o", &["/s/a.c"]);
+        st.description = "CC a\n.o".into();
+        let e = generate(&graph(vec![st])).expect_err("a newline is not spellable");
+        assert!(format!("{e}").contains("newline"), "{e}");
     }
 
     #[test]

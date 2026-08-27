@@ -253,6 +253,97 @@ fn progress_appears_while_the_build_is_still_running() {
     }
 }
 
+/// 綴れない命令は断る。黙って別のものを作らない
+/// （[ADR-0058](../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+///
+/// 改行を含む命令は、ninja では改行が空白に置き換わり、`#define` 2つが
+/// 1行に潰れていた。ビルドは成功し、出来上がったものだけが違った。make は
+/// 壊れた Makefile を書き、`missing separator` で止まった。
+#[test]
+fn a_command_a_backend_cannot_spell_is_refused_rather_than_altered() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    let build = "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+                 [bin.app.generate]\n\
+                 g = { command = \"sh\", args = [\"-c\", \"printf '#define A 1\\n#define B 2\\n' > cfg.h\"], \
+                 outputs = [\"cfg.h\"] }\n";
+    let source = "#include <stdio.h>\n#include \"cfg.h\"\n\
+                  int main(void) { printf(\"%d %d\\n\", A, B); return 0; }\n";
+
+    // 走らせる側にシェルが要らない direct は、宣言どおりに走る。
+    let p = Project::new("unspellable-direct");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", build);
+    p.write("src/main.c", source);
+    p.run(".", &["build", "--backend=direct"]).success();
+    assert_eq!(run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")), "1 2\n");
+
+    // シェルの行に落とす側は断る。どの宣言かが言葉に現れること。
+    for backend in ["ninja", "make"] {
+        if !program_exists(backend) {
+            eprintln!("skipping {backend}: it is not on PATH");
+            continue;
+        }
+        let p = Project::new(&format!("unspellable-{backend}"));
+        p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+        p.write("dowel.build", build);
+        p.write("src/main.c", source);
+        let r = p.run(".", &["build", &format!("--backend={backend}")]);
+        r.failure();
+        r.stderr_contains("newline");
+        r.stderr_contains("GEN ");
+        // 直し方まで言う。大半は `\\n` の書き間違いである。
+        r.stderr_contains("write `\\\\n`");
+        r.stderr_contains("--backend=direct");
+        // 断ったのだから、間違ったものが残っていてはならない。
+        assert!(
+            !p.path(".dowel").join("build").exists()
+                || !build_dir(&p.path("."), "debug").join("bin/app").exists(),
+            "{backend} refused but left an artifact"
+        );
+    }
+}
+
+/// `\\n` と綴れば、渡るのは2文字の `\n` であり、どのバックエンドでも通る
+/// （[ADR-0058](../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+///
+/// 断りが指す直し方が、実際に直すことの確認である。
+#[test]
+fn escaping_the_newline_builds_under_every_backend() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    for backend in ["direct", "ninja", "make"] {
+        if backend != "direct" && !program_exists(backend) {
+            eprintln!("skipping {backend}: it is not on PATH");
+            continue;
+        }
+        let p = Project::new(&format!("escaped-newline-{backend}"));
+        p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+        p.write(
+            "dowel.build",
+            "[bin.app]\nsources = glob(\"src/*.c\")\n\n\
+             [bin.app.generate]\n\
+             g = { command = \"sh\", args = [\"-c\", \"printf '#define A 1\\\\n#define B 2\\\\n' > cfg.h\"], \
+             outputs = [\"cfg.h\"] }\n",
+        );
+        p.write(
+            "src/main.c",
+            "#include <stdio.h>\n#include \"cfg.h\"\n\
+             int main(void) { printf(\"%d %d\\n\", A, B); return 0; }\n",
+        );
+        p.run(".", &["build", &format!("--backend={backend}")]).success();
+        assert_eq!(
+            run_artifact(&build_dir(&p.path("."), "debug").join("bin/app")),
+            "1 2\n",
+            "{backend} built something else"
+        );
+    }
+}
+
 #[test]
 fn changing_the_configuration_changes_the_flags() {
     let p = two_package_project("configs");

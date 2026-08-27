@@ -97,6 +97,53 @@ pub fn command_line(command: &[String], cwd: Option<&std::path::Path>) -> String
     }
 }
 
+/// 1行に収まらない綴りを見つける
+/// （[ADR-0058](../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
+///
+/// ninja の変数値も make のレシピ行も**1行**である。行を終わらせる文字が
+/// 命令やパスに含まれていると、綴った先は別の命令になる——ninja は改行を
+/// 空白に置き換えており、`printf '#define A 1\n#define B 2\n'` が
+/// マクロ1つ分の行を書いていた。
+pub fn breaks_the_line(text: &str) -> Option<char> {
+    text.chars().find(|c| *c == '\n' || *c == '\r')
+}
+
+/// 綴れない文字の見せ方。制御文字はそのまま出しても読めない。
+pub fn show_char(c: char) -> String {
+    match c {
+        '\n' => "a newline".to_string(),
+        '\r' => "a carriage return".to_string(),
+        c => format!("`{c}`"),
+    }
+}
+
+/// 綴れないと断るときの言葉（ADR-0058）。
+///
+/// **直し方まで言う。** ここに来る大半は書き間違いである——`printf '...\n'` と
+/// 書いた人が渡したいのは2文字の `\` `n` であって改行ではないのに、文字列の
+/// 解釈が先に改行へ変えてしまう。`\\n` と綴れば `printf` の側が改行にする
+/// ので、どのバックエンドでも通る。
+pub fn cannot_spell(who: &str, place: &str, c: char, description: &str) -> String {
+    let mut reason = format!(
+        "{who} cannot spell {} inside {place}, and `{description}` contains one",
+        show_char(c)
+    );
+    if let Some(escape) = match c {
+        '\n' => Some("\\n"),
+        '\r' => Some("\\r"),
+        _ => None,
+    } {
+        reason.push_str(&format!(
+            ". if the program is meant to receive the two characters `{escape}`, \
+             write `\\{escape}` — the manifest turns `{escape}` into the character itself"
+        ));
+    }
+    // 逃げ道は1つしかない。direct は自分で走らせるので、1行に綴る場所が
+    // そもそも無い——命令の中の改行にも、パスの中の改行にも当てはまる。
+    reason.push_str(". `--backend=direct` runs the steps itself, with nothing spelled on one line");
+    reason
+}
+
 /// POSIX シェル向けの引用。ninja も `compile_commands.json` も
 /// 最終的にシェルへ渡すため、1箇所で行う。
 pub fn shell_quote(s: &str) -> String {
@@ -128,6 +175,23 @@ mod tests {
         assert_eq!(shell_quote("-O2"), "-O2");
         assert_eq!(shell_quote("/usr/bin/cc"), "/usr/bin/cc");
         assert_eq!(shell_quote("-DFOO=1"), "-DFOO=1");
+    }
+
+    #[test]
+    fn refusing_a_newline_names_the_escape_that_was_probably_meant() {
+        // ここに来る大半は書き間違いである。直し方を言わない断りは、
+        // 利用者を `--backend=direct` へ追いやるだけになる（ADR-0058）。
+        let r = cannot_spell("ninja", "a build edge", '\n', "GEN table");
+        assert!(r.contains("a newline"), "{r}");
+        assert!(r.contains("write `\\\\n`"), "{r}");
+        assert!(r.contains("--backend=direct"), "{r}");
+    }
+
+    #[test]
+    fn refusing_something_that_has_no_escape_offers_none() {
+        let r = cannot_spell("make", "a recipe", '\u{7}', "GEN table");
+        assert!(!r.contains("two characters"), "{r}");
+        assert!(r.contains("--backend=direct"), "{r}");
     }
 
     #[test]

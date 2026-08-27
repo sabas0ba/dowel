@@ -204,6 +204,14 @@ change what gets built.
 | `make` | writes `Makefile` and runs `make`. Refuses a build whose paths make cannot name (whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, `]`) rather than writing a makefile that builds something else |
 | `graph` | writes `build-graph.json` — the backend-neutral description ([14-build-graph.md](14-build-graph.md)) — and stops. Nothing is compiled; the document is for a tool of your own. `dowel test` and `dowel inspect` refuse it |
 
+Neither `ninja` nor `make` can put a **line terminator** inside a command —
+both spell one step as one line — and both refuse such a step rather than
+rewriting it ([ADR-0058](adr/0058-a-command-a-backend-cannot-spell.md)).
+`direct` passes `argv` to the program and has no such limit. Usually the fix
+is in the manifest: `"printf 'a\nb'"` puts a real newline in the argument,
+while `"printf 'a\\nb'"` passes the two characters `\n` for `printf` to
+expand, which every backend can spell. The diagnostic says so.
+
 `--executor`, the previous spelling, is refused with a message naming
 `--backend`: the set of values it takes has changed.
 
