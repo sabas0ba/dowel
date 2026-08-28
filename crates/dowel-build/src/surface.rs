@@ -28,11 +28,10 @@ pub struct Header {
     pub at: PathBuf,
     /// `public.includes` が書かれた位置。直す先はその行である
     pub site: Option<dowel_eval::Site>,
-    /// 使う側の翻訳行に載る語。pkg-config の `Cflags` と同じものである
+    /// このヘッダを読む言語。読む道具も、渡す語も、これで決まる
+    pub language: HeaderLanguage,
+    /// 使う側の翻訳行に載る語。読む言語の分だけが入っている
     pub words: Vec<String>,
-    /// このヘッダを配ったターゲットが C++ を翻訳するか。
-    /// `.h` をどちらの言語で読むかがこれで決まる
-    pub from_cxx: bool,
 }
 
 /// ヘッダとして読む綴り。
@@ -59,7 +58,7 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
         }
         // 読む道具も言語で選ぶ。C++ のヘッダを C の driver へ渡すと、標準
         // ライブラリの探索路が揃わない。
-        let tool = match language(&header.at, header.from_cxx) {
+        let tool = match header.language {
             HeaderLanguage::C => cfg.tool("c").to_string(),
             HeaderLanguage::Cxx => cfg.tool("cxx").to_string(),
         };
@@ -71,7 +70,7 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
             cfg,
             include_root,
             &header.at,
-            language(&header.at, header.from_cxx),
+            header.language,
             &header.words,
         );
         let out = match Command::new(&tool).args(&args).output() {
@@ -116,7 +115,7 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
 /// C++ 専用の綴りは常に C++ である。`.h` は両方の言語で使われるので、それを
 /// 配ったターゲットの言語に従う——`__cplusplus` の分岐がどちらへ倒れるかは、
 /// そのターゲットの使い手が誰かで決まる（ADR-0060）。
-fn language(path: &Path, from_cxx: bool) -> HeaderLanguage {
+pub fn language(path: &Path, from_cxx: bool) -> HeaderLanguage {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let cxx_only = ["hh", "hpp", "hxx"].iter().any(|h| h.eq_ignore_ascii_case(ext));
     if cxx_only || from_cxx {
@@ -127,7 +126,7 @@ fn language(path: &Path, from_cxx: bool) -> HeaderLanguage {
 }
 
 /// ヘッダとして読む綴りか。
-fn is_header(path: &Path) -> bool {
+pub fn is_header(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else { return false };
     HEADER_EXTENSIONS.iter().any(|h| h.eq_ignore_ascii_case(ext))
 }

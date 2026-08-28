@@ -73,12 +73,23 @@ different question than the one it claims to answer:
   ([ADR-0043](0043-pkgconfig-generation.md)) — the install code says in as
   many words that what a dowel consumer receives and what a pkg-config
   consumer receives must not differ. A define that opens an `#include`
-  breaks the consumer and passes a check that does not carry it.
+  breaks the consumer and passes a check that does not carry it. **The words
+  are the merged interface, not the target's own `public` block**: a public
+  dependency's defines reach the consumer too, which is what `Requires`
+  composes in a `.pc` file and what `interface(T)` hands a dowel consumer.
+  Reading only the target's own block preprocesses a different branch than
+  the one the consumer compiles.
 - **The language.** `.hh`, `.hpp` and `.hxx` are C++; `.h` is both, and
   which way its `__cplusplus` branch falls is decided by the target that
-  shipped it, so `.h` follows whether that target compiles C++. The C++
-  driver reads the C++ ones, since the C driver does not carry the C++
-  standard library's search path.
+  shipped it, so `.h` follows whether that target compiles C++ — **including
+  the C++ it gets from a `generate` block**
+  ([ADR-0054](0054-generated-sources.md)), because the plan settles the
+  language after the generated sources join `sources`, and a check that reads
+  only the declared ones calls such a target C. The C++ driver reads the C++
+  ones, since the C driver does not carry the C++ standard library's search
+  path. The words follow the same decision: `cxx_std` and `cxx_flags` go on a
+  C++ line and `c_std` and `c_flags` on a C one, since a word carried into
+  the other language is no longer the consumer's line either.
 - **Saying the language out loud.** The driver is not asked to infer it from
   the spelling. Measured: `cc -E t.HH` warns, exits 0, and never opens the
   file — the exact "warning, exit 0, read nothing" shape ADR-0051 exists to
@@ -117,6 +128,14 @@ error.
 - Nothing checks that a consumer can **link**. `exports` covers the symbols a
   shared library promises (ADR-0039); a static archive's surface is still
   taken on trust.
-- `install::entries` now answers with a struct rather than a pair. What is
-  shipped and what declared it have to survive to the point where the check
-  runs, and that is after the files exist.
+- The words are read from the merged interface even when a public dependency
+  is not part of this install. That matches the dowel consumer, who receives
+  the whole interface; a pkg-config consumer whose `Requires` cannot name the
+  missing dependency receives less, and for that reader the check opens a
+  branch they would not. It errs toward reading more of the header, and the
+  install that leaves a public dependency behind has a larger problem than
+  this warning.
+- `install::entries` now answers with a struct rather than a pair, and the
+  walk fills that struct directly. What is shipped and what declared it have
+  to survive to the point where the check runs, and that is after the files
+  exist.

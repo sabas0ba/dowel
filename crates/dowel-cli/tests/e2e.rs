@@ -6904,6 +6904,96 @@ fn an_uppercase_spelling_is_read_rather_than_passed_over() {
     r.stderr_contains("core_types.h");
 }
 
+/// 生成されたソースも、そのターゲットが翻訳する言語を決める（ADR-0054）。
+/// `.h` の `__cplusplus` の分岐がどちらへ倒れるかは、それが決める（ADR-0060）。
+#[test]
+fn a_generated_cxx_source_decides_how_the_surface_is_read() {
+    if !program_exists("sh") {
+        eprintln!("skipping: sh is not on PATH");
+        return;
+    }
+    let p = Project::new("install-surface-generated-cxx");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.generate]\n\
+         g = { command = \"sh\", args = [file(\"gen.sh\")], outputs = [\"core_gen.cpp\"] }\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n\n\
+         [lib.core.private]\nincludes = [dir(\"src\")]\n",
+    );
+    p.write("gen.sh", "printf 'int core_gen(void) { return 0; }\\n' > core_gen.cpp\n");
+    // C++ として読めば届かない `#include`。C として読めば分岐が開かない。
+    p.write(
+        "include/core.h",
+        "#ifdef __cplusplus\n#include \"core_types.h\"\n#endif\nint core_open(void);\n",
+    );
+    p.write("src/core_types.h", "typedef int core_id;\n");
+    p.write("src/core.c", "int core_open(void) { return 0; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    r.stderr_contains("unreadable-surface");
+    r.stderr_contains("core_types.h");
+}
+
+/// 使う側が受け取る語には、公開の依存を辿って届いたものも含まれる。
+/// pkg-config は `Requires` でそれを合成する（ADR-0043、ADR-0060）。
+#[test]
+fn the_surface_carries_the_words_a_public_dependency_hands_on() {
+    let p = Project::new("install-surface-inherited-words");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.base]\nsources = [file(\"src/base.c\")]\n\n\
+         [lib.base.public]\ndefines = { WITH_EXTRA = 1 }\n\n\
+         [lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\ndeps = [target(\"base\")]\n\n\
+         [lib.core.private]\nincludes = [dir(\"src\")]\n",
+    );
+    // 定義を配るのは base である。core を使う側は、それを辿って受け取る。
+    p.write(
+        "include/core.h",
+        "#if defined(WITH_EXTRA)\n#include \"core_extra.h\"\n#endif\nint core_open(void);\n",
+    );
+    p.write("src/core_extra.h", "typedef int core_extra;\n");
+    p.write("src/base.c", "int base_open(void) { return 0; }\n");
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(void) { return 0; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    r.stderr_contains("unreadable-surface");
+    r.stderr_contains("core_extra.h");
+}
+
+/// 語は言語ごとに分かれている。読む言語を決めたら、その言語の語を渡す。
+#[test]
+fn the_surface_is_read_with_the_words_for_its_language() {
+    let p = Project::new("install-surface-language-words");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.cpp\")]\n\n\
+         [lib.core.public]\n\
+         includes  = [dir(\"include\")]\ncxx_flags = [\"-DWITH_EXTRA=1\"]\n\n\
+         [lib.core.private]\nincludes = [dir(\"src\")]\n",
+    );
+    p.write(
+        "include/core.hpp",
+        "#if defined(WITH_EXTRA)\n#include \"core_extra.hpp\"\n#endif\nint core_open();\n",
+    );
+    p.write("src/core_extra.hpp", "using core_extra = int;\n");
+    p.write("src/core.cpp", "#include \"core.hpp\"\nint core_open() { return 0; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    r.stderr_contains("unreadable-surface");
+    r.stderr_contains("core_extra.hpp");
+}
+
 /// 面が閉じていれば、何も言わない。
 #[test]
 fn a_surface_that_stands_on_its_own_is_not_reported() {
