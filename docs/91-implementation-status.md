@@ -536,6 +536,18 @@ changes, only the speed.
     `public.includes` into `include/`. `test` and `bench` are not
     installed. Nothing is rebuilt, so what was tested and what ships are
     the same bytes.
+    - **What was installed is asked whether it can be read**
+      ([ADR-0060](adr/0060-the-surface-is-readable.md)). After the copy, each
+      installed header is preprocessed with the target's C compiler against
+      the installed `include/` alone. Measured: a public header reading a
+      private one installs cleanly and then fails in the consumer's build
+      with `fatal error: core_types.h: No such file or directory` — inside
+      the build tree both directories are on the search path, so nothing
+      before this noticed. dowel does not count `#include` lines itself
+      (conditionals, macro-built names: that is reading C); it asks the tool
+      and quotes its first complaint, the posture ADR-0039 took for
+      `exports`. Only `.h` / `.hh` / `.hpp` / `.hxx` are read, closed for
+      ADR-0051's reason
     - The include directory goes **whole and unfiltered**, because that is
       what the declaration says a consumer compiles against. When it also
       holds files dowel compiles, that is `source-among-headers`, pointing
@@ -1384,16 +1396,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (776 tests):
+Current breakdown (780 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 381 |
+| `unit-*` | per-crate unit tests | 383 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 294 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 296 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

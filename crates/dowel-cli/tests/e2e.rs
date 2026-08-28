@@ -6815,6 +6815,80 @@ fn an_interface_directory_of_headers_is_not_reported() {
     assert!(!r.stderr.contains("source-among-headers"), "a clean layout was reported\n{r}");
 }
 
+/// 配った面が、配ったものだけで読めるか
+/// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+///
+/// 公開ヘッダが非公開のヘッダを読んでいても、ビルド木の中では通る——両方の
+/// 探索路が載っているからである。壊れるのは配った先だけで、しかも壊れるのは
+/// 受け取った側である。
+#[test]
+fn a_surface_that_reaches_an_uninstalled_header_is_reported() {
+    let p = Project::new("install-unreadable-surface");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n\n\
+         [lib.core.private]\nincludes = [dir(\"src\")]\n",
+    );
+    // 公開ヘッダが非公開のヘッダを読む。ビルドはこれで通る。
+    p.write("include/core.h", "#include \"core_types.h\"\nint core_open(core_id id);\n");
+    p.write("src/core_types.h", "typedef int core_id;\n");
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(core_id id) { return id; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    r.stderr_contains("unreadable-surface");
+    r.stderr_contains("core.h");
+    // 道具自身の言葉で、何が見つからなかったかが分かること。
+    r.stderr_contains("core_types.h");
+    // 直す先を指す。
+    r.stderr_contains("includes = [dir(\"include\")]");
+
+    // 警告であって失敗ではない。入るものは入る。
+    assert!(prefix.join("lib/libcore.a").is_file(), "the library is still installed");
+    assert!(prefix.join("include/core.h").is_file(), "the header is still installed");
+}
+
+/// 面が閉じていれば、何も言わない。
+#[test]
+fn a_surface_that_stands_on_its_own_is_not_reported() {
+    let p = Project::new("install-readable-surface");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n",
+    );
+    p.write("include/core_types.h", "typedef int core_id;\n");
+    p.write("include/core.h", "#include \"core_types.h\"\nint core_open(core_id id);\n");
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(core_id id) { return id; }\n");
+
+    let prefix = p.path("out");
+    let r = p.run(".", &["install", &format!("--prefix={}", prefix.display())]);
+    r.success();
+    assert!(!r.stderr.contains("unreadable-surface"), "a closed surface was reported\n{r}");
+
+    // 述べていることが本当であること: 使う側が実際に組める。
+    p.write("consumer.c", "#include <core.h>\nint main(void) { return core_open(0); }\n");
+    let out = std::process::Command::new("cc")
+        .args(["consumer.c", "-I"])
+        .arg(prefix.join("include"))
+        .arg("-L")
+        .arg(prefix.join("lib"))
+        .args(["-lcore", "-o"])
+        .arg(p.path("consumer"))
+        .current_dir(&p.root)
+        .output()
+        .expect("cannot start cc");
+    assert!(
+        out.status.success(),
+        "a consumer could not build against the installed prefix: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn abi_components_constrain_only_where_both_sides_name_them() {
     // 粒度を大域に1つ決めると、粗すぎれば検証が無意味になり、細かすぎれば
