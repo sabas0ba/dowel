@@ -67,3 +67,4 @@ was originally written in.
 | [0058](0058-a-command-a-backend-cannot-spell.md) | A command a backend cannot spell is refused, never altered | Accepted |
 | [0059](0059-an-interface-directory-holds-the-interface.md) | A directory shipped as an interface is reported when it holds sources, not filtered | Accepted |
 | [0060](0060-the-surface-is-readable.md) | What was installed is asked whether it can be read | Accepted |
+| [0061](0061-the-state-is-a-question.md) | What a build would do is a question, asked without doing it | Accepted |

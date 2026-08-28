@@ -30,6 +30,8 @@ Commands:
     bench [target]     Build bench targets and measure their wall-clock time.
     inspect [target]   Build, then run the tools declared in [<kind>.<name>.inspect] and
                        show what they report. With no target, inspects everything declared.
+    status [target]    Report what a build would do without doing it: what the manifest
+                       evaluation reused, and which steps would run and why.
     why <target> <property>
                        Show how a value reached a target.
     graph              Dump the dependency graph or the action graph.
@@ -95,6 +97,9 @@ graph options:
         --kind <kind>        target | action (default: target)
         --format <fmt>       text | dot | json (default: text)
 
+status options:
+        --format <fmt>       text | json (default: text)
+
 why options:
         --format <fmt>       text | json (default: text)
 
@@ -151,6 +156,11 @@ pub enum Command {
         property: String,
     },
     Graph,
+    /// 走らせずに、今の状態を述べる
+    /// （[ADR-0061](../../../docs/adr/0061-the-state-is-a-question.md)）
+    Status {
+        targets: Vec<String>,
+    },
     /// 参照の compile_commands.json と計画の等価性検査（docs/40-migration.md 4節）
     MigrateVerify {
         reference: String,
@@ -281,8 +291,8 @@ pub enum Parsed {
 }
 
 const COMMANDS: &[&str] = &[
-    "new", "add", "check", "build", "test", "inspect", "debug", "why", "graph", "migrate",
-    "schema", "cache", "lsp",
+    "new", "add", "check", "build", "test", "inspect", "debug", "why", "status", "graph",
+    "migrate", "schema", "cache", "lsp",
 ];
 
 pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> {
@@ -566,6 +576,7 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             Command::Debug { target: positional[0].clone() }
         }
         "graph" => Command::Graph,
+        "status" => Command::Status { targets: positional },
         "lsp" => Command::Lsp,
         "why" => {
             if positional.len() != 2 {

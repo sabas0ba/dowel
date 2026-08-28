@@ -6994,6 +6994,103 @@ fn the_surface_is_read_with_the_words_for_its_language() {
     r.stderr_contains("core_extra.hpp");
 }
 
+/// 走らせずに、何が走るかとその理由を述べる（ADR-0061）。
+///
+/// 触った1つだけでなく、それを読む下流も走る。走らせる側は先の段が書いた
+/// 時刻で気づくが、走らせない側は自分でそこまで進めなければならない。
+#[test]
+fn what_a_build_would_do_is_reported_without_doing_it() {
+    let p = Project::new("status-would-run");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"core\")]\n",
+    );
+    p.write("include/core.h", "int core_open(void);\n");
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(void) { return 0; }\n");
+    p.write("src/main.c", "#include \"core.h\"\nint main(void) { return core_open(); }\n");
+
+    p.run(".", &["build"]).success();
+    let quiet = p.run(".", &["status"]);
+    quiet.success();
+    quiet.stdout_contains("0 would run");
+
+    // 述べるだけで、何も起こさない。続けて聞いても答は変わらない。
+    p.run(".", &["status"]).success().stdout_contains("0 would run");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(void) { return 1; }\n");
+    let r = p.run(".", &["status"]);
+    r.success();
+    r.stdout_contains("3 would run");
+    r.stdout_contains("src/core.c is newer than the output");
+    // 下流は、先の段が書き直す入力の名前で述べる。
+    r.stdout_contains("is rewritten by an earlier step");
+    // 触っていない翻訳は走らない。
+    r.stdout_contains("up to date");
+
+    // 走らせていないので、まだ組み直されていない。
+    p.run(".", &["status"]).success().stdout_contains("3 would run");
+}
+
+/// 1度も組んでいないビルド木を「命令が変わった」と述べない（ADR-0061）。
+#[test]
+fn a_tree_never_built_is_not_reported_as_a_changed_command() {
+    let p = Project::new("status-never-built");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["status"]);
+    r.success();
+    r.stdout_contains("no record of a previous run");
+    assert!(!r.stdout.contains("the command changed"), "{r}");
+}
+
+/// 命令が変わったことは、時刻を見るまでもなく述べる（ADR-0061）。
+#[test]
+fn a_changed_command_is_named_as_such() {
+    let p = Project::new("status-command-changed");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.run(".", &["build"]).success();
+
+    // ソースは触らない。旗だけが変わる——時刻の比較では捉えられない形である。
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-DX=1\"]\n",
+    );
+    let r = p.run(".", &["status"]);
+    r.success();
+    r.stdout_contains("the command changed since the last run");
+}
+
+/// 機械が読む形でも同じ2段を答える（ADR-0061）。
+#[test]
+fn the_state_is_answered_in_json_as_well() {
+    let p = Project::new("status-json");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.run(".", &["build"]).success();
+
+    let r = p.run(".", &["status", "--format=json"]);
+    r.success();
+    let v = dowel_support::json::parse(&r.stdout).expect("the report is JSON");
+    let evaluation = v.get("evaluation").expect("the evaluation stage is reported");
+    assert!(evaluation.get("reused").is_some(), "{}", r.stdout);
+    let steps = v.get("steps").and_then(|s| s.as_array()).expect("the steps are reported");
+    assert!(!steps.is_empty(), "{}", r.stdout);
+    for step in steps {
+        assert_eq!(step.get("would_run").and_then(|b| b.as_bool()), Some(false), "{}", r.stdout);
+    }
+}
+
 /// 面が閉じていれば、何も言わない。
 #[test]
 fn a_surface_that_stands_on_its_own_is_not_reported() {

@@ -22,7 +22,7 @@ dowel <command> [options] [args]
 
 | Stream | Contents |
 |---|---|
-| stdout | Artifacts: JSON diagnostics, graphs, the schema, `why` results |
+| stdout | Artifacts: JSON diagnostics, graphs, the schema, `why` and `status` results |
 | stderr | Progress and logs |
 
 Because of this split, `dowel graph --format=dot | dot -Tsvg` works at any
@@ -519,6 +519,61 @@ implementations, and reading it is the tool's job.
   as a wrapper script that exits nonzero when over
 - `--message-format=json` emits one object per inspection per line, carrying
   the full command, the exit verdict, and the output
+
+## `dowel status`
+
+```
+dowel status [target...] [--format <text|json>]
+```
+
+Reports what a build would do, without doing it
+([ADR-0061](adr/0061-the-state-is-a-question.md)). It plans exactly as
+`check` does, then reads the build directory. Nothing is written, nothing is
+started, and no backend is consulted.
+
+```
+$ dowel status
+evaluation  1 recomputed, 8 unchanged after recomputing, 14 reused, 0 skipped
+steps       4 planned, 3 would run
+
+would run
+  CC obj/app/core/src_core.c.o  src/core.c is newer than the output
+  AR lib/libcore.a              obj/app/core/src_core.c.o is rewritten by an earlier step
+  LINK bin/app                  lib/libcore.a is rewritten by an earlier step
+
+up to date
+  CC obj/app/app/src_main.c.o
+```
+
+Two stages, because two different machines decide them. The first line is the
+manifest evaluation: how much of the previous run's work the query layer
+reused, and how much it recomputed. The rest is the action graph: which steps
+would run, and why each one.
+
+The reasons a step would run:
+
+| Reason | Meaning |
+|---|---|
+| `no record of a previous run for this output` | nothing has built this output in this build directory |
+| `the command changed since the last run` | the same output, a different command line — a flag change no timestamp shows |
+| `output missing <path>` | a declared output is not there |
+| `no dependency record (<path> is missing)` | a depfile was declared and is not there, so the header dependencies are unknown ([ADR-0027](adr/0027-toolchain-style.md)) |
+| `input missing <path>` | an input is gone |
+| `<path> is newer than the output` | the ordinary case |
+| `the tool changed (<path> is rewritten)` | the tool's identity stamp no longer matches the tool ([ADR-0055](adr/0055-tool-identity-in-freshness.md)) |
+| `<path> is rewritten by an earlier step` | a step that runs first overwrites this input |
+
+The judgment is the same function the direct backend calls just before running
+a step, so what this reports is what that backend acts on. ninja and make
+judge for themselves; in the ordinary case they agree, since all three read
+the same file times and the command log is dowel's for every backend.
+
+| Option | Values | Default |
+|---|---|---|
+| `--format <fmt>` | `text` / `json` | `text` |
+
+`--format=json` carries the same two stages, so a CI job can assert on how
+many steps would run rather than parsing build output.
 
 ## `dowel why`
 
