@@ -1815,6 +1815,17 @@ pub fn public_words(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> 
     out
 }
 
+/// このターゲットが C++ を翻訳するか
+/// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+///
+/// 配ったヘッダをどちらの言語で読むかがこれで決まる。`.h` は両方の言語で
+/// 使われる綴りであり、`__cplusplus` の分岐がどちらへ倒れるかは、それを
+/// 配ったターゲットの言語が決める。
+pub fn compiles_cxx(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
+    let mut ignored = Vec::new();
+    collect_sources(sess, tid, cfg, &mut ignored).iter().any(|s| is_cxx(s))
+}
+
 /// このターゲット自身が公開しているリンク時の語（ADR-0043）。
 pub fn public_link_flags(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> {
     let target = sess.target(tid);

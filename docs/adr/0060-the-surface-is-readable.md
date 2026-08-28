@@ -64,14 +64,34 @@ warning[unreadable-surface]: `core.h` cannot be read from what was installed
 It points at the `public.includes` declaration, for ADR-0059's reason: the
 path alone cannot say which declaration shipped it, and that line is the edit.
 
+**Read it the way a consumer reads it, not merely from the same directory.**
+Three things decide that, and each one left out turns the check into a
+different question than the one it claims to answer:
+
+- **The words on the consumer's compile line.** `public.defines` and
+  `public.flags` reach a consumer through pkg-config's `Cflags`
+  ([ADR-0043](0043-pkgconfig-generation.md)) — the install code says in as
+  many words that what a dowel consumer receives and what a pkg-config
+  consumer receives must not differ. A define that opens an `#include`
+  breaks the consumer and passes a check that does not carry it.
+- **The language.** `.hh`, `.hpp` and `.hxx` are C++; `.h` is both, and
+  which way its `__cplusplus` branch falls is decided by the target that
+  shipped it, so `.h` follows whether that target compiles C++. The C++
+  driver reads the C++ ones, since the C driver does not carry the C++
+  standard library's search path.
+- **Saying the language out loud.** The driver is not asked to infer it from
+  the spelling. Measured: `cc -E t.HH` warns, exits 0, and never opens the
+  file — the exact "warning, exit 0, read nothing" shape ADR-0051 exists to
+  refuse, which this check had reproduced inside itself. With
+  `-x c-header` / `-x c++-header` (`/TC` / `/TP` for MSVC) the spelling stops
+  deciding anything.
+
 **Only preprocessing, and only a closed list of spellings.** The claim is
 narrow on purpose: *the headers shipped can be found from what was shipped*.
 Type errors and missing declarations are a different question and would need
-a language and a full parse. The spellings read as headers are `.h`, `.hh`,
-`.hpp`, `.hxx` — closed for ADR-0051's reason: a README or a licence under
-`include/` handed to a compiler fails because the driver cannot pick a
-language from the name, which is indistinguishable from the defect this is
-looking for.
+a full parse. The spellings read as headers are `.h`, `.hh`, `.hpp`, `.hxx` —
+closed for ADR-0051's reason: a README or a licence under `include/` is not
+a header, and handing one to a compiler proves nothing.
 
 **Failing to run the tool is not a failure.** As with the export check, the
 absence of a check must not turn an otherwise successful install into an
@@ -90,6 +110,10 @@ error.
   accidental case silent too.
 - The check uses the *target's* compiler, so a cross install is read the way
   its consumer would read it.
+- A C library's headers are read as C, and a C++ consumer of the same
+  library takes the other `__cplusplus` branch, which this does not check.
+  Reading each header twice would cover it and doubles the cost; the branch
+  a library's own language does not take is the weaker claim of the two.
 - Nothing checks that a consumer can **link**. `exports` covers the symbols a
   shared library promises (ADR-0039); a static archive's surface is still
   taken on trust.

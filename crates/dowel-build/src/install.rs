@@ -169,6 +169,11 @@ fn headers(
     shipped: &mut Vec<crate::surface::Header>,
     diags: &mut Vec<Diagnostic>,
 ) {
+    // 使う側と同じ条件で読むために要るもの。pkg-config の `Cflags` に載るのと
+    // 同じ語と、`.h` をどちらの言語で読むかを決めるターゲットの言語（ADR-0060）。
+    let words = crate::plan::public_words(sess, tid, cfg);
+    let from_cxx = crate::plan::compiles_cxx(sess, tid, cfg);
+
     for (dir, site) in crate::plan::public_include_dirs(sess, tid, cfg) {
         if !dir.is_dir() {
             let mut d = Diagnostic::warning(
@@ -190,7 +195,12 @@ fn headers(
             let to = include_dir.join(rel);
             // 配った面は、配ったものだけで読めなければならない（ADR-0060）。
             // 直す先は、それを配ると決めたこの宣言である。
-            shipped.push(crate::surface::Header { at: to.clone(), site });
+            shipped.push(crate::surface::Header {
+                at: to.clone(),
+                site,
+                words: words.clone(),
+                from_cxx,
+            });
             items.push(Item::Copy { from: file.clone(), to });
         }
     }

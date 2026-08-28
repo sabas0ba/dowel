@@ -392,29 +392,60 @@ pub fn link_shared(
 /// 出来上がった共有ライブラリに「何を書き出したか」を聞く引数
 /// （[ADR-0039](../../../docs/adr/0039-exports-are-checked.md)）。
 ///
-/// 前処理だけ行う綴り（[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+/// ヘッダを読む言語（[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeaderLanguage {
+    C,
+    Cxx,
+}
+
+/// 前処理だけ行う綴り（ADR-0060）。
 ///
 /// 翻訳はしない。確かめたいのは「読めるか」——`#include` が届くか——であり、
 /// 型の整合は別の問いである。出力は捨てる。
-pub fn preprocess_only(cfg: &Config, include_dir: &Path, header: &Path) -> Vec<String> {
-    match cfg.style {
+///
+/// **言語は明示する。** 綴りから決めさせると、driver の知らない綴り
+/// （`.HH` など）は「リンクの入力」として読まれずに終わり、警告と終了状態 0
+/// が返る——[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)
+/// が直したのと同じ、読まれないまま成功する形である。
+///
+/// **公開の語も渡す。** `public.defines` と `public.flags` は pkg-config の
+/// `Cflags` に載る（[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）。
+/// 使う側がそれを持って読む以上、こちらも持たなければ、定義で開く
+/// `#include` を見落とす。
+pub fn preprocess_only(
+    cfg: &Config,
+    include_dir: &Path,
+    header: &Path,
+    language: HeaderLanguage,
+    words: &[String],
+) -> Vec<String> {
+    let mut args = match cfg.style {
         Style::Gnu => vec![
+            "-x".into(),
+            match language {
+                HeaderLanguage::C => "c-header".into(),
+                HeaderLanguage::Cxx => "c++-header".into(),
+            },
             "-E".into(),
             "-o".into(),
             devnull(),
-            include(cfg, include_dir),
-            header.display().to_string(),
         ],
-        // `/E` は標準出力へ出す。`/TC` を付けるのは、`.h` を渡された `cl` が
-        // 綴りから言語を決められないためである。
+        // `/E` は標準出力へ出す。`/TC` / `/TP` は「すべてを C（C++）として
+        // 扱う」であり、綴りから言語を決めさせないためにどちらかを必ず置く。
         Style::Msvc => vec![
             "/nologo".into(),
             "/E".into(),
-            "/TC".into(),
-            include(cfg, include_dir),
-            header.display().to_string(),
+            match language {
+                HeaderLanguage::C => "/TC".into(),
+                HeaderLanguage::Cxx => "/TP".into(),
+            },
         ],
-    }
+    };
+    args.push(include(cfg, include_dir));
+    args.extend(words.iter().cloned());
+    args.push(header.display().to_string());
+    args
 }
 
 /// 捨て場の名前。
