@@ -12,19 +12,26 @@
 //! 聞く**: 配った探索路だけを与えて前処理し、通らなければ、それは受け取った
 //! 側でも通らない。
 
-use crate::toolstyle;
+use crate::toolstyle::{self, HeaderLanguage};
 use dowel_eval::Config;
 use dowel_support::{log_debug, Diagnostic};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 配ったヘッダ1つと、それを配ると決めた宣言の位置。
+/// 配ったヘッダ1つと、使う側がそれを読むときの条件。
+///
+/// 「使う側と同じに読む」ためには、道だけでは足りない。公開の語も、言語も、
+/// それを配ったターゲットが決める（ADR-0060）。
 #[derive(Clone, Debug)]
 pub struct Header {
     /// 入れた先の道
     pub at: PathBuf,
     /// `public.includes` が書かれた位置。直す先はその行である
     pub site: Option<dowel_eval::Site>,
+    /// このヘッダを読む言語。読む道具も、渡す語も、これで決まる
+    pub language: HeaderLanguage,
+    /// 使う側の翻訳行に載る語。読む言語の分だけが入っている
+    pub words: Vec<String>,
 }
 
 /// ヘッダとして読む綴り。
@@ -45,17 +52,27 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
     if readable.is_empty() {
         return diags;
     }
-    let tool = cfg.tool("c").to_string();
-    if !crate::exec::program_exists(&tool) {
-        log_debug!("surface: `{tool}` is not on PATH; not reading the installed headers");
-        return diags;
-    }
-
     for header in readable {
         if !header.at.is_file() {
             continue;
         }
-        let args = toolstyle::preprocess_only(cfg, include_root, &header.at);
+        // 読む道具も言語で選ぶ。C++ のヘッダを C の driver へ渡すと、標準
+        // ライブラリの探索路が揃わない。
+        let tool = match header.language {
+            HeaderLanguage::C => cfg.tool("c").to_string(),
+            HeaderLanguage::Cxx => cfg.tool("cxx").to_string(),
+        };
+        if !crate::exec::program_exists(&tool) {
+            log_debug!("surface: `{tool}` is not on PATH; not reading {}", header.at.display());
+            continue;
+        }
+        let args = toolstyle::preprocess_only(
+            cfg,
+            include_root,
+            &header.at,
+            header.language,
+            &header.words,
+        );
         let out = match Command::new(&tool).args(&args).output() {
             Ok(o) => o,
             // 起動できないことは、面の誤りの証拠にはならない。
@@ -93,8 +110,23 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
     diags
 }
 
+/// このヘッダを読む言語。
+///
+/// C++ 専用の綴りは常に C++ である。`.h` は両方の言語で使われるので、それを
+/// 配ったターゲットの言語に従う——`__cplusplus` の分岐がどちらへ倒れるかは、
+/// そのターゲットの使い手が誰かで決まる（ADR-0060）。
+pub fn language(path: &Path, from_cxx: bool) -> HeaderLanguage {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let cxx_only = ["hh", "hpp", "hxx"].iter().any(|h| h.eq_ignore_ascii_case(ext));
+    if cxx_only || from_cxx {
+        HeaderLanguage::Cxx
+    } else {
+        HeaderLanguage::C
+    }
+}
+
 /// ヘッダとして読む綴りか。
-fn is_header(path: &Path) -> bool {
+pub fn is_header(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else { return false };
     HEADER_EXTENSIONS.iter().any(|h| h.eq_ignore_ascii_case(ext))
 }
@@ -110,6 +142,20 @@ fn first_complaint(said: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cxx_spelling_is_read_as_cxx_whatever_the_target_compiles() {
+        assert_eq!(language(Path::new("a.hpp"), false), HeaderLanguage::Cxx);
+        assert_eq!(language(Path::new("a.HXX"), false), HeaderLanguage::Cxx);
+    }
+
+    #[test]
+    fn a_plain_header_follows_the_target_that_shipped_it() {
+        // `.h` は両方の言語で使われる。`__cplusplus` の分岐がどちらへ倒れるかは
+        // 綴りでは決まらない（ADR-0060）。
+        assert_eq!(language(Path::new("a.h"), false), HeaderLanguage::C);
+        assert_eq!(language(Path::new("a.h"), true), HeaderLanguage::Cxx);
+    }
 
     #[test]
     fn only_the_closed_list_of_spellings_is_read() {

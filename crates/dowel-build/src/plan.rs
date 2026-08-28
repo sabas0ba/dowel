@@ -1815,6 +1815,81 @@ pub fn public_words(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> 
     out
 }
 
+/// このターゲットが C++ を翻訳するか
+/// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+///
+/// 配ったヘッダをどちらの言語で読むかがこれで決まる。`.h` は両方の言語で
+/// 使われる綴りであり、`__cplusplus` の分岐がどちらへ倒れるかは、それを
+/// 配ったターゲットの言語が決める。
+pub fn compiles_cxx(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
+    let mut ignored = Vec::new();
+    if collect_sources(sess, tid, cfg, &mut ignored).iter().any(|s| is_cxx(s)) {
+        return true;
+    }
+    // 生成された分も翻訳される（[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
+    // 計画は生成の出力を `sources` に加えてから言語を決めており、ここが宣言
+    // された `sources` だけを見ると、`.cpp` を生成するターゲットの `.h` が
+    // C として読まれる。
+    generated_spellings(sess, tid, cfg).iter().any(|s| is_cxx(s))
+}
+
+/// `generate` が書くと宣言した出力の綴り。
+///
+/// 落ちる先ではなく綴りだけを見る。言語の判定に要るのはそれだけであり、
+/// 場所まで求めるには計画そのものが要る。
+fn generated_spellings(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<PathBuf> {
+    let target = sess.target(tid);
+    let cfg_pkg = cfg.for_package(&sess.package(target.package).name);
+    let mut out = Vec::new();
+    for decl in &target.generated {
+        let Some(value) = decl.outputs.as_ref().and_then(|v| dowel_eval::specialize(v, &cfg_pkg))
+        else {
+            continue;
+        };
+        out.extend(flatten(&value).iter().filter_map(|i| i.as_str().map(PathBuf::from)));
+    }
+    out
+}
+
+/// 使う側の翻訳行に載る語
+/// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
+///
+/// 読むのは併合済みのインタフェースであり、ターゲット自身の `public` ではない。
+/// 公開の依存が配る定義も使う側には届く——pkg-config は `Requires` でそれを
+/// 合成し（[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）、dowel
+/// の利用者はインタフェースから直に受け取る。自身の `public` だけを見ると、
+/// 検査は使う側と違う分岐を前処理することになる。
+///
+/// 言語別の語は、読む言語の分だけを渡す。`cxx_flags` を C の行に載せれば、
+/// それはもう使う側の行ではない。
+///
+/// 旗の中の道を絶対パスへ開くときの診断は捨てる。同じ値は計画が既に読んで
+/// おり、install の側で言い直せば同じ話が二度出る。
+pub fn consumer_words(
+    sess: &Session,
+    tid: TargetId,
+    cfg: &Config,
+    build_dir: &Path,
+    language: crate::toolstyle::HeaderLanguage,
+) -> Vec<String> {
+    use crate::toolstyle::HeaderLanguage;
+    let env = sess.interface_of(tid).props.clone();
+    let mut ignored = Vec::new();
+    let mut out = Vec::new();
+    for (key, value) in collect_defines(&env) {
+        out.push(toolstyle::define(cfg, &key, &value));
+    }
+    out.extend(collect_flags(sess, &env, cfg, build_dir, "flags", &mut ignored));
+    // 言語標準を言語別の旗より前に置くのは、計画の翻訳行と同じ理由である。
+    let (std_name, flags_name) = match language {
+        HeaderLanguage::C => ("c_std", "c_flags"),
+        HeaderLanguage::Cxx => ("cxx_std", "cxx_flags"),
+    };
+    out.extend(std_flag(&env, std_name));
+    out.extend(collect_flags(sess, &env, cfg, build_dir, flags_name, &mut ignored));
+    out
+}
+
 /// このターゲット自身が公開しているリンク時の語（ADR-0043）。
 pub fn public_link_flags(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> {
     let target = sess.target(tid);

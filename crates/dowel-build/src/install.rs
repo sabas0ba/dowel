@@ -68,10 +68,15 @@ pub fn entries(
     destdir: Option<&Path>,
     targets: &[TargetId],
 ) -> Entries {
-    let mut items: Vec<Item> = Vec::new();
-    let mut diags = Vec::new();
-    let mut headers_out: Vec<crate::surface::Header> = Vec::new();
     let root = destdir.map(|d| join_prefix(d, prefix)).unwrap_or_else(|| prefix.to_path_buf());
+    // 走査は答そのものへ積む。配る項目、配ったヘッダ、述べたことは同じ1件の
+    // 走査から出るものであり、別々の器に分けても最後に1つへ戻す。
+    let mut out = Entries {
+        items: Vec::new(),
+        diagnostics: Vec::new(),
+        headers: Vec::new(),
+        include_root: root.join("include"),
+    };
 
     for &tid in targets {
         let target = sess.target(tid);
@@ -83,21 +88,13 @@ pub fn entries(
             // 検査と計測は配るものではない。物を確かめる道具であって、物ではない。
             _ => continue,
         };
-        items.push(Item::Copy { from: artifact.clone(), to: root.join(dir).join(name) });
+        out.items.push(Item::Copy { from: artifact.clone(), to: root.join(dir).join(name) });
 
         if target.kind == TableKind::Lib {
             if plan.shared_libraries.contains(artifact) {
-                alias_of(cfg, &target.name, artifact, &root.join("lib"), &mut items);
+                alias_of(cfg, &target.name, artifact, &root.join("lib"), &mut out.items);
             }
-            headers(
-                sess,
-                tid,
-                cfg,
-                &root.join("include"),
-                &mut items,
-                &mut headers_out,
-                &mut diags,
-            );
+            headers(sess, tid, cfg, &plan.build_dir, &mut out);
         }
     }
 
@@ -109,12 +106,12 @@ pub fn entries(
     for lib in &plan.shared_libraries {
         let Some(name) = lib.file_name() else { continue };
         let to = root.join("lib").join(name);
-        if items.iter().any(|i| i.destination() == to) {
+        if out.items.iter().any(|i| i.destination() == to) {
             continue;
         }
-        items.push(Item::Copy { from: lib.clone(), to });
+        out.items.push(Item::Copy { from: lib.clone(), to });
         if let Some(tid) = plan.artifacts.iter().find(|(_, p)| *p == lib).map(|(t, _)| *t) {
-            alias_of(cfg, &sess.target(tid).name, lib, &root.join("lib"), &mut items);
+            alias_of(cfg, &sess.target(tid).name, lib, &root.join("lib"), &mut out.items);
         }
     }
 
@@ -129,15 +126,15 @@ pub fn entries(
     let installed_libs: Vec<String> =
         described.iter().map(|t| sess.package(sess.target(*t).package).name.clone()).collect();
     for &tid in &described {
-        items.push(Item::Write {
+        out.items.push(Item::Write {
             at: root.join("lib/pkgconfig").join(format!("{}.pc", sess.target(tid).name)),
             text: pkgconfig(sess, tid, graph, cfg, prefix, &installed_libs, &described),
         });
     }
 
-    items.sort_by(|a, b| a.destination().cmp(b.destination()));
-    items.dedup_by(|a, b| a.destination() == b.destination());
-    Entries { include_root: root.join("include"), items, diagnostics: diags, headers: headers_out }
+    out.items.sort_by(|a, b| a.destination().cmp(b.destination()));
+    out.items.dedup_by(|a, b| a.destination() == b.destination());
+    out
 }
 
 /// 版付きの共有ライブラリに添える、版を持たない名前（ADR-0040）。
@@ -160,15 +157,23 @@ fn alias_of(cfg: &Config, target: &str, library: &Path, lib_dir: &Path, items: &
 ///
 /// 探索路をそのまま写すのは推測ではない。`public.includes` は「使う側の
 /// 探索路に載る」と述べた宣言であり、そこから辿れるものは既に面である。
-fn headers(
-    sess: &Session,
-    tid: TargetId,
-    cfg: &Config,
-    include_dir: &Path,
-    items: &mut Vec<Item>,
-    shipped: &mut Vec<crate::surface::Header>,
-    diags: &mut Vec<Diagnostic>,
-) {
+fn headers(sess: &Session, tid: TargetId, cfg: &Config, build_dir: &Path, out: &mut Entries) {
+    let include_dir = out.include_root.clone();
+    // 使う側と同じ条件で読むために要るもの（ADR-0060）。`.h` をどちらの言語で
+    // 読むかを決めるターゲットの言語と、その言語で使う側の行に載る語である。
+    // 語は言語ごとに違うので、両方を1度ずつ求めてヘッダごとに選ぶ——面が
+    // 大きいほど、ここを1つずつ求め直す方が高くつく。
+    let from_cxx = crate::plan::compiles_cxx(sess, tid, cfg);
+    let c_words =
+        crate::plan::consumer_words(sess, tid, cfg, build_dir, crate::toolstyle::HeaderLanguage::C);
+    let cxx_words = crate::plan::consumer_words(
+        sess,
+        tid,
+        cfg,
+        build_dir,
+        crate::toolstyle::HeaderLanguage::Cxx,
+    );
+
     for (dir, site) in crate::plan::public_include_dirs(sess, tid, cfg) {
         if !dir.is_dir() {
             let mut d = Diagnostic::warning(
@@ -178,20 +183,25 @@ fn headers(
             if let Some(s) = site {
                 d = d.at(s.file, s.span, "a consumer compiles against this");
             }
-            diags.push(
+            out.diagnostics.push(
                 d.note("`public.includes` names the directories a consumer compiles against"),
             );
             continue;
         }
         let files = files_under(&dir);
-        report_sources_among_headers(&dir, &files, site, diags);
+        report_sources_among_headers(&dir, &files, site, &mut out.diagnostics);
         for file in &files {
             let Ok(rel) = file.strip_prefix(&dir) else { continue };
             let to = include_dir.join(rel);
             // 配った面は、配ったものだけで読めなければならない（ADR-0060）。
             // 直す先は、それを配ると決めたこの宣言である。
-            shipped.push(crate::surface::Header { at: to.clone(), site });
-            items.push(Item::Copy { from: file.clone(), to });
+            let language = crate::surface::language(&to, from_cxx);
+            let words = match language {
+                crate::toolstyle::HeaderLanguage::C => c_words.clone(),
+                crate::toolstyle::HeaderLanguage::Cxx => cxx_words.clone(),
+            };
+            out.headers.push(crate::surface::Header { at: to.clone(), site, language, words });
+            out.items.push(Item::Copy { from: file.clone(), to });
         }
     }
 }

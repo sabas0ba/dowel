@@ -548,6 +548,14 @@ changes, only the speed.
       and quotes its first complaint, the posture ADR-0039 took for
       `exports`. Only `.h` / `.hh` / `.hpp` / `.hxx` are read, closed for
       ADR-0051's reason
+    - It reads the header the way a consumer does, which takes three things:
+      the words pkg-config's `Cflags` carries (`public.defines` /
+      `public.flags` — a define can open an `#include`), the language (`.hh`
+      / `.hpp` / `.hxx` are C++; `.h` follows whether the shipping target
+      compiles C++), and saying that language out loud with `-x` (`/TC` /
+      `/TP`). Measured: `cc -E t.HH` warns, exits 0 and never opens the file
+      — the shape ADR-0051 refuses, which this check had reproduced inside
+      itself
     - The include directory goes **whole and unfiltered**, because that is
       what the declaration says a consumer compiles against. When it also
       holds files dowel compiles, that is `source-among-headers`, pointing
@@ -1396,16 +1404,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (780 tests):
+Current breakdown (787 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 383 |
+| `unit-*` | per-crate unit tests | 385 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 296 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 301 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |
