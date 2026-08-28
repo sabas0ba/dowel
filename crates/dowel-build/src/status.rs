@@ -6,7 +6,12 @@
 //! しかも既定のバックエンドでは答そのものが無かった。ログは走らせた後の
 //! 記録であり、問いは走らせる前に立つ。
 //!
-//! ここは**問い合わせ**である。何も書かず、何も起こさない。答は2段に分かれる。
+//! ここは**問い合わせ**である。段を1つも走らせず、ビルド木には何も書かない。
+//! バックエンドも呼ばない。起動の段取りそのものは他の命令と同じで、評価の
+//! 記録は `check` と同じように書かれ、道具の三つ組も要れば聞く——ビルド
+//! ディレクトリの名前が構成から出る以上、聞かずには見に行く先が決まらない。
+//!
+//! 答は2段に分かれる。
 //!
 //! - 評価が何を使い回し、何を作り直したか（`dowel_query::Stats`）
 //! - どの段が走り、その理由は何か（`exec::staleness`）
@@ -144,9 +149,13 @@ fn propagate(g: &BuildGraph, reasons: &mut [Option<Stale>]) {
 pub fn render_text(s: &Status) -> String {
     let mut out = String::new();
     let e = &s.evaluation;
+    // 使い回しは1種類ではない。依存を辿って確かめたものと、同じ版で2度目
+    // 以降に聞かれて即答したものは別のことであり、足して1つの「reused」に
+    // すると、どちらが効いているのかが読めなくなる。
     out.push_str(&format!(
-        "evaluation  {} recomputed, {} unchanged after recomputing, {} reused, {} skipped\n",
-        e.computed, e.cut_off, e.verified, e.skipped
+        "evaluation  {} recomputed, {} unchanged after recomputing, \
+         {} verified, {} answered again, {} skipped\n",
+        e.computed, e.cut_off, e.verified, e.hit, e.skipped
     ));
     out.push_str(&format!("steps       {} planned, {} would run\n", s.steps.len(), s.would_run()));
 
@@ -192,7 +201,8 @@ pub fn render_json(s: &Status) -> String {
     w.begin_object()
         .field_u64("recomputed", s.evaluation.computed as u64)
         .field_u64("cut_off", s.evaluation.cut_off as u64)
-        .field_u64("reused", s.evaluation.verified as u64)
+        .field_u64("verified", s.evaluation.verified as u64)
+        .field_u64("answered_again", s.evaluation.hit as u64)
         .field_u64("skipped", s.evaluation.skipped as u64)
         .end_object();
     w.key("steps");

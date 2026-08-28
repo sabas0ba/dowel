@@ -349,8 +349,9 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
         }
 
         Command::Status { targets } => {
-            // 走らせない。計画までは `check` と同じ道を通り、そこから先は
-            // 「今そうなっているか」を読むだけである（ADR-0061）。
+            // 走らせない。計画までは `check` と同じ道を通り——起動の段取りも
+            // 記録の書き出しもそこと同じである——そこから先は「今そうなって
+            // いるか」を読むだけである。ビルド木には何も書かない（ADR-0061）。
             let requested = default_targets(&sess, &cfg, targets)?;
             let (p, pdiags) = build_plan::plan(&sess, &g, &cfg, &requested);
             sess.diagnostics.extend(pdiags);

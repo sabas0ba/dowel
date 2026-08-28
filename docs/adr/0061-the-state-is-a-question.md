@@ -35,7 +35,7 @@ depended on which backend ran — the thing
 for ordering and for progress.
 
 The incremental side is the same shape. `dowel_query::Stats` has counted
-`computed` / `cut_off` / `verified` / `skipped` since the query layer was
+`computed` / `cut_off` / `verified` / `hit` / `skipped` since the query layer was
 written, and nothing outside the crate's own tests has ever read it.
 `cache info` reports bytes and record counts, which answers how big the store
 is, not what this run did with it.
@@ -46,12 +46,22 @@ run left behind. The question is asked *before* deciding whether to run.
 ## Decision
 
 **`dowel status` reports what a build would do, without doing it.** It plans
-exactly as `check` does, then reads — and writes nothing, starts nothing, and
-never consults a backend.
+exactly as `check` does, then reads. No step runs, nothing in the build
+directory is written, and no backend is consulted.
+
+That is the claim, and it stops there deliberately. The command shares the
+ordinary startup with every other one: the manifests are read, the evaluation
+store is written as `check` writes it, and the compiler is asked for its triple
+when the facts cache is cold. Suppressing those would not make the command more
+of a question — the build directory's name is derived from the configuration,
+so a `status` that will not probe cannot find the directory it is asked about,
+and one that will not persist makes the next command re-evaluate what this one
+just read. The line worth drawing is around the build: no step, no backend,
+nothing written where the products live.
 
 ```console
 $ dowel status
-evaluation  1 recomputed, 8 unchanged after recomputing, 14 reused, 0 skipped
+evaluation  1 recomputed, 8 unchanged after recomputing, 14 verified, 26 answered again, 0 skipped
 steps       4 planned, 3 would run
 
 would run
@@ -114,6 +124,12 @@ built, "the command changed since the last run" blames an edit nobody made.
 - What this does *not* do is run anything, so it cannot report a failure a
   compiler would find. It answers what a build would attempt, not what it would
   produce.
+- Reuse is reported as more than one number. `verified` (dependencies walked,
+  nothing changed) and `answered again` (asked twice in one revision, answered
+  from the memo) are both reuse and are not the same thing; on a small project
+  the second is ten times the first, so folding them together would hide which
+  one is carrying the run. `skipped` — durability said not to walk at all — is
+  a third.
 - The evaluation counts are reported as the query layer has always kept them.
   They make an unexpected number visible for the first time; what the numbers
   ought to be on an unchanged reload is a separate question, and one this makes

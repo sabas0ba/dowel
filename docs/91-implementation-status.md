@@ -410,8 +410,10 @@ changes, only the speed.
 - `dowel status` — what a build would do, without doing it
   ([ADR-0061](adr/0061-the-state-is-a-question.md)). Two stages: what the
   manifest evaluation reused and recomputed (`dowel_query::Stats`, read
-  outside the query crate for the first time), and which steps would run with
-  the reason for each. The judgment is `exec::staleness`, the same function
+  outside the query crate for the first time — and reported as more than one
+  number, because "dependencies walked, nothing changed" and "asked twice in
+  one revision" are both reuse and not the same one), and which steps would run
+  with the reason for each. The judgment is `exec::staleness`, the same function
   the direct backend calls just before running a step — a report with its own
   copy of the rule drifts from the rule that acts. Two reasons belong to the
   report alone, and both are things a build does before any judgment happens:
@@ -1415,7 +1417,7 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (796 tests):
+Current breakdown (797 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
@@ -1424,7 +1426,7 @@ Current breakdown (796 tests):
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 305 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 306 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

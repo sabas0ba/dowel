@@ -528,12 +528,19 @@ dowel status [target...] [--format <text|json>]
 
 Reports what a build would do, without doing it
 ([ADR-0061](adr/0061-the-state-is-a-question.md)). It plans exactly as
-`check` does, then reads the build directory. Nothing is written, nothing is
-started, and no backend is consulted.
+`check` does, then reads the build directory. **No step runs, nothing in the
+build directory is written, and no backend is consulted.**
+
+What it does share with every other command is the ordinary startup: the
+manifests are read, the evaluation store is written the way `check` writes it,
+and the compiler is asked for its triple when the facts cache does not already
+hold it. Refusing to ask would not make the command more read-only — the build
+directory's name comes from the configuration, so a `status` that will not
+probe cannot find the directory it was asked about.
 
 ```
 $ dowel status
-evaluation  1 recomputed, 8 unchanged after recomputing, 14 reused, 0 skipped
+evaluation  1 recomputed, 8 unchanged after recomputing, 14 verified, 26 answered again, 0 skipped
 steps       4 planned, 3 would run
 
 would run
@@ -546,9 +553,20 @@ up to date
 ```
 
 Two stages, because two different machines decide them. The first line is the
-manifest evaluation: how much of the previous run's work the query layer
-reused, and how much it recomputed. The rest is the action graph: which steps
-would run, and why each one.
+manifest evaluation; the rest is the action graph.
+
+Reuse is not one thing, so it is not reported as one number:
+
+| Word | Meaning |
+|---|---|
+| `recomputed` | the query ran again and the value changed |
+| `unchanged after recomputing` | it ran again and produced the same value — early cutoff, so nothing downstream of it moved |
+| `verified` | its dependencies were walked, none had changed, and it was not run |
+| `answered again` | asked more than once in this revision, answered from the memo without walking anything |
+| `skipped` | durability said nothing at or above that level had changed, so the dependencies were not walked at all |
+
+The two middle rows are both reuse and they are different kinds; adding them
+together hides which one is carrying the run.
 
 The reasons a step would run:
 

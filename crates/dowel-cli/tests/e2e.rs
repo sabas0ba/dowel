@@ -7070,6 +7070,49 @@ fn a_changed_command_is_named_as_such() {
     r.stdout_contains("the command changed since the last run");
 }
 
+/// 述べるだけの命令が、ビルド木に何も書かない（ADR-0061）。
+///
+/// 起動の段取りは他の命令と同じで、評価の記録は `check` と同じように書かれる。
+/// 引く線はビルドの側である——段を走らせず、成果物の在る場所へは書かない。
+#[test]
+fn nothing_in_the_build_tree_is_written_by_reporting_on_it() {
+    let p = Project::new("status-writes-nothing");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.run(".", &["build"]).success();
+
+    let dir = build_dir(&p.path("."), "debug");
+    let before = tree_stamps(&dir);
+    assert!(!before.is_empty(), "the build tree is empty");
+
+    // 時刻の分解能より長く待つ。待たずに比べると、書いても同じに見える。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    p.run(".", &["status"]).success();
+
+    assert_eq!(tree_stamps(&dir), before, "`status` wrote into the build tree");
+}
+
+/// ビルド木の中の道と更新時刻。上のテストが読む。
+fn tree_stamps(dir: &std::path::Path) -> Vec<(std::path::PathBuf, std::time::SystemTime)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                stack.push(path);
+            } else if let Ok(t) = meta.modified() {
+                out.push((path, t));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// 機械が読む形でも同じ2段を答える（ADR-0061）。
 #[test]
 fn the_state_is_answered_in_json_as_well() {
@@ -7083,7 +7126,9 @@ fn the_state_is_answered_in_json_as_well() {
     r.success();
     let v = dowel_support::json::parse(&r.stdout).expect("the report is JSON");
     let evaluation = v.get("evaluation").expect("the evaluation stage is reported");
-    assert!(evaluation.get("reused").is_some(), "{}", r.stdout);
+    // 使い回しは1種類ではない。どちらの数も別の欄で出る。
+    assert!(evaluation.get("verified").is_some(), "{}", r.stdout);
+    assert!(evaluation.get("answered_again").is_some(), "{}", r.stdout);
     let steps = v.get("steps").and_then(|s| s.as_array()).expect("the steps are reported");
     assert!(!steps.is_empty(), "{}", r.stdout);
     for step in steps {
