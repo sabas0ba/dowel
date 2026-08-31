@@ -541,19 +541,25 @@ probe cannot find the directory it was asked about.
 ```
 $ dowel status
 evaluation  1 recomputed, 8 unchanged after recomputing, 14 verified, 26 answered again, 0 skipped
+preparation 1 planned, 1 would change
 steps       4 planned, 3 would run
+
+would prepare
+  WRITE lib/core.map
 
 would run
   CC obj/app/core/src_core.c.o  src/core.c is newer than the output
   AR lib/libcore.a              obj/app/core/src_core.c.o is rewritten by an earlier step
-  LINK bin/app                  lib/libcore.a is rewritten by an earlier step
+  LINK lib/libcore.so           the planned input changed (lib/core.map is rewritten)
 
 up to date
   CC obj/app/app/src_main.c.o
 ```
 
-Two stages, because two different machines decide them. The first line is the
-manifest evaluation; the rest is the action graph.
+Three stages, because three different things decide them. The first line is
+the manifest evaluation, preparation names files and symbolic links the build
+would bring into the planned state, and the rest is the action graph. Projects
+without generated build inputs or link aliases omit the preparation line.
 
 Reuse is not one thing, so it is not reported as one number:
 
@@ -579,6 +585,7 @@ The reasons a step would run:
 | `input missing <path>` | an input is gone |
 | `<path> is newer than the output` | the ordinary case |
 | `the tool changed (<path> is rewritten)` | the tool's identity stamp no longer matches the tool ([ADR-0055](adr/0055-tool-identity-in-freshness.md)) |
+| `the planned input changed (<path> is rewritten)` | generated input contents, such as an export map, no longer match the plan |
 | `<path> is rewritten by an earlier step` | a step that runs first overwrites this input |
 
 The judgment is the same function the direct backend calls just before running
@@ -590,7 +597,7 @@ the same file times and the command log is dowel's for every backend.
 |---|---|---|
 | `--format <fmt>` | `text` / `json` | `text` |
 
-`--format=json` carries the same two stages, so a CI job can assert on how
+`--format=json` carries the same three stages, so a CI job can assert on how
 many steps would run rather than parsing build output.
 
 ## `dowel why`

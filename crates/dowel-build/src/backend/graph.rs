@@ -26,12 +26,16 @@ pub const FORMAT: &str = "dowel-build-graph";
 
 /// 形式の版。互換でない変更のたびに上げる。
 ///
+/// 3 は計画が生成する入力（`prepared_files`）と共有ライブラリの別名
+/// （`link_aliases`）を加えた版である。版2の読み手が読み飛ばすと、export map
+/// が無いか古いままになり、版付き共有ライブラリの通常名も置かれない。
+///
 /// 2 は作業ディレクトリ（`cwd`、[ADR-0054](../../../../docs/adr/0054-generated-sources.md)）
 /// と道具の刻印（`tool_stamps`、
 /// [ADR-0055](../../../../docs/adr/0055-tool-identity-in-freshness.md)）を
 /// 加えた版である。どちらも版1の読み手が読み飛ばすと**別のビルドになる**
 /// ——生成が違う場所で走り、刻印の無い入力に規則が無いと言われる。
-pub const VERSION: u64 = 2;
+pub const VERSION: u64 = 3;
 
 impl Backend for Graph {
     fn name(&self) -> &'static str {
@@ -121,6 +125,26 @@ pub fn render(g: &BuildGraph) -> String {
         w.end_object();
     }
     w.end_array();
+    // 計画が生成する入力。計画そのものは書かず、走らせる側が内容の違う
+    // ものだけを書く。外部バックエンドにも同じ事実を渡す。
+    w.key("prepared_files").begin_array();
+    for (path, contents) in &g.prepared_files {
+        w.begin_object();
+        w.field_str("path", &path.display().to_string());
+        w.field_str("contents", contents);
+        w.end_object();
+    }
+    w.end_array();
+    // 版付き共有ライブラリの、版を持たない通常名。指し先は隣の実体を
+    // 相対で述べる。
+    w.key("link_aliases").begin_array();
+    for (path, target) in &g.link_aliases {
+        w.begin_object();
+        w.field_str("path", &path.display().to_string());
+        w.field_str("target", &target.display().to_string());
+        w.end_object();
+    }
+    w.end_array();
     w.end_object();
     w.finish()
 }
@@ -183,6 +207,20 @@ pub fn parse(text: &str) -> Result<BuildGraph, String> {
         tool_stamps
             .push((PathBuf::from(str_field(t, "path")?), str_field(t, "identity")?.to_string()));
     }
+    let mut prepared_files = Vec::new();
+    for f in doc.get("prepared_files").and_then(|v| v.as_array()).unwrap_or(&[]) {
+        prepared_files.push((
+            PathBuf::from(str_field(f, "path")?),
+            str_field(f, "contents")?.to_string(),
+        ));
+    }
+    let mut link_aliases = Vec::new();
+    for a in doc.get("link_aliases").and_then(|v| v.as_array()).unwrap_or(&[]) {
+        link_aliases.push((
+            PathBuf::from(str_field(a, "path")?),
+            PathBuf::from(str_field(a, "target")?),
+        ));
+    }
 
     Ok(BuildGraph {
         build_dir,
@@ -191,6 +229,8 @@ pub fn parse(text: &str) -> Result<BuildGraph, String> {
         default_outputs: strings(&doc, "default_outputs")?.into_iter().map(PathBuf::from).collect(),
         deps,
         tool_stamps,
+        prepared_files,
+        link_aliases,
     })
 }
 
@@ -270,6 +310,14 @@ mod tests {
                 PathBuf::from("/b/tools/cc-0badcafe.stamp"),
                 "/usr/bin/cc:12:34".into(),
             )],
+            prepared_files: vec![(
+                PathBuf::from("/b/lib/core.map"),
+                "{ global: core_open; local: *; };\n".into(),
+            )],
+            link_aliases: vec![(
+                PathBuf::from("/b/lib/libcore.so"),
+                PathBuf::from("libcore.so.2"),
+            )],
         }
     }
 
@@ -284,7 +332,7 @@ mod tests {
     fn a_document_names_its_format_and_version() {
         let text = render(&sample());
         assert!(text.contains("\"format\": \"dowel-build-graph\""), "{text}");
-        assert!(text.contains("\"version\": 2"), "{text}");
+        assert!(text.contains("\"version\": 3"), "{text}");
     }
 
     #[test]
@@ -302,9 +350,9 @@ mod tests {
 
     #[test]
     fn a_future_version_is_refused_rather_than_guessed() {
-        let text = render(&sample()).replace("\"version\": 2", "\"version\": 3");
+        let text = render(&sample()).replace("\"version\": 3", "\"version\": 4");
         let e = parse(&text).unwrap_err();
-        assert!(e.contains("version 3"), "{e}");
+        assert!(e.contains("version 4"), "{e}");
     }
 
     #[test]
@@ -315,7 +363,7 @@ mod tests {
 
     #[test]
     fn a_truncated_document_says_what_is_missing() {
-        let e = parse("{\"format\": \"dowel-build-graph\", \"version\": 2}").unwrap_err();
+        let e = parse("{\"format\": \"dowel-build-graph\", \"version\": 3}").unwrap_err();
         assert!(e.contains("build_dir"), "{e}");
     }
 }

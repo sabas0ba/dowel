@@ -361,7 +361,8 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             let s = dowel_build::status::of(&sess, &p);
             match opts.out_format {
                 OutFormat::Json => println!("{}", dowel_build::status::render_json(&s)),
-                _ => print!("{}", dowel_build::status::render_text(&s)),
+                OutFormat::Text => print!("{}", dowel_build::status::render_text(&s)),
+                OutFormat::Dot => unreachable!("the argument parser rejects status --format=dot"),
             }
             Ok(ExitCode::SUCCESS)
         }

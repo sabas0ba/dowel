@@ -7093,19 +7093,93 @@ fn nothing_in_the_build_tree_is_written_by_reporting_on_it() {
     assert_eq!(tree_stamps(&dir), before, "`status` wrote into the build tree");
 }
 
-/// ビルド木の中の道と更新時刻。上のテストが読む。
-fn tree_stamps(dir: &std::path::Path) -> Vec<(std::path::PathBuf, std::time::SystemTime)> {
+/// 計画が生成する入力と共有ライブラリの別名も、問い合わせでは置かない。
+///
+/// export map は以前、計画の途中で無条件に書かれていた。`status` がビルド木を
+/// 変更するだけでなく、自分で動かした時刻を見て共有ライブラリを古いと述べる。
+#[test]
+fn generated_link_inputs_and_aliases_stay_read_only_under_status() {
+    let p = Project::new("status-shared-preparations");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         soversion = 2\n\
+         exports = [\"core_open\"]\n",
+    );
+    p.write(
+        "src/core.c",
+        "int core_open(void) { return 0; }\nint core_close(void) { return 0; }\n",
+    );
+    p.run(".", &["build"]).success();
+
+    let dir = build_dir(&p.path("."), "debug");
+    let export_map = dir.join("lib/core.map");
+    let alias = dir.join("lib/libcore.so");
+    assert!(export_map.is_file(), "no generated export map");
+    assert_eq!(std::fs::read_link(&alias).unwrap(), std::path::PathBuf::from("libcore.so.2"));
+
+    let before = tree_stamps(&dir);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let quiet = p.run(".", &["status"]);
+    quiet.success();
+    quiet.stdout_contains("preparation 2 planned, 0 would change");
+    quiet.stdout_contains("0 would run");
+    assert_eq!(tree_stamps(&dir), before, "`status` changed prepared build inputs");
+
+    // 宣言だけを変える。書き直す必要は報告するが、この時点では書かない。
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         soversion = 2\n\
+         exports = [\"core_open\", \"core_close\"]\n",
+    );
+    let old_map = std::fs::read_to_string(&export_map).unwrap();
+    let changed = p.run(".", &["status"]);
+    changed.success();
+    changed.stdout_contains("preparation 2 planned, 1 would change");
+    changed.stdout_contains("WRITE lib/core.map");
+    changed.stdout_contains("the planned input changed");
+    assert_eq!(std::fs::read_to_string(&export_map).unwrap(), old_map);
+
+    // 実際のビルドだけが準備を反映し、その後の問い合わせは静かになる。
+    p.run(".", &["build"]).success();
+    assert!(std::fs::read_to_string(&export_map).unwrap().contains("core_close"));
+    let settled = p.run(".", &["status"]);
+    settled.success();
+    settled.stdout_contains("preparation 2 planned, 0 would change");
+    settled.stdout_contains("0 would run");
+}
+
+/// ビルド木の中の道、種類、時刻、大きさ、記号連結の指し先。上の試験が読む。
+fn tree_stamps(
+    dir: &std::path::Path,
+) -> Vec<(
+    std::path::PathBuf,
+    std::time::SystemTime,
+    u64,
+    Option<std::path::PathBuf>,
+)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(at) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&at) else { continue };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(meta) = entry.metadata() else { continue };
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            let Ok(t) = meta.modified() else { continue };
+            let link = meta
+                .file_type()
+                .is_symlink()
+                .then(|| std::fs::read_link(&path).ok())
+                .flatten();
+            out.push((path.clone(), t, meta.len(), link));
             if meta.is_dir() {
                 stack.push(path);
-            } else if let Ok(t) = meta.modified() {
-                out.push((path, t));
             }
         }
     }
@@ -7113,7 +7187,7 @@ fn tree_stamps(dir: &std::path::Path) -> Vec<(std::path::PathBuf, std::time::Sys
     out
 }
 
-/// 機械が読む形でも同じ2段を答える（ADR-0061）。
+/// 機械が読む形でも同じ3段を答える（ADR-0061）。
 #[test]
 fn the_state_is_answered_in_json_as_well() {
     let p = Project::new("status-json");
@@ -7129,6 +7203,11 @@ fn the_state_is_answered_in_json_as_well() {
     // 使い回しは1種類ではない。どちらの数も別の欄で出る。
     assert!(evaluation.get("verified").is_some(), "{}", r.stdout);
     assert!(evaluation.get("answered_again").is_some(), "{}", r.stdout);
+    assert!(
+        v.get("preparations").and_then(|p| p.as_array()).is_some(),
+        "{}",
+        r.stdout
+    );
     let steps = v.get("steps").and_then(|s| s.as_array()).expect("the steps are reported");
     assert!(!steps.is_empty(), "{}", r.stdout);
     for step in steps {

@@ -300,10 +300,10 @@ pub enum Stale {
     /// 道具の刻印が書き換わる（ADR-0055）。走らせる側は書かれた後に判定する
     /// ので出会わない。走らせずに述べる側だけが持つ
     ToolChanged(PathBuf),
+    /// 計画が生成した入力の内容が変わり、走らせる前に書き直される
+    PreparedInputChanged(PathBuf),
     /// 先に走る段がこの入力を書き直す。同じく、走らせずに述べる側だけが持つ
     InputRebuilt(PathBuf),
-    /// 先に走る段に待たされている。辿る道が無いときだけこちらになる
-    InputRebuiltBy(String),
 }
 
 impl Stale {
@@ -319,20 +319,23 @@ impl Stale {
             Stale::InputMissing(p) => format!("input missing {}", p.display()),
             Stale::InputNewer(p) => format!("{} is newer than the output", p.display()),
             Stale::ToolChanged(p) => format!("the tool changed ({} is rewritten)", p.display()),
+            Stale::PreparedInputChanged(p) => {
+                format!("the planned input changed ({} is rewritten)", p.display())
+            }
             Stale::InputRebuilt(p) => format!("{} is rewritten by an earlier step", p.display()),
-            Stale::InputRebuiltBy(d) => format!("`{d}` runs first"),
         }
     }
 
     /// この理由が指す道。表示のために相対化する側が読む。
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Stale::NeverRun | Stale::CommandChanged | Stale::InputRebuiltBy(_) => None,
+            Stale::NeverRun | Stale::CommandChanged => None,
             Stale::OutputMissing(p)
             | Stale::NoDependencyRecord(p)
             | Stale::InputMissing(p)
             | Stale::InputNewer(p)
             | Stale::ToolChanged(p)
+            | Stale::PreparedInputChanged(p)
             | Stale::InputRebuilt(p) => Some(p),
         }
     }

@@ -62,19 +62,26 @@ nothing written where the products live.
 ```console
 $ dowel status
 evaluation  1 recomputed, 8 unchanged after recomputing, 14 verified, 26 answered again, 0 skipped
+preparation 1 planned, 1 would change
 steps       4 planned, 3 would run
+
+would prepare
+  WRITE lib/core.map
 
 would run
   CC obj/app/core/src_core.c.o  src/core.c is newer than the output
   AR lib/libcore.a              obj/app/core/src_core.c.o is rewritten by an earlier step
-  LINK bin/app                  lib/libcore.a is rewritten by an earlier step
+  LINK lib/libcore.so           the planned input changed (lib/core.map is rewritten)
 
 up to date
   CC obj/app/app/src_main.c.o
 ```
 
-Two stages, because the two questions are about two different machines: the
-manifest evaluation that produced the plan, and the actions the plan holds.
+Three stages, because the questions are about three different machines: the
+manifest evaluation that produced the plan, the files and symbolic links a
+build prepares, and the actions the plan holds. The planning pass only
+describes preparations. Writing them there would make both `check` and
+`status` change the build tree, because both commands use the same pass.
 
 **The judgment is borrowed, not copied.** `exec::staleness` returns *why* a
 step must run rather than a bare `bool`, and both readers call it: the direct
@@ -87,13 +94,17 @@ the command log, because it is dowel's rule and not one backend's: the log it
 reads is written by the shared `backend::run` after *every* backend, so what
 this reports does not depend on which one ran.
 
-**Two reasons belong to the report alone**, and they are the two things a
-build does before any judgment happens:
+**Three reasons belong to the report alone**, and they describe changes a
+build has not performed yet:
 
 - A tool stamp whose contents changed will be rewritten first
   ([ADR-0055](0055-tool-identity-in-freshness.md)), so every step reading it is
   already stale. The runner never sees this: by the time it judges, the stamp
   is written and the ordinary "newer than the output" catches it.
+- A generated input whose planned contents changed will also be rewritten
+  first. Export maps are the current case. They are written only when their
+  contents differ, so an unchanged plan does not move their timestamp and
+  relink a shared library on every build.
 - A step whose input another step is about to rewrite is stale too. The runner
   never has to find this either — the earlier step writes, the clock moves, and
   the next step notices by itself. A report that does not take that step
@@ -112,13 +123,15 @@ built, "the command changed since the last run" blames an edit nobody made.
   three read the same file times and the command log is dowel's for all of
   them. Where they diverge, the divergence is worth knowing about and this is
   the tool that shows it.
-- The report's propagation pass repeats until nothing moves. It converges in
-  as many passes as the graph is deep — three for compile, archive, link — not
-  in as many as there are steps.
+- The report's propagation pass follows files a step actually reads, not every
+  `deps` ordering edge. An order-only predecessor does not make a fresh step
+  stale ([ADR-0056](0056-direct-backend-parallelism.md)). The pass repeats
+  until nothing moves and converges in as many passes as the graph is deep —
+  three for compile, archive, link — not in as many as there are steps.
 - Reasons name a file relative to the build directory or the package root, and
   a path under neither is printed whole. Trimming a path against a root it is
   not under would name a different file.
-- `--format=json` carries the same two stages, so a CI job can assert on "how
+- `--format=json` carries the same three stages, so a CI job can assert on "how
   many steps would run" rather than parsing build output. It is the same
   spelling `why` and `graph` already use.
 - What this does *not* do is run anything, so it cannot report a failure a

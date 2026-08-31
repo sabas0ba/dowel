@@ -11,9 +11,10 @@
 //! 記録は `check` と同じように書かれ、道具の三つ組も要れば聞く——ビルド
 //! ディレクトリの名前が構成から出る以上、聞かずには見に行く先が決まらない。
 //!
-//! 答は2段に分かれる。
+//! 答は3段に分かれる。
 //!
 //! - 評価が何を使い回し、何を作り直したか（`dowel_query::Stats`）
+//! - ビルド前の入力と別名の準備が何を変えるか
 //! - どの段が走り、その理由は何か（`exec::staleness`）
 //!
 //! 判定は借りてくる。走らせる側と同じ関数を呼ぶので、ここが述べた理由で
@@ -23,7 +24,7 @@ use crate::backend::BuildGraph;
 use crate::exec::{CommandLog, Stale};
 use crate::plan::Plan;
 use dowel_model::Session;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// 走らせる前に分かること全部。
@@ -35,8 +36,23 @@ pub struct Status {
     pub source_root: PathBuf,
     /// マニフェストの評価が何をしたか
     pub evaluation: dowel_model::QueryStats,
+    /// ビルド前に揃える、計画が生成した入力と共有ライブラリの別名
+    pub preparations: Vec<PreparationStatus>,
     /// 段ごとの見立て。計画の順
     pub steps: Vec<StepStatus>,
+}
+
+/// ビルドを始める側が、どの段よりも前に揃えるもの。
+#[derive(Clone, Debug)]
+pub struct PreparationStatus {
+    pub kind: PreparationKind,
+    pub would_change: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum PreparationKind {
+    File(PathBuf),
+    LinkAlias { path: PathBuf, target: PathBuf },
 }
 
 /// 1つの段の見立て。
@@ -53,6 +69,11 @@ impl Status {
     /// 走ることになる段の数。
     pub fn would_run(&self) -> usize {
         self.steps.iter().filter(|s| s.reason.is_some()).count()
+    }
+
+    /// 書くか置き直すことになる準備の数。
+    pub fn would_prepare(&self) -> usize {
+        self.preparations.iter().filter(|p| p.would_change).count()
     }
 }
 
@@ -72,7 +93,21 @@ pub fn of(sess: &Session, plan: &Plan) -> Status {
         .tool_stamps
         .iter()
         .filter(|(path, identity)| {
-            std::fs::read_to_string(path).is_ok_and(|said| said != **identity)
+            path.exists()
+                && std::fs::read_to_string(path).ok().as_deref() != Some(identity.as_str())
+        })
+        .map(|(path, _)| path.as_path())
+        .collect();
+
+    // 計画が生成する入力も、実行側は内容が違うときだけ書き直す。まだ無い
+    // ものは通常の `InputMissing` / `NeverRun` に任せ、在って違うときだけ
+    // 「計画が書き直す」と述べる。
+    let prepared_rewrites: BTreeSet<&Path> = g
+        .prepared_files
+        .iter()
+        .filter(|(path, contents)| {
+            path.exists()
+                && std::fs::read_to_string(path).ok().as_deref() != Some(contents.as_str())
         })
         .map(|(path, _)| path.as_path())
         .collect();
@@ -80,9 +115,16 @@ pub fn of(sess: &Session, plan: &Plan) -> Status {
     let mut reasons: Vec<Option<Stale>> = g
         .steps
         .iter()
-        .map(|step| match step.inputs.iter().find(|i| rewritten.contains(i.as_path())) {
-            Some(stamp) => Some(Stale::ToolChanged(stamp.clone())),
-            None => crate::exec::staleness(step, &previous),
+        .map(|step| {
+            if let Some(stamp) = step.inputs.iter().find(|i| rewritten.contains(i.as_path())) {
+                return Some(Stale::ToolChanged(stamp.clone()));
+            }
+            if let Some(input) =
+                step.inputs.iter().find(|i| prepared_rewrites.contains(i.as_path()))
+            {
+                return Some(Stale::PreparedInputChanged(input.clone()));
+            }
+            crate::exec::staleness(step, &previous)
         })
         .collect();
 
@@ -92,6 +134,22 @@ pub fn of(sess: &Session, plan: &Plan) -> Status {
         build_dir: g.build_dir.clone(),
         source_root: sess.packages.first().map(|p| p.root.clone()).unwrap_or_default(),
         evaluation: sess.query_stats(),
+        preparations: g
+            .prepared_files
+            .iter()
+            .map(|(path, contents)| PreparationStatus {
+                kind: PreparationKind::File(path.clone()),
+                would_change: std::fs::read_to_string(path).ok().as_deref()
+                    != Some(contents.as_str()),
+            })
+            .chain(g.link_aliases.iter().map(|(path, target)| PreparationStatus {
+                kind: PreparationKind::LinkAlias {
+                    path: path.clone(),
+                    target: target.clone(),
+                },
+                would_change: !crate::backend::link_alias_matches(path, target),
+            }))
+            .collect(),
         steps: g
             .steps
             .iter()
@@ -114,29 +172,28 @@ pub fn of(sess: &Session, plan: &Plan) -> Status {
 /// 変化が無くなるまで回す。回数はグラフの深さで止まり、深さは段の数より
 /// はるかに小さい——翻訳、書庫、リンクで3である。
 fn propagate(g: &BuildGraph, reasons: &mut [Option<Stale>]) {
-    let waits = crate::backend::direct::dependencies(g);
+    // `deps` は順序だけを表す辺を含む。direct と ninja はそれを鮮度には
+    // 使わない（ADR-0056）ので、ここも実際に読むファイルだけを辿る。
+    let mut producer: HashMap<&Path, usize> = HashMap::new();
+    for (i, step) in g.steps.iter().enumerate() {
+        for output in &step.outputs {
+            producer.insert(output.as_path(), i);
+        }
+    }
     loop {
         let mut moved = false;
         for i in 0..g.steps.len() {
             if reasons[i].is_some() {
                 continue;
             }
-            let Some(&upstream) = waits[i].iter().find(|&&w| reasons[w].is_some()) else {
+            let Some(input) = g.steps[i].inputs.iter().find(|input| {
+                producer
+                    .get(input.as_path())
+                    .is_some_and(|upstream| reasons[*upstream].is_some())
+            }) else {
                 continue;
             };
-            // 書き直される入力そのものを名指す。「先の段が走るから」だけでは、
-            // どのファイルを経由して届いたのかが読み手に分からない。
-            let through = g.steps[upstream]
-                .outputs
-                .iter()
-                .find(|o| g.steps[i].inputs.contains(o))
-                .or_else(|| g.steps[upstream].outputs.first());
-            reasons[i] = Some(match through {
-                Some(path) => Stale::InputRebuilt(path.clone()),
-                // 出力を宣言しない段に待たされている。辿る道が無いので、
-                // 先の段そのものを名指す。
-                None => Stale::InputRebuiltBy(g.steps[upstream].description.clone()),
-            });
+            reasons[i] = Some(Stale::InputRebuilt(input.clone()));
             moved = true;
         }
         if !moved {
@@ -157,7 +214,33 @@ pub fn render_text(s: &Status) -> String {
          {} verified, {} answered again, {} skipped\n",
         e.computed, e.cut_off, e.verified, e.hit, e.skipped
     ));
+    if !s.preparations.is_empty() {
+        out.push_str(&format!(
+            "preparation {} planned, {} would change\n",
+            s.preparations.len(),
+            s.would_prepare()
+        ));
+    }
     out.push_str(&format!("steps       {} planned, {} would run\n", s.steps.len(), s.would_run()));
+
+    let mut preparing = s.preparations.iter().filter(|p| p.would_change).peekable();
+    if preparing.peek().is_some() {
+        out.push_str("\nwould prepare\n");
+        for p in preparing {
+            match &p.kind {
+                PreparationKind::File(path) => {
+                    out.push_str(&format!("  WRITE {}\n", short_path(s, path).display()));
+                }
+                PreparationKind::LinkAlias { path, target } => {
+                    out.push_str(&format!(
+                        "  SYMLINK {} -> {}\n",
+                        short_path(s, path).display(),
+                        target.display()
+                    ));
+                }
+            }
+        }
+    }
 
     let width = s
         .steps
@@ -218,6 +301,25 @@ pub fn render_json(s: &Status) -> String {
         w.end_object();
     }
     w.end_array();
+    w.key("preparations");
+    w.begin_array();
+    for p in &s.preparations {
+        w.begin_object();
+        match &p.kind {
+            PreparationKind::File(path) => {
+                w.field_str("kind", "write");
+                w.field_str("path", &short_path(s, path).display().to_string());
+            }
+            PreparationKind::LinkAlias { path, target } => {
+                w.field_str("kind", "symlink");
+                w.field_str("path", &short_path(s, path).display().to_string());
+                w.field_str("target", &target.display().to_string());
+            }
+        }
+        w.field_bool("would_change", p.would_change);
+        w.end_object();
+    }
+    w.end_array();
     w.end_object();
     w.finish()
 }
@@ -228,31 +330,68 @@ pub fn render_json(s: &Status) -> String {
 /// ビルドディレクトリから、外はパッケージの根からの相対にする。
 fn say(s: &Status, reason: &Stale) -> String {
     let Some(path) = reason.path() else { return reason.say() };
-    let short = path
-        .strip_prefix(&s.build_dir)
-        .or_else(|_| path.strip_prefix(&s.source_root))
-        .unwrap_or(path);
+    let short = short_path(s, path);
     if short == path {
         return reason.say();
     }
     reason.say().replace(&path.display().to_string(), &short.display().to_string())
 }
 
+fn short_path<'a>(s: &'a Status, path: &'a Path) -> &'a Path {
+    path
+        .strip_prefix(&s.build_dir)
+        .or_else(|_| path.strip_prefix(&s.source_root))
+        .unwrap_or(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::ActionKind;
+    use crate::backend::Step;
+    use crate::toolstyle::Deps;
 
     fn status(steps: Vec<StepStatus>) -> Status {
         Status {
             build_dir: PathBuf::from("/b"),
             source_root: PathBuf::from("/s"),
             evaluation: dowel_model::QueryStats::default(),
+            preparations: Vec::new(),
             steps,
         }
     }
 
     fn step(description: &str, reason: Option<Stale>) -> StepStatus {
         StepStatus { description: description.into(), target: "p:t".into(), reason }
+    }
+
+    fn graph_step(id: usize, inputs: &[&str], outputs: &[&str], deps: Vec<usize>) -> Step {
+        Step {
+            id,
+            kind: ActionKind::Compile,
+            target: "p:t".into(),
+            description: format!("step {id}"),
+            program: "true".into(),
+            arguments: vec![],
+            inputs: inputs.iter().map(PathBuf::from).collect(),
+            outputs: outputs.iter().map(PathBuf::from).collect(),
+            depfile: None,
+            deps,
+            cwd: None,
+        }
+    }
+
+    fn graph(steps: Vec<Step>) -> BuildGraph {
+        BuildGraph {
+            build_dir: PathBuf::from("/b"),
+            steps,
+            artifacts: vec![],
+            default_outputs: vec![],
+            deps: Deps::Depfile,
+            tool_stamps: vec![],
+            prepared_files: vec![],
+            link_aliases: vec![],
+        }
     }
 
     #[test]
@@ -304,5 +443,27 @@ mod tests {
         // 見出しの側だけを見る。要約の行にも同じ語が入っている。
         assert!(!text.contains("\nwould run\n"), "{text}");
         assert!(!text.contains("\nup to date\n"), "{text}");
+    }
+
+    #[test]
+    fn an_order_only_dependency_does_not_make_a_fresh_step_stale() {
+        let g = graph(vec![
+            graph_step(0, &["/s/a.c"], &["/b/a.o"], vec![]),
+            graph_step(1, &["/s/b.c"], &["/b/b.o"], vec![0]),
+        ]);
+        let mut reasons = vec![Some(Stale::InputNewer(PathBuf::from("/s/a.c"))), None];
+        propagate(&g, &mut reasons);
+        assert!(reasons[1].is_none(), "an ordering edge was treated as freshness");
+    }
+
+    #[test]
+    fn a_rewritten_input_does_make_its_reader_stale() {
+        let g = graph(vec![
+            graph_step(0, &["/s/a.c"], &["/b/a.o"], vec![]),
+            graph_step(1, &["/b/a.o"], &["/b/app"], vec![]),
+        ]);
+        let mut reasons = vec![Some(Stale::InputNewer(PathBuf::from("/s/a.c"))), None];
+        propagate(&g, &mut reasons);
+        assert_eq!(reasons[1], Some(Stale::InputRebuilt(PathBuf::from("/b/a.o"))));
     }
 }

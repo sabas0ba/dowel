@@ -576,7 +576,12 @@ pub fn parse<I: IntoIterator<Item = String>>(argv: I) -> Result<Parsed, String> 
             Command::Debug { target: positional[0].clone() }
         }
         "graph" => Command::Graph,
-        "status" => Command::Status { targets: positional },
+        "status" => {
+            if opts.out_format == OutFormat::Dot {
+                return Err("`status --format` must be text or json (got `dot`)".into());
+            }
+            Command::Status { targets: positional }
+        }
         "lsp" => Command::Lsp,
         "why" => {
             if positional.len() != 2 {
@@ -659,6 +664,12 @@ mod tests {
     fn positional_arguments_map_to_command_and_targets() {
         let o = run(&["build", "app", "libfoo:foo"]).unwrap();
         assert_eq!(o.command, Command::Build { targets: vec!["app".into(), "libfoo:foo".into()] });
+    }
+
+    #[test]
+    fn status_refuses_the_dot_format_it_cannot_produce() {
+        let e = run(&["status", "--format=dot"]).unwrap_err();
+        assert!(e.contains("text or json"), "{e}");
     }
 
     #[test]

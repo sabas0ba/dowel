@@ -349,6 +349,8 @@ mod tests {
             deps: Deps::Depfile,
             default_outputs: vec![],
             tool_stamps: vec![],
+            prepared_files: vec![],
+            link_aliases: vec![],
         }
     }
 
