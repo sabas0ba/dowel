@@ -7113,7 +7113,10 @@ fn generated_link_inputs_and_aliases_stay_read_only_under_status() {
         "src/core.c",
         "int core_open(void) { return 0; }\nint core_close(void) { return 0; }\n",
     );
-    p.run(".", &["build"]).success();
+    // `status` judges the complete graph by the same rule as the direct backend.
+    // A shared target also plans a static archive, while ninja builds only the
+    // shared default output; direct settles every planned step for this check.
+    p.run(".", &["build", "--backend=direct"]).success();
 
     let dir = build_dir(&p.path("."), "debug");
     let export_map = dir.join("lib/core.map");
@@ -7147,7 +7150,7 @@ fn generated_link_inputs_and_aliases_stay_read_only_under_status() {
     assert_eq!(std::fs::read_to_string(&export_map).unwrap(), old_map);
 
     // 実際のビルドだけが準備を反映し、その後の問い合わせは静かになる。
-    p.run(".", &["build"]).success();
+    p.run(".", &["build", "--backend=direct"]).success();
     assert!(std::fs::read_to_string(&export_map).unwrap().contains("core_close"));
     let settled = p.run(".", &["status"]);
     settled.success();
@@ -7158,12 +7161,7 @@ fn generated_link_inputs_and_aliases_stay_read_only_under_status() {
 /// ビルド木の中の道、種類、時刻、大きさ、記号連結の指し先。上の試験が読む。
 fn tree_stamps(
     dir: &std::path::Path,
-) -> Vec<(
-    std::path::PathBuf,
-    std::time::SystemTime,
-    u64,
-    Option<std::path::PathBuf>,
-)> {
+) -> Vec<(std::path::PathBuf, std::time::SystemTime, u64, Option<std::path::PathBuf>)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(at) = stack.pop() {
@@ -7172,11 +7170,8 @@ fn tree_stamps(
             let path = entry.path();
             let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
             let Ok(t) = meta.modified() else { continue };
-            let link = meta
-                .file_type()
-                .is_symlink()
-                .then(|| std::fs::read_link(&path).ok())
-                .flatten();
+            let link =
+                meta.file_type().is_symlink().then(|| std::fs::read_link(&path).ok()).flatten();
             out.push((path.clone(), t, meta.len(), link));
             if meta.is_dir() {
                 stack.push(path);
@@ -7203,11 +7198,7 @@ fn the_state_is_answered_in_json_as_well() {
     // 使い回しは1種類ではない。どちらの数も別の欄で出る。
     assert!(evaluation.get("verified").is_some(), "{}", r.stdout);
     assert!(evaluation.get("answered_again").is_some(), "{}", r.stdout);
-    assert!(
-        v.get("preparations").and_then(|p| p.as_array()).is_some(),
-        "{}",
-        r.stdout
-    );
+    assert!(v.get("preparations").and_then(|p| p.as_array()).is_some(), "{}", r.stdout);
     let steps = v.get("steps").and_then(|s| s.as_array()).expect("the steps are reported");
     assert!(!steps.is_empty(), "{}", r.stdout);
     for step in steps {

@@ -143,10 +143,7 @@ pub fn of(sess: &Session, plan: &Plan) -> Status {
                     != Some(contents.as_str()),
             })
             .chain(g.link_aliases.iter().map(|(path, target)| PreparationStatus {
-                kind: PreparationKind::LinkAlias {
-                    path: path.clone(),
-                    target: target.clone(),
-                },
+                kind: PreparationKind::LinkAlias { path: path.clone(), target: target.clone() },
                 would_change: !crate::backend::link_alias_matches(path, target),
             }))
             .collect(),
@@ -187,9 +184,7 @@ fn propagate(g: &BuildGraph, reasons: &mut [Option<Stale>]) {
                 continue;
             }
             let Some(input) = g.steps[i].inputs.iter().find(|input| {
-                producer
-                    .get(input.as_path())
-                    .is_some_and(|upstream| reasons[*upstream].is_some())
+                producer.get(input.as_path()).is_some_and(|upstream| reasons[*upstream].is_some())
             }) else {
                 continue;
             };
@@ -338,10 +333,7 @@ fn say(s: &Status, reason: &Stale) -> String {
 }
 
 fn short_path<'a>(s: &'a Status, path: &'a Path) -> &'a Path {
-    path
-        .strip_prefix(&s.build_dir)
-        .or_else(|_| path.strip_prefix(&s.source_root))
-        .unwrap_or(path)
+    path.strip_prefix(&s.build_dir).or_else(|_| path.strip_prefix(&s.source_root)).unwrap_or(path)
 }
 
 #[cfg(test)]

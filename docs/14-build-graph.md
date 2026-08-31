@@ -70,7 +70,7 @@ document.
 | `default_outputs` | array of strings | what to build when nothing is named. Not the same as "every output": a derived file is here even though nothing consumes it |
 | `tool_stamps` | array | `{"path", "identity"}` — files that record which program each step launches ([ADR-0055](adr/0055-tool-identity-in-freshness.md)). They appear in the steps' `inputs`, and **a reader has to write them before running anything**; see below. Empty when the graph has no steps |
 | `prepared_files` | array | `{"path", "contents"}` — generated inputs such as a shared library's export map. **A reader has to write them before running anything**, and only when the contents differ; see below |
-| `link_aliases` | array | `{"path", "target"}` — symbolic links needed before the build, currently the unversioned name beside a versioned shared library. `target` is relative to the link's directory. Empty on hosts where dowel cannot place symbolic links |
+| `link_aliases` | array | `{"path", "target"}` — symbolic links needed before the build, currently the unversioned name beside a versioned shared library. `target` is relative to the link's directory |
 
 ## A step
 

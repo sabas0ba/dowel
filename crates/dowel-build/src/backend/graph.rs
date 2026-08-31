@@ -209,17 +209,13 @@ pub fn parse(text: &str) -> Result<BuildGraph, String> {
     }
     let mut prepared_files = Vec::new();
     for f in doc.get("prepared_files").and_then(|v| v.as_array()).unwrap_or(&[]) {
-        prepared_files.push((
-            PathBuf::from(str_field(f, "path")?),
-            str_field(f, "contents")?.to_string(),
-        ));
+        prepared_files
+            .push((PathBuf::from(str_field(f, "path")?), str_field(f, "contents")?.to_string()));
     }
     let mut link_aliases = Vec::new();
     for a in doc.get("link_aliases").and_then(|v| v.as_array()).unwrap_or(&[]) {
-        link_aliases.push((
-            PathBuf::from(str_field(a, "path")?),
-            PathBuf::from(str_field(a, "target")?),
-        ));
+        link_aliases
+            .push((PathBuf::from(str_field(a, "path")?), PathBuf::from(str_field(a, "target")?)));
     }
 
     Ok(BuildGraph {
@@ -314,10 +310,7 @@ mod tests {
                 PathBuf::from("/b/lib/core.map"),
                 "{ global: core_open; local: *; };\n".into(),
             )],
-            link_aliases: vec![(
-                PathBuf::from("/b/lib/libcore.so"),
-                PathBuf::from("libcore.so.2"),
-            )],
+            link_aliases: vec![(PathBuf::from("/b/lib/libcore.so"), PathBuf::from("libcore.so.2"))],
         }
     }
 
