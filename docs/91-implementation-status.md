@@ -407,6 +407,21 @@ changes, only the speed.
 
 ### Build (`dowel-build`)
 
+- `dowel status` — what a build would do, without doing it
+  ([ADR-0061](adr/0061-the-state-is-a-question.md)). Three stages: what the
+  manifest evaluation reused and recomputed (`dowel_query::Stats`, read
+  outside the query crate for the first time — and reported as more than one
+  number, because "dependencies walked, nothing changed" and "asked twice in
+  one revision" are both reuse and not the same one), which generated inputs
+  and shared-library aliases the build would prepare, and which steps would
+  run with the reason for each. The judgment is `exec::staleness`, the same
+  function the direct backend calls just before running a step — a report with its own
+  copy of the rule drifts from the rule that acts. Three reasons belong to the
+  report alone: a tool stamp about to be rewritten (ADR-0055), a planned input
+  whose contents changed, and an input a step that runs first overwrites. The
+  runner meets none — by the time it judges, preparations have been written
+  and the earlier step's clock has already moved. Propagation follows actual
+  input files, not order-only `deps` edges (ADR-0056)
 - `glob` expansion (`*` / `**` / `?`), sorted lexicographically to be
   independent of traversal order
 - The action graph (compile / archive / link)
@@ -1404,16 +1419,16 @@ afterward. Results land in `summary.md` (for humans and the GitHub summary),
 summary into the job summary. Details in
 [50-development.md](50-development.md) section 3.1.
 
-Current breakdown (787 tests):
+Current breakdown (803 tests):
 
 | Stage | Contents | Count |
 |---|---|---|
 | `fmt` / `clippy` | formatting check and lints (`-D warnings`) | — |
-| `unit-*` | per-crate unit tests | 385 |
+| `unit-*` | per-crate unit tests | 395 |
 | `syntax-robustness` | no panics and losslessness on broken input | 5 |
 | `model-integration` | manifest loading through interface merging | 10 |
 | `model-incremental` | counting what a reload did not recompute | 13 |
-| `e2e` | compile real C, C++, and assembly, run it, check the output | 301 |
+| `e2e` | compile real C, C++, and assembly, run it, check the output | 307 |
 | `scenario` | operation sequences over time (edit and rebuild, configuration switches, cross-process change detection and restore) | 29 |
 | `fixture` | real-shaped projects (`tests/projects/`) end to end | 11 |
 | `diagnostics` | diagnostics reaching the CLI (84 cases), applying fix suggestions, location presence, `check` scope, coverage tracking | 12 |

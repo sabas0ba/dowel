@@ -25,7 +25,7 @@ document.
 ```json
 {
   "format": "dowel-build-graph",
-  "version": 2,
+  "version": 3,
   "build_dir": "/home/me/p/.dowel/build/x86_64-unknown-linux-gnu-debug",
   "steps": [
     {
@@ -54,19 +54,23 @@ document.
   ],
   "artifacts": [{ "target": "app:app", "path": "…/bin/app" }],
   "default_outputs": ["…/bin/app"],
-  "tool_stamps": [{ "path": "…/tools/cc-3f9a1c04.stamp", "identity": "/usr/bin/cc:1023032:1766091591" }]
+  "tool_stamps": [{ "path": "…/tools/cc-3f9a1c04.stamp", "identity": "/usr/bin/cc:1023032:1766091591" }],
+  "prepared_files": [{ "path": "…/lib/core.map", "contents": "{ global: core_open; local: *; };\n" }],
+  "link_aliases": [{ "path": "…/lib/libcore.so", "target": "libcore.so.2" }]
 }
 ```
 
 | Key | Type | Meaning |
 |---|---|---|
 | `format` | string | always `dowel-build-graph`. A reader that does not find this must refuse the file |
-| `version` | integer | the format version. Bumped on any change a reader of the previous version would misread. Refuse an unknown version rather than guessing. Version 2 added `cwd` and `tool_stamps`, both of which change what running the document does |
+| `version` | integer | the format version. Bumped on any change a reader of the previous version would misread. Refuse an unknown version rather than guessing. Version 3 added `prepared_files` and `link_aliases`; version 2 added `cwd` and `tool_stamps`. Each changes what running the document does |
 | `build_dir` | string | the working directory every step is run in. Also where a backend puts its own files |
 | `steps` | array | the process launches, described below |
 | `artifacts` | array | `{"target", "path"}` — the final artifact of each target that is in this graph |
 | `default_outputs` | array of strings | what to build when nothing is named. Not the same as "every output": a derived file is here even though nothing consumes it |
 | `tool_stamps` | array | `{"path", "identity"}` — files that record which program each step launches ([ADR-0055](adr/0055-tool-identity-in-freshness.md)). They appear in the steps' `inputs`, and **a reader has to write them before running anything**; see below. Empty when the graph has no steps |
+| `prepared_files` | array | `{"path", "contents"}` — generated inputs such as a shared library's export map. **A reader has to write them before running anything**, and only when the contents differ; see below |
+| `link_aliases` | array | `{"path", "target"}` — symbolic links needed before the build, currently the unversioned name beside a versioned shared library. `target` is relative to the link's directory |
 
 ## A step
 
@@ -96,6 +100,13 @@ One step is one process launch.
   differ** — the file's timestamp is what tells the steps their tool
   changed, so rewriting an unchanged stamp rebuilds everything, every time.
   A step whose stamp is missing has no rule to make it
+- **Write `prepared_files` before running any step.** Create their parent
+  directories and make each file hold exactly its `contents`. As with tool
+  stamps, write only when the contents differ: an unchanged export map must
+  keep its timestamp or the shared library relinks on every build
+- **Place `link_aliases` before running any step.** Create each parent
+  directory and make `path` a symbolic link whose stored target is exactly
+  `target`. The target need not exist yet; the build step creates it later
 - **Create output directories.** Steps do not create their own
 - **Delete an `ar` output before running it.** `ar` appends; rebuilding into
   a stale archive leaves objects that are no longer part of the target

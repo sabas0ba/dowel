@@ -1173,10 +1173,6 @@ const UNCOVERED: &[(&str, &str)] = &[
         "covered by the model integration tests, which can build the cycle directly",
     ),
     (
-        "unwritable-build-dir",
-        "requires a build directory that exists but cannot be written (permissions)",
-    ),
-    (
         "lockfile-drift",
         "needs a resolvable system package; the case harness cannot set PKG_CONFIG_PATH. \
          covered by the e2e with a .pc fixture",

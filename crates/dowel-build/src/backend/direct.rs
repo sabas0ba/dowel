@@ -18,7 +18,6 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Condvar, Mutex};
-use std::time::SystemTime;
 
 pub struct Direct;
 
@@ -176,12 +175,12 @@ fn worker(
 /// 最新性の判定は走らせる直前に行う。前提が書き直した入力を見なければ
 /// ならず、計画の時点で決めておくことはできない。
 fn execute(g: &BuildGraph, previous: &CommandLog, step: &Step) -> Result<bool, Failure> {
-    // コマンドが変わっていれば、時刻を見るまでもなく作り直す。
-    if !previous.matches(step) {
-        log_trace!("  stale: the command changed since the last run");
-    } else if is_up_to_date(step) {
-        log_trace!("up to date: {}", step.description);
-        return Ok(false);
+    match crate::exec::staleness(step, previous) {
+        None => {
+            log_trace!("up to date: {}", step.description);
+            return Ok(false);
+        }
+        Some(reason) => log_trace!("  stale: {}", reason.say()),
     }
     run_step(g, step)?;
     Ok(true)
@@ -194,7 +193,7 @@ fn execute(g: &BuildGraph, previous: &CommandLog, step: &Step) -> Result<bool, F
 /// 片方にしか現れない順序は競合になる。`build-graph.json` を読み直した
 /// グラフも同じ経路を通る——外から来た文書の `deps` が完全である保証は
 /// 無い（docs/14-build-graph.md）。
-fn dependencies(g: &BuildGraph) -> Vec<Vec<usize>> {
+pub fn dependencies(g: &BuildGraph) -> Vec<Vec<usize>> {
     let mut producer: HashMap<&Path, usize> = HashMap::new();
     for (i, s) in g.steps.iter().enumerate() {
         for out in &s.outputs {
@@ -322,98 +321,9 @@ fn write_depfile_from_show_includes(
     })
 }
 
-/// 出力が全ての入力より新しいか。
-///
-/// 「なぜ再実行されたのか（されなかったのか）」は最も問い合わせの多い挙動である。
-/// 判断の根拠を trace に落としておく。
-fn is_up_to_date(step: &Step) -> bool {
-    // 出力が1つでも欠けていれば再実行する。
-    let mut oldest_output: Option<SystemTime> = None;
-    for out in &step.outputs {
-        let Some(t) = mtime(out) else {
-            log_trace!("  stale: output missing {}", out.display());
-            return false;
-        };
-        oldest_output = Some(oldest_output.map_or(t, |cur: SystemTime| cur.min(t)));
-    }
-    let Some(oldest_output) = oldest_output else { return false };
-
-    let mut inputs: Vec<PathBuf> = step.inputs.clone();
-    if let Some(d) = &step.depfile {
-        // depfile が宣言されているのに無い場合、このステップのヘッダ依存は
-        // 1件も分からない。情報が無い状態で「最新である」と結論すると、
-        // 別の機構（かつての ninja の `deps = gcc` など）が `.d` を畳んだ
-        // ツリーで、ヘッダの変更が黙って見落とされる（issue #41）。
-        // 保守的に組み直し、`.d` を作り直す。
-        if !d.exists() {
-            log_trace!("  stale: no dependency record ({} is missing)", d.display());
-            return false;
-        }
-        inputs.extend(read_depfile(d));
-    }
-    for input in &inputs {
-        match mtime(input) {
-            // 入力が消えているなら再実行して誤りを表に出す。
-            None => {
-                log_trace!("  stale: input missing {}", input.display());
-                return false;
-            }
-            Some(t) if t > oldest_output => {
-                log_trace!("  stale: {} is newer than the output", input.display());
-                return false;
-            }
-            Some(_) => {}
-        }
-    }
-    true
-}
-
-fn mtime(p: &Path) -> Option<SystemTime> {
-    std::fs::metadata(p).ok().and_then(|m| m.modified().ok())
-}
-
-/// make 形式の depfile から依存を読む。
-///
-/// `target: a.h b.h \` の形。行末の `\` による継続と、
-/// 空白のエスケープ（`\ `）を扱う。
-pub fn read_depfile(path: &Path) -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
-    let joined = text.replace("\\\n", " ").replace("\\\r\n", " ");
-    let Some((_, rhs)) = joined.split_once(':') else { return Vec::new() };
-
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut chars = rhs.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' if chars.peek() == Some(&' ') => {
-                cur.push(' ');
-                chars.next();
-            }
-            c if c.is_whitespace() => {
-                if !cur.is_empty() {
-                    out.push(PathBuf::from(std::mem::take(&mut cur)));
-                }
-            }
-            c => cur.push(c),
-        }
-    }
-    if !cur.is_empty() {
-        out.push(PathBuf::from(cur));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn scratch() -> PathBuf {
-        let dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-scratch");
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     fn step(id: usize, inputs: &[&str], outputs: &[&str], deps: Vec<usize>) -> Step {
         Step {
@@ -439,6 +349,8 @@ mod tests {
             deps: Deps::Depfile,
             default_outputs: vec![],
             tool_stamps: vec![],
+            prepared_files: vec![],
+            link_aliases: vec![],
         }
     }
 
@@ -469,32 +381,5 @@ mod tests {
         // そのまま数えると前提が永久に減らず、走らせる側が止まる。
         let g = graph_of(vec![step(0, &["/b/a.o"], &["/b/a.o"], vec![0, 7])]);
         assert_eq!(dependencies(&g), vec![Vec::<usize>::new()]);
-    }
-
-    #[test]
-    fn reads_continuation_lines_in_a_depfile() {
-        let p = scratch().join("depfile-test.d");
-        std::fs::write(&p, "a.o: src/a.c \\\n  include/a.h \\\n  include/b.h\n").unwrap();
-        let deps = read_depfile(&p);
-        assert_eq!(
-            deps,
-            vec![
-                PathBuf::from("src/a.c"),
-                PathBuf::from("include/a.h"),
-                PathBuf::from("include/b.h")
-            ]
-        );
-    }
-
-    #[test]
-    fn reads_paths_containing_spaces() {
-        let p = scratch().join("depfile-space.d");
-        std::fs::write(&p, "a.o: my\\ dir/a.h\n").unwrap();
-        assert_eq!(read_depfile(&p), vec![PathBuf::from("my dir/a.h")]);
-    }
-
-    #[test]
-    fn a_missing_depfile_is_empty() {
-        assert!(read_depfile(Path::new("/nonexistent/x.d")).is_empty());
     }
 }

@@ -13,6 +13,7 @@ pub mod install;
 pub mod migrate;
 pub mod plan;
 pub mod probe;
+pub mod status;
 pub mod surface;
 pub mod testing;
 pub mod toolstyle;

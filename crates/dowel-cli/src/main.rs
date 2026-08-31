@@ -348,6 +348,25 @@ fn run(opts: &Options, probe: &mut dowel_build::probe::Prober) -> Result<ExitCod
             Ok(ExitCode::SUCCESS)
         }
 
+        Command::Status { targets } => {
+            // 走らせない。計画までは `check` と同じ道を通り——起動の段取りも
+            // 記録の書き出しもそこと同じである——そこから先は「今そうなって
+            // いるか」を読むだけである。ビルド木には何も書かない（ADR-0061）。
+            let requested = default_targets(&sess, &cfg, targets)?;
+            let (p, pdiags) = build_plan::plan(&sess, &g, &cfg, &requested);
+            sess.diagnostics.extend(pdiags);
+            if report(&sess, opts) {
+                return Ok(ExitCode::FAILURE);
+            }
+            let s = dowel_build::status::of(&sess, &p);
+            match opts.out_format {
+                OutFormat::Json => println!("{}", dowel_build::status::render_json(&s)),
+                OutFormat::Text => print!("{}", dowel_build::status::render_text(&s)),
+                OutFormat::Dot => unreachable!("the argument parser rejects status --format=dot"),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
         Command::Why { target, property } => {
             if report(&sess, opts) {
                 return Ok(ExitCode::FAILURE);

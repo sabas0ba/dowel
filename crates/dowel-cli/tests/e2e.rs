@@ -6994,6 +6994,218 @@ fn the_surface_is_read_with_the_words_for_its_language() {
     r.stderr_contains("core_extra.hpp");
 }
 
+/// 走らせずに、何が走るかとその理由を述べる（ADR-0061）。
+///
+/// 触った1つだけでなく、それを読む下流も走る。走らせる側は先の段が書いた
+/// 時刻で気づくが、走らせない側は自分でそこまで進めなければならない。
+#[test]
+fn what_a_build_would_do_is_reported_without_doing_it() {
+    let p = Project::new("status-would-run");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\nsources = [file(\"src/core.c\")]\n\n\
+         [lib.core.public]\nincludes = [dir(\"include\")]\n\n\
+         [bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\ndeps = [target(\"core\")]\n",
+    );
+    p.write("include/core.h", "int core_open(void);\n");
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(void) { return 0; }\n");
+    p.write("src/main.c", "#include \"core.h\"\nint main(void) { return core_open(); }\n");
+
+    p.run(".", &["build"]).success();
+    let quiet = p.run(".", &["status"]);
+    quiet.success();
+    quiet.stdout_contains("0 would run");
+
+    // 述べるだけで、何も起こさない。続けて聞いても答は変わらない。
+    p.run(".", &["status"]).success().stdout_contains("0 would run");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    p.write("src/core.c", "#include \"core.h\"\nint core_open(void) { return 1; }\n");
+    let r = p.run(".", &["status"]);
+    r.success();
+    r.stdout_contains("3 would run");
+    r.stdout_contains("src/core.c is newer than the output");
+    // 下流は、先の段が書き直す入力の名前で述べる。
+    r.stdout_contains("is rewritten by an earlier step");
+    // 触っていない翻訳は走らない。
+    r.stdout_contains("up to date");
+
+    // 走らせていないので、まだ組み直されていない。
+    p.run(".", &["status"]).success().stdout_contains("3 would run");
+}
+
+/// 1度も組んでいないビルド木を「命令が変わった」と述べない（ADR-0061）。
+#[test]
+fn a_tree_never_built_is_not_reported_as_a_changed_command() {
+    let p = Project::new("status-never-built");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+
+    let r = p.run(".", &["status"]);
+    r.success();
+    r.stdout_contains("no record of a previous run");
+    assert!(!r.stdout.contains("the command changed"), "{r}");
+}
+
+/// 命令が変わったことは、時刻を見るまでもなく述べる（ADR-0061）。
+#[test]
+fn a_changed_command_is_named_as_such() {
+    let p = Project::new("status-command-changed");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.run(".", &["build"]).success();
+
+    // ソースは触らない。旗だけが変わる——時刻の比較では捉えられない形である。
+    p.write(
+        "dowel.build",
+        "[bin.app]\nsources = [file(\"src/main.c\")]\n\n\
+         [bin.app.private]\nflags = [\"-DX=1\"]\n",
+    );
+    let r = p.run(".", &["status"]);
+    r.success();
+    r.stdout_contains("the command changed since the last run");
+}
+
+/// 述べるだけの命令が、ビルド木に何も書かない（ADR-0061）。
+///
+/// 起動の段取りは他の命令と同じで、評価の記録は `check` と同じように書かれる。
+/// 引く線はビルドの側である——段を走らせず、成果物の在る場所へは書かない。
+#[test]
+fn nothing_in_the_build_tree_is_written_by_reporting_on_it() {
+    let p = Project::new("status-writes-nothing");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.run(".", &["build"]).success();
+
+    let dir = build_dir(&p.path("."), "debug");
+    let before = tree_stamps(&dir);
+    assert!(!before.is_empty(), "the build tree is empty");
+
+    // 時刻の分解能より長く待つ。待たずに比べると、書いても同じに見える。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    p.run(".", &["status"]).success();
+
+    assert_eq!(tree_stamps(&dir), before, "`status` wrote into the build tree");
+}
+
+/// 計画が生成する入力と共有ライブラリの別名も、問い合わせでは置かない。
+///
+/// export map は以前、計画の途中で無条件に書かれていた。`status` がビルド木を
+/// 変更するだけでなく、自分で動かした時刻を見て共有ライブラリを古いと述べる。
+#[test]
+fn generated_link_inputs_and_aliases_stay_read_only_under_status() {
+    let p = Project::new("status-shared-preparations");
+    p.write("dowel.toml", "[package]\nname = \"core\"\nversion = \"0\"\n");
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         soversion = 2\n\
+         exports = [\"core_open\"]\n",
+    );
+    p.write(
+        "src/core.c",
+        "int core_open(void) { return 0; }\nint core_close(void) { return 0; }\n",
+    );
+    // `status` judges the complete graph by the same rule as the direct backend.
+    // A shared target also plans a static archive, while ninja builds only the
+    // shared default output; direct settles every planned step for this check.
+    p.run(".", &["build", "--backend=direct"]).success();
+
+    let dir = build_dir(&p.path("."), "debug");
+    let export_map = dir.join("lib/core.map");
+    let alias = dir.join("lib/libcore.so");
+    assert!(export_map.is_file(), "no generated export map");
+    assert_eq!(std::fs::read_link(&alias).unwrap(), std::path::PathBuf::from("libcore.so.2"));
+
+    let before = tree_stamps(&dir);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let quiet = p.run(".", &["status"]);
+    quiet.success();
+    quiet.stdout_contains("preparation 2 planned, 0 would change");
+    quiet.stdout_contains("0 would run");
+    assert_eq!(tree_stamps(&dir), before, "`status` changed prepared build inputs");
+
+    // 宣言だけを変える。書き直す必要は報告するが、この時点では書かない。
+    p.write(
+        "dowel.build",
+        "[lib.core]\n\
+         sources = [file(\"src/core.c\")]\n\
+         linkage = \"shared\"\n\
+         soversion = 2\n\
+         exports = [\"core_open\", \"core_close\"]\n",
+    );
+    let old_map = std::fs::read_to_string(&export_map).unwrap();
+    let changed = p.run(".", &["status"]);
+    changed.success();
+    changed.stdout_contains("preparation 2 planned, 1 would change");
+    changed.stdout_contains("WRITE lib/core.map");
+    changed.stdout_contains("the planned input changed");
+    assert_eq!(std::fs::read_to_string(&export_map).unwrap(), old_map);
+
+    // 実際のビルドだけが準備を反映し、その後の問い合わせは静かになる。
+    p.run(".", &["build", "--backend=direct"]).success();
+    assert!(std::fs::read_to_string(&export_map).unwrap().contains("core_close"));
+    let settled = p.run(".", &["status"]);
+    settled.success();
+    settled.stdout_contains("preparation 2 planned, 0 would change");
+    settled.stdout_contains("0 would run");
+}
+
+/// ビルド木の中の道、種類、時刻、大きさ、記号連結の指し先。上の試験が読む。
+fn tree_stamps(
+    dir: &std::path::Path,
+) -> Vec<(std::path::PathBuf, std::time::SystemTime, u64, Option<std::path::PathBuf>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(at) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&at) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            let Ok(t) = meta.modified() else { continue };
+            let link =
+                meta.file_type().is_symlink().then(|| std::fs::read_link(&path).ok()).flatten();
+            out.push((path.clone(), t, meta.len(), link));
+            if meta.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// 機械が読む形でも同じ3段を答える（ADR-0061）。
+#[test]
+fn the_state_is_answered_in_json_as_well() {
+    let p = Project::new("status-json");
+    p.write("dowel.toml", "[package]\nname = \"app\"\nversion = \"0\"\n");
+    p.write("dowel.build", "[bin.app]\nsources = [file(\"src/main.c\")]\n");
+    p.write("src/main.c", "int main(void) { return 0; }\n");
+    p.run(".", &["build"]).success();
+
+    let r = p.run(".", &["status", "--format=json"]);
+    r.success();
+    let v = dowel_support::json::parse(&r.stdout).expect("the report is JSON");
+    let evaluation = v.get("evaluation").expect("the evaluation stage is reported");
+    // 使い回しは1種類ではない。どちらの数も別の欄で出る。
+    assert!(evaluation.get("verified").is_some(), "{}", r.stdout);
+    assert!(evaluation.get("answered_again").is_some(), "{}", r.stdout);
+    assert!(v.get("preparations").and_then(|p| p.as_array()).is_some(), "{}", r.stdout);
+    let steps = v.get("steps").and_then(|s| s.as_array()).expect("the steps are reported");
+    assert!(!steps.is_empty(), "{}", r.stdout);
+    for step in steps {
+        assert_eq!(step.get("would_run").and_then(|b| b.as_bool()), Some(false), "{}", r.stdout);
+    }
+}
+
 /// 面が閉じていれば、何も言わない。
 #[test]
 fn a_surface_that_stands_on_its_own_is_not_reported() {

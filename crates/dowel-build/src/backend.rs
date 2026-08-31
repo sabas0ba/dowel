@@ -40,6 +40,11 @@ pub struct BuildGraph {
     /// （[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
     /// ステップの入力に現れるので、走らせる前に書かれていなければならない
     pub tool_stamps: Vec<(PathBuf, String)>,
+    /// 計画が内容を決める入力。export map など。
+    /// 内容が違うときだけ、ステップを走らせる前に書く
+    pub prepared_files: Vec<(PathBuf, String)>,
+    /// 版付き共有ライブラリの、版を持たない別名と相対の指し先
+    pub link_aliases: Vec<(PathBuf, PathBuf)>,
 }
 
 /// 1回のプロセス起動。
@@ -106,6 +111,8 @@ impl BuildGraph {
             default_outputs: plan.default_outputs(),
             deps: plan.deps,
             tool_stamps: plan.tool_stamps.clone(),
+            prepared_files: plan.prepared_files.clone(),
+            link_aliases: plan.link_aliases.clone(),
         }
     }
 
@@ -205,6 +212,8 @@ pub fn select(
 /// できたものまで最新扱いにすると、次の実行が古い成果物を残したまま成功する。
 pub fn run(backend: &dyn Backend, g: &BuildGraph, jobs: Option<usize>) -> Result<(), Failure> {
     let _phase = dowel_support::log::Phase::start("execute");
+    write_prepared_files(g)?;
+    place_link_aliases(g)?;
     write_tool_stamps(g);
     let result = backend.run(g, jobs);
     if result.is_ok() && backend.builds() {
@@ -216,6 +225,94 @@ pub fn run(backend: &dyn Backend, g: &BuildGraph, jobs: Option<usize>) -> Result
         log.save(&g.build_dir);
     }
     result
+}
+
+/// 計画が生成した入力を、内容が違うときだけ書く。
+///
+/// export map はリンクの入力である。毎回書けば mtime が動き、何も変わらない
+/// 共有ライブラリまで毎回リンクし直す。計画時に書かないのは、`check` と
+/// `status` が同じ計画を読むためでもある。
+pub fn write_prepared_files(g: &BuildGraph) -> Result<(), Failure> {
+    for (path, contents) in &g.prepared_files {
+        if std::fs::read_to_string(path).ok().as_deref() == Some(contents.as_str()) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Failure::of(
+                    "preparing a build input",
+                    path.display().to_string(),
+                    format!("{e} (cannot create `{}`)", parent.display()),
+                )
+            })?;
+        }
+        std::fs::write(path, contents).map_err(|e| {
+            Failure::of(
+                "preparing a build input",
+                path.display().to_string(),
+                format!("{e} (cannot write `{}`)", path.display()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// 版付き共有ライブラリの隣へ、版を持たない名前を置く。
+///
+/// 実体がまだ無くてもよい。相対の記号連結は、実体が現れた時点で有効になる。
+#[cfg(unix)]
+pub fn place_link_aliases(g: &BuildGraph) -> Result<(), Failure> {
+    for (alias, target) in &g.link_aliases {
+        if link_alias_matches(alias, target) {
+            continue;
+        }
+        if let Some(parent) = alias.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Failure::of(
+                    "placing a shared-library link name",
+                    alias.display().to_string(),
+                    format!("{e} (cannot create `{}`)", parent.display()),
+                )
+            })?;
+        }
+        match std::fs::remove_file(alias) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(Failure::of(
+                    "placing a shared-library link name",
+                    alias.display().to_string(),
+                    format!("{e} (cannot replace `{}`)", alias.display()),
+                ))
+            }
+        }
+        std::os::unix::fs::symlink(target, alias).map_err(|e| {
+            Failure::of(
+                "placing a shared-library link name",
+                alias.display().to_string(),
+                format!("{e} (cannot link `{}` to `{}`)", alias.display(), target.display()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// 記号連結を置けないホストでは、従来と同じく何もしない。
+#[cfg(not(unix))]
+pub fn place_link_aliases(_g: &BuildGraph) -> Result<(), Failure> {
+    Ok(())
+}
+
+/// 現在の別名が、計画どおりの相対の指し先を持つか。
+#[cfg(unix)]
+pub fn link_alias_matches(alias: &std::path::Path, target: &std::path::Path) -> bool {
+    std::fs::read_link(alias).ok().as_deref() == Some(target)
+}
+
+/// 記号連結を置かないホストでは、変更も予定しない。
+#[cfg(not(unix))]
+pub fn link_alias_matches(_alias: &std::path::Path, _target: &std::path::Path) -> bool {
+    true
 }
 
 /// 道具の刻印を書く（ADR-0055）。
@@ -278,6 +375,8 @@ mod tests {
             deps: Deps::Depfile,
             default_outputs: vec![],
             tool_stamps: vec![(path.clone(), identity.to_string())],
+            prepared_files: vec![],
+            link_aliases: vec![],
         };
 
         write_tool_stamps(&graph("cc:1:1"));
@@ -294,6 +393,52 @@ mod tests {
 
         write_tool_stamps(&graph("cc:2:2"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "cc:2:2");
+    }
+
+    #[test]
+    fn a_prepared_input_is_written_from_the_graph() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/prepared-input");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("lib/core.map");
+        let graph = |contents: &str| BuildGraph {
+            build_dir: dir.clone(),
+            steps: vec![],
+            artifacts: vec![],
+            deps: Deps::Depfile,
+            default_outputs: vec![],
+            tool_stamps: vec![],
+            prepared_files: vec![(path.clone(), contents.to_string())],
+            link_aliases: vec![],
+        };
+
+        write_prepared_files(&graph("first\n")).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\n");
+        write_prepared_files(&graph("second\n")).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_name_is_placed_from_the_graph() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/link-alias");
+        let _ = std::fs::remove_dir_all(&dir);
+        let alias = dir.join("lib/libcore.so");
+        let target = PathBuf::from("libcore.so.2");
+        let graph = BuildGraph {
+            build_dir: dir,
+            steps: vec![],
+            artifacts: vec![],
+            deps: Deps::Depfile,
+            default_outputs: vec![],
+            tool_stamps: vec![],
+            prepared_files: vec![],
+            link_aliases: vec![(alias.clone(), target.clone())],
+        };
+
+        place_link_aliases(&graph).unwrap();
+        assert_eq!(std::fs::read_link(&alias).unwrap(), target);
     }
 
     #[test]
@@ -330,6 +475,8 @@ mod tests {
             deps: Deps::Depfile,
             default_outputs: vec![],
             tool_stamps: vec![],
+            prepared_files: vec![],
+            link_aliases: vec![],
         }
     }
 
