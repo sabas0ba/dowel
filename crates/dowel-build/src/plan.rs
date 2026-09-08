@@ -60,6 +60,14 @@ pub struct Plan {
     /// （[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
     /// 走らせる前に書かれ、走らせるアクションの入力になる
     pub tool_stamps: Vec<(PathBuf, String)>,
+    /// ビルド前に内容を揃える、計画が生成した入力。
+    ///
+    /// 計画そのものは書かない。書けば `check` と `status` がビルド木を変え、
+    /// とくに export map の時刻を自分で動かして共有ライブラリを古くする。
+    pub prepared_files: Vec<(PathBuf, String)>,
+    /// 版付き共有ライブラリの隣へ置く、版を持たない名前と相対の指し先。
+    /// これも計画では置かず、ビルドを始める側へ渡す。
+    pub link_aliases: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Plan {
@@ -294,6 +302,8 @@ pub fn plan(
         shared_libraries: Vec::new(),
         declared_exports: Vec::new(),
         tool_stamps: Vec::new(),
+        prepared_files: Vec::new(),
+        link_aliases: Vec::new(),
     };
     // ターゲット → そのターゲットの成果物を作るアクション
     let mut producer: BTreeMap<TargetId, ActionId> = BTreeMap::new();
@@ -667,17 +677,8 @@ pub fn plan(
                     target.name,
                     toolstyle::export_file_extension(form)
                 ));
-                if let Some(dir) = export_path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
-                if let Err(e) = std::fs::write(&export_path, toolstyle::export_file(form, &exports))
-                {
-                    diags.push(Diagnostic::error(
-                        "unwritable-build-dir",
-                        format!("cannot write {}: {e}", export_path.display()),
-                    ));
-                    continue;
-                }
+                plan.prepared_files
+                    .push((export_path.clone(), toolstyle::export_file(form, &exports)));
 
                 // 共有ライブラリも依存を取り込む。リンカの選択は実行ファイルと
                 // 同じ判断による——閉包のどこかに C++ があれば C++ の driver。
@@ -759,11 +760,13 @@ pub fn plan(
                     },
                 );
                 if soversion.is_some() && toolstyle::has_link_name_alias(cfg) {
-                    link_name_alias(
+                    if let Some(alias) = link_name_alias(
                         &build_dir.join("lib"),
                         &toolstyle::shared_library_link_name(cfg, &target.name),
                         &out,
-                    );
+                    ) {
+                        plan.link_aliases.push(alias);
+                    }
                 }
                 plan.shared_libraries.push(out.clone());
                 plan.declared_exports.push(DeclaredExports {
@@ -2019,38 +2022,24 @@ pub fn is_source(path: &Path) -> bool {
     language(path).is_some()
 }
 
-/// 版付きの実体の隣に、版を持たない名前を置く
+/// 版付きの実体の隣に置く、版を持たない名前と相対の指し先。
 /// （[ADR-0040](../../../docs/adr/0040-shared-library-version.md)）。
 ///
 /// `-lcore` が見つけるのはこの名前である。版付きの実体しか無いと、同じ
 /// ディレクトリに在る書庫（ADR-0038）の方が拾われ、共有ライブラリを作った
 /// はずのビルドが静的に繋がる。
 ///
-/// 行動としてではなく計画時に置く。中身に依存しない別名であり、実体が
-/// まだ無くても構わない——記号連結は、指す先が現れた時点で有効になる。
-/// 加えて `dowel` は毎回ここを通るので、消されても次で戻る。
-fn link_name_alias(dir: &Path, link_name: &str, target: &Path) {
+/// 計画時には置かない。`check` と `status` も同じ計画を読むので、ここで
+/// 置けば問い合わせがビルド木を変更する。置くべき形だけをビルド側へ渡す。
+fn link_name_alias(dir: &Path, link_name: &str, target: &Path) -> Option<(PathBuf, PathBuf)> {
     let alias = dir.join(link_name);
     if alias == target {
-        return;
+        return None;
     }
-    let Some(file) = target.file_name() else { return };
-    #[cfg(unix)]
-    {
-        // 相対で指す。ビルド木は移せないが、別名が実体を辿れなくなる理由を
-        // 1つ減らす。
-        if std::fs::read_link(&alias).ok().as_deref() == Some(Path::new(file)) {
-            return;
-        }
-        let _ = std::fs::remove_file(&alias);
-        if let Err(e) = std::os::unix::fs::symlink(file, &alias) {
-            log_debug!("cannot place {}: {e}", alias.display());
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (alias, file);
-    }
+    let file = target.file_name()?;
+    // 相対で指す。ビルド木は移せないが、別名が実体を辿れなくなる理由を
+    // 1つ減らす。
+    Some((alias, PathBuf::from(file)))
 }
 
 /// 共有ライブラリとして繋ぐか（ADR-0030）。
