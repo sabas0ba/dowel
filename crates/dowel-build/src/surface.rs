@@ -1,16 +1,13 @@
-//! 配ったものだけで、配った面が読めるか
+//! インストール済み公開ヘッダの前処理検証
 //! （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
 //!
-//! 公開ヘッダが非公開のヘッダを `#include` していても、ビルド木の中では
-//! 通る——公開と非公開の探索路が両方載っているからである。壊れるのは
-//! **配った先**で、しかも壊れるのは受け取った側であり、配った側は
-//! `installed:` の並びしか見ていない。[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)
-//! が直した「在らないものを `built:` と言う」と同じ形である。
+//! ビルド時には公開・非公開の両方のインクルード検索パスを使用するため、
+//! 公開ヘッダが非公開ヘッダに依存していてもコンパイルできる。
+//! インストール後にその非公開ヘッダが見つからない問題を、提供側で検出する。
 //!
-//! 自前で `#include` を数えない。条件付き取り込みも、マクロで綴られた名前も
-//! ある——C を読むのは C の道具の仕事である（ADR-0001）。**配ったものに
-//! 聞く**: 配った探索路だけを与えて前処理し、通らなければ、それは受け取った
-//! 側でも通らない。
+//! 条件付きの `#include` やマクロで指定されたファイル名を扱うため、
+//! 検査にはコンパイラのプリプロセッサを使用する（ADR-0001）。
+//! インストール先の検索パスと利用側に伝播するコンパイル引数で前処理する。
 
 use crate::toolstyle::{self, HeaderLanguage};
 use dowel_eval::Config;
@@ -18,34 +15,31 @@ use dowel_support::{log_debug, Diagnostic};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// 配ったヘッダ1つと、使う側がそれを読むときの条件。
+/// インストール済みヘッダと、利用側の前処理条件。
 ///
-/// 「使う側と同じに読む」ためには、道だけでは足りない。公開の語も、言語も、
-/// それを配ったターゲットが決める（ADR-0060）。
+/// 検索パスに加え、提供元ターゲットの言語と公開コンパイル引数を使用する（ADR-0060）。
 #[derive(Clone, Debug)]
 pub struct Header {
-    /// 入れた先の道
+    /// インストール先のファイルパス
     pub at: PathBuf,
     /// `public.includes` が書かれた位置。直す先はその行である
     pub site: Option<dowel_eval::Site>,
-    /// このヘッダを読む言語。読む道具も、渡す語も、これで決まる
+    /// 前処理の言語。使用するコンパイラと、言語別の引数を決める
     pub language: HeaderLanguage,
-    /// 使う側の翻訳行に載る語。読む言語の分だけが入っている
+    /// 利用側に伝播するコンパイル引数。対象言語の引数だけを含む
     pub words: Vec<String>,
 }
 
-/// ヘッダとして読む綴り。
+/// 前処理検査の対象とするヘッダの拡張子。
 ///
-/// 閉じた一覧にするのは、ソースの綴りと同じ理由である（ADR-0051）。
-/// `include/` に置かれた読み物や license を前処理に掛けると、道具は綴りから
-/// 言語を決められずに落ち、面の欠けと区別が付かない。
+/// 対応する拡張子を列挙し、README やライセンス文書を検査対象から除外する。
+/// 文書の前処理エラーを、公開ヘッダの依存不足として報告しないためである（ADR-0051）。
 const HEADER_EXTENSIONS: &[&str] = &["h", "hh", "hpp", "hxx"];
 
-/// 配った面が、配ったものだけで読めるか確かめる。
+/// インストール済み公開ヘッダを前処理し、失敗したヘッダの警告を返す。
 ///
-/// 道具を起動できないことは失敗ではない。検査は確信を足すものであり、
-/// その不在が、それ以外は成功した install を失敗にしてはならない
-/// （`exports` の検査と同じ立場、ADR-0039）。
+/// コンパイラが見つからない場合はそのヘッダをスキップし、起動エラー時は検査を終了する。
+/// 検査を実行できないことを理由に install を失敗させない（ADR-0039）。
 pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let readable: Vec<&Header> = headers.iter().filter(|h| is_header(&h.at)).collect();
@@ -75,7 +69,7 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
         );
         let out = match Command::new(&tool).args(&args).output() {
             Ok(o) => o,
-            // 起動できないことは、面の誤りの証拠にはならない。
+            // 起動エラーだけでは公開ヘッダに問題があると判断できない。
             Err(e) => {
                 log_debug!("surface: cannot start `{tool}`: {e}");
                 return diags;
@@ -94,8 +88,7 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
         if let Some(s) = header.site {
             d = d.at(s.file, s.span, "this is what a consumer compiles against");
         }
-        // 道具自身の言葉を残す。欠けている名前を言うのは道具の側であり、
-        // こちらが数え直すと綴りが増える。
+        // 不足しているヘッダ名などを含むコンパイラの診断を、そのまま注記に使用する。
         if let Some(line) = first_complaint(&said) {
             d = d.note(line);
         }
@@ -110,11 +103,10 @@ pub fn check(headers: &[Header], include_root: &Path, cfg: &Config) -> Vec<Diagn
     diags
 }
 
-/// このヘッダを読む言語。
+/// ヘッダの前処理に使用する言語。
 ///
-/// C++ 専用の綴りは常に C++ である。`.h` は両方の言語で使われるので、それを
-/// 配ったターゲットの言語に従う——`__cplusplus` の分岐がどちらへ倒れるかは、
-/// そのターゲットの使い手が誰かで決まる（ADR-0060）。
+/// `.hh`、`.hpp`、`.hxx` は C++ として扱う。`.h` は提供元ターゲットが
+/// C++ を使用する場合に C++ として前処理し、`__cplusplus` の条件を合わせる（ADR-0060）。
 pub fn language(path: &Path, from_cxx: bool) -> HeaderLanguage {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let cxx_only = ["hh", "hpp", "hxx"].iter().any(|h| h.eq_ignore_ascii_case(ext));
@@ -125,16 +117,15 @@ pub fn language(path: &Path, from_cxx: bool) -> HeaderLanguage {
     }
 }
 
-/// ヘッダとして読む綴りか。
+/// 前処理検査の対象拡張子か。大文字・小文字は区別しない。
 pub fn is_header(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else { return false };
     HEADER_EXTENSIONS.iter().any(|h| h.eq_ignore_ascii_case(ext))
 }
 
-/// 道具の言葉のうち、最初の1行。
+/// コンパイラの標準エラー出力から、最初の空でない行を取得する。
 ///
-/// 全部を貼ると、注記が道具の出力そのものになる。読み手が要るのは
-/// 「何が見つからなかったか」であり、それは最初の行に出る。
+/// 診断の注記を短く保つため、後続のソース抜粋や終了メッセージは含めない。
 fn first_complaint(said: &str) -> Option<String> {
     said.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.to_string())
 }
@@ -151,8 +142,7 @@ mod tests {
 
     #[test]
     fn a_plain_header_follows_the_target_that_shipped_it() {
-        // `.h` は両方の言語で使われる。`__cplusplus` の分岐がどちらへ倒れるかは
-        // 綴りでは決まらない（ADR-0060）。
+        // `.h` だけでは言語を判定できないため、提供元ターゲットの言語を使う（ADR-0060）。
         assert_eq!(language(Path::new("a.h"), false), HeaderLanguage::C);
         assert_eq!(language(Path::new("a.h"), true), HeaderLanguage::Cxx);
     }
@@ -162,8 +152,7 @@ mod tests {
         for good in ["a.h", "a.hh", "a.hpp", "a.hxx", "a.H"] {
             assert!(is_header(Path::new(good)), "{good}");
         }
-        // 読み物や license を前処理に掛けると、道具は綴りから言語を決められず
-        // に落ち、面の欠けと区別が付かない。
+        // 文書やソースファイルを、公開ヘッダの前処理検査に含めない。
         for other in ["README", "notes.txt", "a.c", "a.cpp"] {
             assert!(!is_header(Path::new(other)), "{other}");
         }

@@ -129,8 +129,7 @@ Initially restricted to diagnostics and hover. As long as the four
 constraints in [20-architecture.md](20-architecture.md) are respected,
 features can be added incrementally.
 
-Plan on this part **never being finished** (it carries a permanent
-maintenance cost).
+The language server needs ongoing maintenance as the manifest language and editor integrations change.
 
 Started as `dowel lsp`; speaks LSP on stdin/stdout. The editor is the
 starting party and it exits with the editor, which distinguishes it from the
@@ -140,11 +139,9 @@ depends on the language server's existence.
 Hover explains the schema itself: property types and merge rules, each level
 of a table header, builtin function signatures, configuration key domains,
 and the nested tables that are not property blocks (`cases`, `harness`,
-`artifacts`, `inspect`). The source is the same table `dowel schema dump`
-reads; nothing is kept twice. That is the point of the arrangement — the one
-table dowel kept in two places instead drifted, and the editor went silent
-inside `cases` while the type checker knew every key (issue #90). Word identification walks the CST rather than evaluated values,
-because explanations must appear even in files that contain errors.
+`artifacts`, `inspect`). Hover and `dowel schema dump` read the same schema table. Sharing this table prevents the editor and type checker from supporting different keys. Previously, duplicate tables caused hover to omit keys inside `cases` even though the type checker supported them (issue #90).
+
+Word identification walks the CST so explanations remain available in files that contain evaluation errors.
 
 The VS Code client lives in `editors/vscode/`. It starts `dowel lsp`,
 receives diagnostics and hover, and adds syntax highlighting for

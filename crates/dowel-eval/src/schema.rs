@@ -41,7 +41,7 @@ impl Merge {
     }
 }
 
-/// 言語ではなく境界を指す ABI 札（[ADR-0019](../../../docs/adr/0019-c-abi-label.md)）。
+/// 言語を限定しない ABI 境界ラベル（[ADR-0019](../../../docs/adr/0019-c-abi-label.md)）。
 ///
 /// `extern "C"` の面しか持たない公開面はこれを名乗る。C の関数には多重定義も
 /// テンプレートもインライン関数の実体化も無く、名前の飾りも付かない。この一線を
@@ -51,7 +51,7 @@ impl Merge {
 /// 言語の札を1つ選ぶと、それを全ての利用者に強制することになる（issue #78）。
 pub const C_ABI: &str = "c";
 
-/// ABI 札の成分（[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
+/// ABI ラベルの成分（[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
 /// （名前, 説明, 値域）。
 ///
 /// 閉じた語彙であり、ADR 1本につき1つずつ増やす（[ADR-0034]）。粒度を
@@ -824,7 +824,7 @@ pub fn merge_values(def: &PropDef, values: &[Value], diags: &mut Vec<Diagnostic>
                 prov: merged_prov("error_on_conflict", values.first()),
             }
         }
-        // ABI 札は成分ごとに突き合わせる（ADR-0042）。規則が ABI 札の側に
+        // ABI ラベルは成分ごとに比較する（ADR-0042）。規則が ABI ラベルの側に
         // 在るのは ADR-0019 と同じ理由による——他のプロパティでの
         // `must_equal` は依然「一致」である。
         Merge::MustEqual if def.ty == Type::AbiLabel => merge_abi(def, values, diags),
@@ -930,7 +930,7 @@ fn conflict_diagnostic(prop: &str, key: &str, prev: &Value, cur: &Value) -> Diag
     d
 }
 
-/// ABI 札の突き合わせ（[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
+/// ABI ラベルの互換性比較（[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
 ///
 /// 札は1つの語でも、成分の表でも書ける。表同士は**共通する成分だけ**を
 /// 比べ、片方しか名指していない成分は制約にならない。これが「粗すぎれば
@@ -1283,7 +1283,7 @@ mod tests {
 
     #[test]
     fn must_equal_on_another_property_is_untouched_by_the_c_label() {
-        // 除外は ABI 札の語彙の性質である。`must_equal` そのものの性質にすると、
+        // 比較対象からの除外は ABI ラベル固有の規則である。`must_equal` 全体に適用すると、
         // 別のプロパティで `"c"` という値が黙って一致扱いになる。
         let def = PropDef {
             name: "thing",

@@ -283,8 +283,8 @@ pub fn build_decls(db: &Db<Key>, file: FileId, ctx: &Ctx) -> Result<Arc<BuildDec
 
 /// ターゲットの宣言の出どころ。
 ///
-/// ほとんどのターゲットは `dowel.build` から来る。pkg-config が答えた面だけを
-/// 持つ外部のターゲットには読む文書が無いので、宣言そのものを渡す
+/// 通常のターゲットは `dowel.build` から読み込む。pkg-config から構築する
+/// 外部ターゲットには対応するマニフェストがないため、宣言値を直接渡す
 /// （[ADR-0015](../../../docs/adr/0015-version-deps-pkgconfig.md)）。
 #[derive(Clone)]
 pub enum Source {
@@ -415,7 +415,7 @@ pub enum DepResolution {
     AlreadyReported,
 }
 
-/// 名前解決に要る、全パッケージ分の名札の表。
+/// 名前解決に使用する、全パッケージのターゲット名と種別の一覧。
 ///
 /// 値は持たない——名前と種別だけである。宣言そのもの（[`Declared`]）と
 /// 分けているのは、こちらが**木の形**で決まるためである。1ファイルを

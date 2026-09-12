@@ -60,10 +60,7 @@ the mismatch.
 | Nix | owned (from libc up) | owned | everything in the input hash | isolation + CAS |
 | Cargo | owned (rustup) | owned | language fixed to one | none |
 
-The empty quadrant is **Bazel-class execution modeling and ABI awareness at
-Cargo-class usability**. The main cost of adopting Bazel is not its execution
-model but re-declaring every dependency in BUILD files — avoidable by
-delegating dependency supply externally.
+The design goal is to combine explicit build actions and ABI checks with a concise manifest and a small set of commands. Dependency acquisition is delegated to external tools to reduce the need to re-declare existing packages in the build system.
 
 ## 5. Positioning
 
@@ -71,8 +68,8 @@ The concept contains three independent parts; each stands on its own.
 
 | # | Part | Realizable as | Difference from existing work |
 |---|---|---|---|
-| A | dependency resolution + locking + supply-chain policy + toolchain acquisition | possible as a layer on top of existing systems | competes with Conan / vcpkg; cooldown and approval flows are unclaimed territory |
-| B | isolated execution keyed by ABI labels + CAS caching | requires full replacement | the Bazel / Buck2 quadrant; Cargo-class UX is unclaimed |
+| A | dependency resolution + locking + supply-chain policy + toolchain acquisition | possible as a layer on top of existing systems | combines package-management functions with cooldown and approval policies |
+| B | isolated execution keyed by ABI labels + CAS caching | requires full replacement | combines explicit execution and caching with a concise manifest and command set |
 | C | an IDL for ABI boundaries and bidirectional FFI export | possible as a standalone tool | partially exists (meson-python, pybind11, cbindgen, abidiff) |
 
 A alone stays a frontend over existing systems, with reproducibility bound to

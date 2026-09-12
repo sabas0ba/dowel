@@ -1,12 +1,10 @@
-//! ビルド木の外へ出す（[ADR-0041](../../../docs/adr/0041-install.md)）。
+//! ビルド成果物のインストール（[ADR-0041](../../../docs/adr/0041-install.md)）。
 //!
-//! ここまでの全ては1つのビルド木の中の話だった。共有ライブラリを宣言する
-//! 目的は配ることであり、配る手段が無ければ宣言は途中で終わっている。
+//! 実行ファイル、ライブラリ、公開ヘッダを、指定されたインストール先へ配置する。
 //!
-//! 中身は写しであって作り直しではない。組んだものと配ったものが同じ
-//! バイト列であることが、検査した対象と配った対象を同じものにする。
-//! 実行時の探索路が自分自身からの相対で記録されているので、写すだけで
-//! 済む（[`crate::toolstyle::relocatable_search_path`]）。
+//! 検証済み成果物と配布物のバイト列を一致させるため、再ビルドせずコピーする。
+//! 実行時のライブラリ検索パスは実行ファイルからの相対パスで記録済みのため、
+//! インストール時の書き換えは不要である（[`crate::toolstyle::relocatable_search_path`]）。
 
 use crate::plan::Plan;
 use crate::toolstyle;
@@ -17,21 +15,20 @@ use dowel_model::{Session, TargetId};
 use dowel_support::Diagnostic;
 use std::path::{Path, PathBuf};
 
-/// `entries` が答えるもの。
+/// インストール計画と、コピー後のヘッダ検査に必要な情報。
 ///
-/// 写す一覧だけでは足りない。配った面が読めるかを確かめるのは写した**後**で
-/// あり（[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）、
-/// そのときには「どのヘッダを、どの宣言に従って配ったか」が要る。
+/// ヘッダ検査はコピー後に行うため、インストール先と宣言位置も保持する
+/// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
 pub struct Entries {
     pub items: Vec<Item>,
     pub diagnostics: Vec<Diagnostic>,
-    /// 配ったヘッダ。写し終えてから読めるかを確かめる
+    /// コピー後に前処理検査を行う公開ヘッダ
     pub headers: Vec<crate::surface::Header>,
-    /// 使う側が `-I` に載せる場所
+    /// 利用側が `-I` に指定するインストール先ディレクトリ
     pub include_root: PathBuf,
 }
 
-/// 入れる先に置く1件。
+/// インストール時に実行する1件のファイル操作。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
     /// ビルド木の中の1ファイルを写す
@@ -69,8 +66,7 @@ pub fn entries(
     targets: &[TargetId],
 ) -> Entries {
     let root = destdir.map(|d| join_prefix(d, prefix)).unwrap_or_else(|| prefix.to_path_buf());
-    // 走査は答そのものへ積む。配る項目、配ったヘッダ、述べたことは同じ1件の
-    // 走査から出るものであり、別々の器に分けても最後に1つへ戻す。
+    // 1回の走査で得られるファイル操作、ヘッダ情報、診断を、戻り値に直接追加する。
     let mut out = Entries {
         items: Vec::new(),
         diagnostics: Vec::new(),
@@ -85,7 +81,7 @@ pub fn entries(
         let dir = match target.kind {
             TableKind::Bin => "bin",
             TableKind::Lib => "lib",
-            // 検査と計測は配るものではない。物を確かめる道具であって、物ではない。
+            // test / bench ターゲットは配布対象に含めない。
             _ => continue,
         };
         out.items.push(Item::Copy { from: artifact.clone(), to: root.join(dir).join(name) });

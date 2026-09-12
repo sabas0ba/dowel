@@ -74,7 +74,7 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
     ),
 ];
 
-/// 開いている文書。エディタの緩衝が正本であり、ディスクは見ない。
+/// 開いている文書。ディスク上の内容を読まず、エディタバッファを使用する。
 #[derive(Default)]
 struct Documents {
     /// URI → 本文
@@ -161,7 +161,7 @@ fn handle(docs: &mut Documents, m: &rpc::Message, shutdown: &mut bool) -> Vec<St
             let Some(uri) = str_at(params, "textDocument.uri") else { return Vec::new() };
             docs.text.remove(&uri);
             // 閉じた時点で診断を消す。エディタは残った印を自分では落とさない。
-            // 残りの文書は診断し直す。閉じた緩衝がディスクの内容を覆っていた
+            // 残りの文書は再診断する。閉じたバッファがディスク上の内容を上書きしていた
             // 場合、他の文書の診断が変わりうる。
             let mut out = vec![diagnostics_notification(&uri, &SourceMap::new(), &[])];
             out.extend(publish_all(docs));
@@ -269,7 +269,7 @@ fn package_root(path: &std::path::Path, docs: &Documents) -> Option<std::path::P
 
 /// パッケージの模型で診断する。ファイルを跨ぐ検査はここで出る。
 ///
-/// 開いている緩衝が正本であり、模型はそれを重ねて読む
+/// ワークスペースモデルは、開いているエディタバッファをディスク上の内容より優先する
 /// （`Session::load_for_editor`）。ネットワークにもストアにも触れない。
 /// 打鍵ごとに作って捨てるため、常駐デーモンとは区別されたままである
 /// （[ADR-0002]）。

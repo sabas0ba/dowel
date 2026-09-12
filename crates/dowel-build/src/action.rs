@@ -86,9 +86,8 @@ impl Action {
 
 /// シェルへ渡す1行。作業ディレクトリが要るなら `cd` を前に置く。
 ///
-/// バックエンド（ninja / make）はコマンドをシェルに渡すだけで、作業
-/// ディレクトリを指定する術を持たない。行の側で言う——`Step::command_line`
-/// と綴りを1つに保つため、ここに置く。
+/// ninja / make 向けには、作業ディレクトリの指定を `cd` としてコマンドに含める。
+/// `Step::command_line` と同じコマンド生成処理を使用するため、ここに集約する。
 pub fn command_line(command: &[String], cwd: Option<&std::path::Path>) -> String {
     let line = command.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
     match cwd {
@@ -97,18 +96,17 @@ pub fn command_line(command: &[String], cwd: Option<&std::path::Path>) -> String
     }
 }
 
-/// 1行に収まらない綴りを見つける
+/// コマンドやパスに含まれる改行文字を検出する
 /// （[ADR-0058](../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)）。
 ///
-/// ninja の変数値も make のレシピ行も**1行**である。行を終わらせる文字が
-/// 命令やパスに含まれていると、綴った先は別の命令になる——ninja は改行を
-/// 空白に置き換えており、`printf '#define A 1\n#define B 2\n'` が
-/// マクロ1つ分の行を書いていた。
+/// ninja の変数値と make のレシピは行単位で記述するため、改行を含む引数を
+/// そのまま出力できない。以前の ninja 出力は改行を空白に置換していたため、
+/// `printf` で2行のマクロ定義を生成するコマンドが1行の定義を出力していた。
 pub fn breaks_the_line(text: &str) -> Option<char> {
     text.chars().find(|c| *c == '\n' || *c == '\r')
 }
 
-/// 綴れない文字の見せ方。制御文字はそのまま出しても読めない。
+/// 診断用の文字表現。改行と復帰は制御文字そのものではなく名称を返す。
 pub fn show_char(c: char) -> String {
     match c {
         '\n' => "a newline".to_string(),
@@ -117,12 +115,11 @@ pub fn show_char(c: char) -> String {
     }
 }
 
-/// 綴れないと断るときの言葉（ADR-0058）。
+/// バックエンドで表現できない文字の診断と、修正方法を生成する（ADR-0058）。
 ///
-/// **直し方まで言う。** ここに来る大半は書き間違いである——`printf '...\n'` と
-/// 書いた人が渡したいのは2文字の `\` `n` であって改行ではないのに、文字列の
-/// 解釈が先に改行へ変えてしまう。`\\n` と綴れば `printf` の側が改行にする
-/// ので、どのバックエンドでも通る。
+/// マニフェストの `\n` は解析時に改行へ変換される。`printf` に2文字の
+/// `\` と `n` を渡す意図なら、`\\n` と記述する必要がある。
+/// このエスケープ方法を診断に含める。
 pub fn cannot_spell(who: &str, place: &str, c: char, description: &str) -> String {
     let mut reason = format!(
         "{who} cannot spell {} inside {place}, and `{description}` contains one",
@@ -138,8 +135,8 @@ pub fn cannot_spell(who: &str, place: &str, c: char, description: &str) -> Strin
              write `\\{escape}` — the manifest turns `{escape}` into the character itself"
         ));
     }
-    // 逃げ道は1つしかない。direct は自分で走らせるので、1行に綴る場所が
-    // そもそも無い——命令の中の改行にも、パスの中の改行にも当てはまる。
+    // direct は引数をプロセスへ直接渡すため、行単位の出力形式による制約がない。
+    // 実際の改行をコマンドやパスに含める場合の実行方法として案内する。
     reason.push_str(". `--backend=direct` runs the steps itself, with nothing spelled on one line");
     reason
 }
@@ -179,8 +176,8 @@ mod tests {
 
     #[test]
     fn refusing_a_newline_names_the_escape_that_was_probably_meant() {
-        // ここに来る大半は書き間違いである。直し方を言わない断りは、
-        // 利用者を `--backend=direct` へ追いやるだけになる（ADR-0058）。
+        // バックエンドの変更に加え、元のバックエンドで実行するための
+        // エスケープ方法も診断に含める（ADR-0058）。
         let r = cannot_spell("ninja", "a build edge", '\n', "GEN table");
         assert!(r.contains("a newline"), "{r}");
         assert!(r.contains("write `\\\\n`"), "{r}");

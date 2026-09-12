@@ -1,13 +1,10 @@
 //! 出力段のバックエンド層（[ADR-0018](../../../docs/adr/0018-backend-layer.md)）。
 //!
-//! 計画は「何を起動すべきか」までを決める。それを**誰が**走らせるかは別の
-//! 関心であり、ここがその境界である。
+//! 計画で決定したアクショングラフを、選択された実行方式へ変換する。
 //!
-//! バックエンドが受け取るのは `BuildGraph` だけで、`Plan` は渡さない。渡せば
-//! 渡した分だけ内部表現に触れ、境界が形骸化する。`BuildGraph` は独自形式
-//! （`build-graph.json`）の中身そのものであり、書き出して読み直したものと
-//! 区別が付かない。ゆえに「形式に何かが足りない」という事故は起こらない——
-//! 足りなければ ninja も make も動かなくなる。
+//! バックエンドは `BuildGraph` だけを受け取り、`Plan` の内部表現には依存しない。
+//! `BuildGraph` は `build-graph.json` と同じ情報を持つ。
+//! 既存バックエンドでもこの型を使用することで、外部向け形式に必要な情報の不足を検出する。
 
 pub mod direct;
 pub mod graph;
@@ -259,7 +256,7 @@ pub fn write_prepared_files(g: &BuildGraph) -> Result<(), Failure> {
 
 /// 版付き共有ライブラリの隣へ、版を持たない名前を置く。
 ///
-/// 実体がまだ無くてもよい。相対の記号連結は、実体が現れた時点で有効になる。
+/// リンク先のファイルは作成前でもよい。相対シンボリックリンクは、ビルド後に参照可能になる。
 #[cfg(unix)]
 pub fn place_link_aliases(g: &BuildGraph) -> Result<(), Failure> {
     for (alias, target) in &g.link_aliases {
@@ -297,7 +294,7 @@ pub fn place_link_aliases(g: &BuildGraph) -> Result<(), Failure> {
     Ok(())
 }
 
-/// 記号連結を置けないホストでは、従来と同じく何もしない。
+/// シンボリックリンクの作成を実装していないホストでは何もしない。
 #[cfg(not(unix))]
 pub fn place_link_aliases(_g: &BuildGraph) -> Result<(), Failure> {
     Ok(())
@@ -309,13 +306,13 @@ pub fn link_alias_matches(alias: &std::path::Path, target: &std::path::Path) -> 
     std::fs::read_link(alias).ok().as_deref() == Some(target)
 }
 
-/// 記号連結を置かないホストでは、変更も予定しない。
+/// シンボリックリンクを作成しないホストでは、作成予定も報告しない。
 #[cfg(not(unix))]
 pub fn link_alias_matches(_alias: &std::path::Path, _target: &std::path::Path) -> bool {
     true
 }
 
-/// 道具の刻印を書く（ADR-0055）。
+/// ツールの識別情報を記録したスタンプファイルを書く（ADR-0055）。
 ///
 /// **中身が変わったときだけ書く。** 書き直せば mtime が動き、その道具を
 /// 使うすべてのアクションが組み直される——変わっていないのに書けば、

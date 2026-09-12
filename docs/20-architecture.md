@@ -6,10 +6,7 @@
 
 ## 1. One core, multiple frontends
 
-Incremental evaluation, typed values with provenance, and the language server
-are not separate features but **three aspects of the same core** — the same
-structure as rust-analyzer sitting on the same query foundation (Salsa) as
-rustc.
+The CLI and language server share an incremental query engine and typed values with provenance. This lets both frontends reuse evaluation results and report source locations.
 
 - The incremental evaluation engine = what the language server needs
   (partial re-evaluation per keystroke)
@@ -18,14 +15,11 @@ rustc.
 - `dowel build` and the language server pose different queries to the same
   query graph
 
-So "build the build system first, add the language server later" is not a
-viable order. The constraints that cannot be retrofitted are fixed first;
-shipping the language server itself is deferred.
+The evaluator must support editor requirements from the start. The language server frontend can be delivered separately once those requirements are supported.
 
-## 2. The four constraints that cannot be retrofitted
+## 2. Evaluator requirements for editor support
 
-Write the evaluator as a naive tree-walking interpreter and the following
-become unrecoverable:
+The evaluator must support the following requirements. Adding them after implementation would require changes to parsing, value representation, and query execution:
 
 1. **Error-tolerant parsing** — do not stop at syntax errors; keep partial
    trees and continue evaluating. The lossless CST is the source of truth;
@@ -66,27 +60,22 @@ become unrecoverable:
 Value = { type, data, provenance }
 ```
 
-Provenance is a constituent of the value, not side-band data. Since
-provenance is a projection of the query graph, it costs almost nothing extra
-once the incremental engine exists.
+Each value includes its provenance. The query graph supplies the dependency relationships needed to trace how declarations contribute to a result.
 
 ## 5. Persistence (no daemon)
 
-There is no resident daemon ([ADR-0002](adr/0002-no-daemon.md)). Since the
-in-memory graph cannot be kept across processes, three things substitute:
+There is no resident daemon ([ADR-0002](adr/0002-no-daemon.md)). Query results must therefore persist on disk and be restored by subsequent processes.
 
 ### 5.1 Make restoration cost O(touched nodes)
 
-Avoid serialize-everything / restore-everything — it forfeits the incremental
-advantage as the graph grows.
+Restore only the nodes a query needs. Serializing and restoring the entire graph would make startup cost grow with the full project size.
 
 - An **mmap-able fixed-length record index** + an **append-only value log**
 - The index holds only query-key hashes, output fingerprints, and offsets of
   dependency edges
 - Node bodies are not read until needed. Validation is fingerprint comparison
   only, so most nodes are judged "unchanged" without reading their values
-- mmap plus the OS page cache is the effective substitute for residency; most
-  of the cost of avoiding a daemon is recovered right here
+- mmap and the OS page cache allow subsequent processes to reuse cached index pages without keeping a daemon running
 
 ### 5.2 Change detection
 
@@ -114,7 +103,7 @@ Required because the CLI and the language server touch the same store.
   lost — only the cached speedup**
 - Invariant: a process dying at any point never corrupts the store
 
-### 5.4 What this drags in
+### 5.4 Startup and storage requirements
 
 - **A startup-time budget** — target: under 10ms when there is nothing to do.
   Without a daemon, startup is paid on every run, so implementation-language
@@ -161,9 +150,7 @@ not a goal.
 
 ## 8. Relation to a future execution layer
 
-Content addressing, append-only logs, and fingerprint validation are exactly
-the machinery an action cache needs; extending to one later reuses them
-as-is. Nothing gets built twice.
+A future action cache can reuse content addressing, append-only logs, and fingerprint validation from the evaluation store. It would also need records describing action inputs and outputs.
 
 ## 9. Reducing cold configure
 
@@ -189,9 +176,6 @@ The countermeasure: treat probe results not as an implicit cache
   the host they ran on", an unrecorded input, which this promotes to an
   explicit one
 
-The database exists ([ADR-0028](adr/0028-probe-facts.md)). The key is the
-tool's identity (path, size, mtime) plus the question, which is also what
-makes invalidation unnecessary: replace the tool and the key changes, so
-the stale fact is never asked for again. The first input it promoted was
-the host triple — previously assembled from the OS and architecture dowel
-itself was compiled for, never asked of the machine's compiler.
+The database is implemented ([ADR-0028](adr/0028-probe-facts.md)). Its key combines the tool's identity (path, size, mtime) with the probe request. A change to that identity produces a different key, so the old entry is no longer reused.
+
+The first stored probe result was the compiler's target triple. Previously, dowel inferred the host triple from the OS and architecture used to compile dowel itself.

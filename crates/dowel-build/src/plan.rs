@@ -326,7 +326,7 @@ pub fn plan(
     let mut ar_toolchain_checked = false;
     // 別に宣言されたアセンブラ（ADR-0050）。アセンブリが現れたときだけ要る
     let mut asm_toolchain_checked = false;
-    // ビルドと合わない ABI 札。宣言ごとに1件へ畳むので、溜めてから出す
+    // ビルド構成と一致しない ABI ラベルを収集し、宣言ごとに1件の診断を出す
     // （issue #158）
     let mut abi_against_build: Vec<AbiAgainstBuild> = Vec::new();
     // 変換の道具も同じ扱い。使う宣言があったときに1度だけ確かめる
@@ -1648,7 +1648,7 @@ fn c_string_literal(s: &str) -> String {
 ///
 /// `sources` と同じ道である。`public` / `private` に置くものではないため
 /// `compile_env` には現れない——繋ぎ方も書き出す記号も伝播しない。
-/// まだ印の付いている目標の名札（ADR-0053）。
+/// `unverified` が残っている移行対象ターゲットのラベル（ADR-0053）。
 ///
 /// `migrate verify` が「あと何目標残っているか」を述べるために読む。
 /// 移植の単位は目標である（docs/40-migration.md 5節）以上、進み具合も
@@ -1720,7 +1720,7 @@ fn link_input(
     link_inputs.get(&to).map(|p| (p.clone(), None))
 }
 
-/// この目標が、この三つ組へ組まれるか（issue #126）。
+/// このターゲットを指定されたターゲットトリプル向けにビルドできるか（issue #126）。
 ///
 /// 書かなければ全ての三つ組が対象である。`[package] targets` と同じ綴りで、
 /// 掛かる範囲だけが違う——パッケージ全体を絞れても、複数の三つ組を支える
@@ -1737,10 +1737,8 @@ fn collect_root_strs(sess: &Session, tid: TargetId, cfg: &Config, name: &str) ->
 
 /// 既に在るライブラリの位置（[ADR-0049](../../../docs/adr/0049-prebuilt-libraries.md)）。
 ///
-/// dowel は他のビルドシステムを走らせない（ADR-0001）。cargo も zig も go
-/// も、静的ライブラリを作るところまでは各々の道具の仕事であり、dowel が
-/// 引き受けるのは**その先**——繋ぐこと、面を伝えること、ABI を突き合わせる
-/// こと——である。
+/// dowel は他のビルドシステムを実行しない（ADR-0001）。cargo、zig、go などで
+/// 作成済みの静的ライブラリを入力とし、リンク、公開プロパティの伝播、ABI の比較を行う。
 fn prebuilt_library(
     sess: &Session,
     tid: TargetId,
@@ -1795,11 +1793,11 @@ fn prebuilt_library(
     Some(path)
 }
 
-/// このターゲット自身が公開している翻訳時の語
+/// ターゲット自身の公開マクロ定義とコンパイルフラグ
 /// （[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）。
 ///
-/// `defines` と `flags` を、コンパイラに渡す綴りで返す。dowel の利用者が
-/// 受け取るものと、pkg-config の利用者が受け取るものが違ってはならない。
+/// `defines` と `flags` をコンパイラ引数へ変換する。
+/// dowel 経由と pkg-config 経由の利用側に、同じ設定を渡すために使用する。
 pub fn public_words(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> {
     let target = sess.target(tid);
     let pkg_cfg = cfg.for_package(&sess.package(target.package).name);
@@ -1818,12 +1816,11 @@ pub fn public_words(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> 
     out
 }
 
-/// このターゲットが C++ を翻訳するか
+/// 生成ソースも含め、ターゲットに C++ ソースがあるか
 /// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
 ///
-/// 配ったヘッダをどちらの言語で読むかがこれで決まる。`.h` は両方の言語で
-/// 使われる綴りであり、`__cplusplus` の分岐がどちらへ倒れるかは、それを
-/// 配ったターゲットの言語が決める。
+/// インストール済み `.h` ヘッダの前処理言語を選ぶ際に使用する。
+/// 提供元ターゲットの言語に合わせ、`__cplusplus` による条件分岐を検査する。
 pub fn compiles_cxx(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
     let mut ignored = Vec::new();
     if collect_sources(sess, tid, cfg, &mut ignored).iter().any(|s| is_cxx(s)) {
@@ -1836,10 +1833,10 @@ pub fn compiles_cxx(sess: &Session, tid: TargetId, cfg: &Config) -> bool {
     generated_spellings(sess, tid, cfg).iter().any(|s| is_cxx(s))
 }
 
-/// `generate` が書くと宣言した出力の綴り。
+/// `generate` に宣言された出力ファイル名。
 ///
-/// 落ちる先ではなく綴りだけを見る。言語の判定に要るのはそれだけであり、
-/// 場所まで求めるには計画そのものが要る。
+/// 拡張子による言語判定に使うため、出力先の絶対パスは解決しない。
+/// 絶対パスの解決にはビルド計画が必要になる。
 fn generated_spellings(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<PathBuf> {
     let target = sess.target(tid);
     let cfg_pkg = cfg.for_package(&sess.package(target.package).name);
@@ -1854,20 +1851,16 @@ fn generated_spellings(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<PathB
     out
 }
 
-/// 使う側の翻訳行に載る語
+/// 依存先からの伝播を含む、利用側のコンパイル引数
 /// （[ADR-0060](../../../docs/adr/0060-the-surface-is-readable.md)）。
 ///
-/// 読むのは併合済みのインタフェースであり、ターゲット自身の `public` ではない。
-/// 公開の依存が配る定義も使う側には届く——pkg-config は `Requires` でそれを
-/// 合成し（[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）、dowel
-/// の利用者はインタフェースから直に受け取る。自身の `public` だけを見ると、
-/// 検査は使う側と違う分岐を前処理することになる。
+/// 併合済みインタフェースから取得し、公開依存先のマクロ定義も含める。
+/// pkg-config は同じ伝播を `Requires` で表現する（ADR-0043）。
+/// 自身の `public` だけでは、ヘッダ検査時の条件分岐が利用側と異なる場合がある。
 ///
-/// 言語別の語は、読む言語の分だけを渡す。`cxx_flags` を C の行に載せれば、
-/// それはもう使う側の行ではない。
+/// 言語別フラグは対象言語のものだけを渡す。C の検査に `cxx_flags` は使用しない。
 ///
-/// 旗の中の道を絶対パスへ開くときの診断は捨てる。同じ値は計画が既に読んで
-/// おり、install の側で言い直せば同じ話が二度出る。
+/// フラグ内のパス解決の診断は計画時に報告済みのため、ここでは再度報告しない。
 pub fn consumer_words(
     sess: &Session,
     tid: TargetId,
@@ -1893,7 +1886,7 @@ pub fn consumer_words(
     out
 }
 
-/// このターゲット自身が公開しているリンク時の語（ADR-0043）。
+/// このターゲット自身の公開リンクフラグ（ADR-0043）。
 pub fn public_link_flags(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<String> {
     let target = sess.target(tid);
     let pkg_cfg = cfg.for_package(&sess.package(target.package).name);
@@ -1903,15 +1896,13 @@ pub fn public_link_flags(sess: &Session, tid: TargetId, cfg: &Config) -> Vec<Str
     }
 }
 
-/// 宣言された ABI 札を、このビルドそのものと突き合わせる
+/// 宣言された ABI ラベルと、ビルド対象のランタイムを比較する
 /// （[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）。
 ///
-/// 札同士の比較は誰が何を要求するかを見るが、**このビルドが何であるか**は
-/// 見ていない。`libc = "musl"` を要求する面を gnu 向けに組めば、要求は
-/// 満たされていない——そしてリンクは通り、失敗は実行時に出る。
+/// ラベル同士の比較だけでは、ビルド対象との不一致を検出できない。
+/// 例えば `libc = "musl"` の宣言は gnu 向けビルドでは満たせない。
 ///
-/// dowel が三つ組から導ける成分に限る。導けないものは、ここで言えることが
-/// 何も無い。
+/// 検査対象はターゲットトリプルから導出できる `libc` 成分に限る。
 fn check_abi_against_build(
     env: &dowel_model::PropMap,
     cfg: &Config,
@@ -1947,18 +1938,17 @@ fn check_abi_against_build(
     });
 }
 
-/// ビルドと合わない ABI 札の宣言1つ分。
+/// ビルド対象と一致しない ABI ラベルの宣言。
 ///
-/// 宣言ごとに1件へ畳むために溜める。この検査は**宣言と構成**の関係であり、
-/// 誰が引いているかに依らない——ビルドは一様である（ADR-0031）。目標ごとに
-/// 出すと、文面も位置も同じレコードが使う側の数だけ並び、「1つ直せば全部
-/// 消える」のか「N 箇所直すところがある」のかが読めない（issue #158）。
+/// 同じ宣言に依存するターゲットをまとめ、宣言ごとに1件の診断を出す。
+/// 全ターゲットでビルド構成が共通のため、不一致の原因は同じ宣言にある（ADR-0031）。
+/// 診断の重複を避けることで、修正が必要な宣言の数を明確にする（issue #158）。
 struct AbiAgainstBuild {
     declared: String,
     actual: String,
     triple: String,
     site: Option<Site>,
-    /// この面を引いている目標。件数ではなく、影響の範囲として述べる
+    /// この公開インタフェースに依存するターゲット。影響範囲として診断に含める
     reached_by: Vec<String>,
 }
 

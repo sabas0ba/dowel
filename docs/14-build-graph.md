@@ -1,24 +1,15 @@
 # `build-graph.json` — the build graph format
 
-The description a backend runs on. It is what dowel hands to ninja, to make,
-and to its own sequential runner, written out verbatim so that a backend
-outside this repository can consume the same thing
-([ADR-0018](adr/0018-backend-layer.md)).
+`build-graph.json` describes the commands, files, and dependencies needed to execute a build. It serializes the same graph used by dowel's ninja, make, and direct backends, so external backends can use the same input ([ADR-0018](adr/0018-backend-layer.md)).
 
 ```sh
 dowel build --backend=graph
 # wrote: .dowel/build/x86_64-unknown-linux-gnu-debug/build-graph.json
 ```
 
-The `graph` backend writes the document and stops. Nothing is compiled — the
-document is the deliverable, and running it is the reader's job. `dowel test`
-and `dowel inspect` refuse this backend rather than reporting a build that did
-not happen.
+The `graph` backend writes the document without compiling anything. The program reading it is responsible for executing the build. `dowel test` and `dowel inspect` reject this backend because those commands require built artifacts.
 
-The same document is what `dowel graph --kind=action --format=json` prints.
-There is one JSON description of an action graph, and it is the one the
-backends run on: a fact missing from it is a broken build, not a stale
-document.
+`dowel graph --kind=action --format=json` prints the same format. The built-in backends also use this graph representation, which helps detect missing execution information in the exported format.
 
 ## The document
 
@@ -124,9 +115,7 @@ One step is one process launch.
   each take the union — `direct` in its scheduler, `make` as prerequisites,
   `ninja` by emitting the edges its inputs do not already carry as
   order-only prerequisites
-- **Refuse an unknown `format` or `version`.** Executing a build description
-  you half-understand is the shortest path to silently building the wrong
-  thing
+- **Refuse an unknown `format` or `version`.** An unsupported format may contain execution requirements the reader cannot interpret, causing incorrect build results
 
 Paths are absolute, so the document is not relocatable — it describes one
 build directory on one machine. Regenerate it rather than moving it.
@@ -139,10 +128,6 @@ containing whitespace, `:`, `#`, `$`, `%`, `;`, `=`, `\`, `*`, `?`, `[`, or
 writing a Makefile that builds something else. `ninja` has no such limit.
 This is a property of the backend, not of the format.
 
-Neither `ninja` nor `make` can spell a **line terminator** inside a command,
-because both put the command on one line; both refuse such a step rather than
-altering it ([ADR-0058](adr/0058-a-command-a-backend-cannot-spell.md)). The
-format itself carries it without trouble — `arguments` is an array of strings,
-and a JSON string holds a newline. A reader that runs `arguments` as `argv`
-has nothing to do; a reader that joins them into a shell line inherits the
-same limit, which is one more reason not to join them.
+The `ninja` and `make` backends reject line terminators inside commands because their generated build files store commands on individual lines ([ADR-0058](adr/0058-a-command-a-backend-cannot-spell.md)).
+
+The JSON format supports these characters in the `arguments` array. A reader can preserve them by passing that array directly as process arguments. A reader that generates a single-line shell command must handle the same representation limit as the ninja and make backends.
