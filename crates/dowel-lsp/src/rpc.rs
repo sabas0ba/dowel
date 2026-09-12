@@ -1,11 +1,10 @@
-//! JSON-RPC の枠付けと本文の受け渡し。
+//! JSON-RPC メッセージのフレーミングと本文の入出力。
 //!
-//! LSP は本文の前に `Content-Length: <バイト数>` の頭部を置き、空行で区切る。
-//! 頭部は ASCII、本文は UTF-8 である。
+//! LSP は本文の前に `Content-Length: <バイト数>` ヘッダを置き、空行で区切る。
+//! ヘッダは ASCII、本文は UTF-8 である。
 //!
-//! 頭部の読み取りは `read_line` ではなくバイト単位で行う。`read_line` は
-//! 改行までを UTF-8 として解釈するが、頭部の直後に続く本文は同じ流れの上に
-//! あり、緩衝に取り込まれると本文の先頭を失う。
+//! ヘッダはバイト単位で読み取る。ヘッダと本文は同じストリームにあるため、
+//! 行読み取り用のバッファを一時的に作ると、先読みした本文をバッファとともに破棄するおそれがある。
 
 use dowel_support::json::{Json, JsonWriter};
 use std::io::{BufRead, Write};
@@ -201,7 +200,7 @@ mod tests {
 
     #[test]
     fn reads_consecutive_messages_from_one_stream() {
-        // 頭部を行単位で読むと、緩衝が本文まで取り込んで2件目を失う。
+        // ヘッダを行単位で読むと、バッファが本文まで先読みして2件目を失う。
         let bytes = framed(&[
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
             r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,

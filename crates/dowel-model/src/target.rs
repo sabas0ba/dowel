@@ -71,8 +71,8 @@ impl std::ops::Deref for Target {
 
 /// `[test.<name>.harness]`（ADR-0023）。
 ///
-/// 事例の在り処が実行ファイルの中である場合の宣言。dowel は枠組みを知らず、
-/// 「どう尋ねるか」だけをここから読む。
+/// テスト実行ファイルからケース一覧を取得するための宣言。
+/// dowel はテストフレームワーク固有の実装に依存せず、列挙用の起動方法を使用する。
 #[derive(Clone, Debug)]
 pub struct HarnessDecl {
     /// `dowel_eval::schema::harness_props` の名前 → 値
@@ -101,25 +101,22 @@ pub struct CaseDecl {
 /// `[<kind>.<name>.generate]` の1項目
 /// （[ADR-0054](../../../docs/adr/0054-generated-sources.md)）。
 ///
-/// ソースを作る規則である。走らせる program はビルド機械の上で走るものであり、
-/// ツールチェインの道具ではない——`bison` も `protoc` も、交差ビルドで動くのは
-/// 組む側の機械である。
+/// ソース生成用のプログラムをビルドホスト上で実行する。
+/// クロスビルドでも、`bison` や `protoc` はビルドホスト用の実行ファイルを使用する。
 ///
-/// 出力はこの宣言のための場所（`<build>/generated/<パッケージ>/<ターゲット>/<名前>`）
-/// へ落ちる。program はそこを作業ディレクトリとして走るので、`outputs` は
-/// そこからの相対名で足りる。宣言の側に絶対パスの組み立てを持ち込まないための
-/// 分割である。
+/// 出力先は `<build>/generated/<パッケージ>/<ターゲット>/<名前>` である。
+/// このディレクトリを作業ディレクトリとして実行し、`outputs` はそこからの相対パスで指定する。
 #[derive(Clone, Debug)]
 pub struct GenerateDecl {
-    /// 項目の鍵。出力が落ちるディレクトリの名前になる
+    /// 生成規則の名前。出力ディレクトリ名に使用する
     pub name: String,
     /// 走らせる program。ビルド機械の上で走る
     pub command: String,
     /// 入力の前に置く引数。具体化前であり、`when` / `match` を含みうる
     pub args: Option<Value>,
-    /// 読むもの。命令行の末尾にも置かれる。具体化前
+    /// 入力ファイル。コマンドラインの末尾に追加する。具体化前
     pub inputs: Option<Value>,
-    /// 書くもの。出力ディレクトリからの相対名。具体化前
+    /// 出力ファイル。出力ディレクトリからの相対パス。具体化前
     pub outputs: Option<Value>,
     /// 出力ディレクトリを依存側の探索路にも載せるか。
     /// `public.includes` と同じ伝播であり、既定は自身のみ

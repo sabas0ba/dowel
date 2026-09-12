@@ -1,4 +1,4 @@
-# ADR-0059: A directory shipped as an interface is reported when it holds sources, not filtered
+# ADR-0059: Warn about source files in installed include directories
 
 **Status**: Accepted
 
@@ -28,21 +28,13 @@ of **what to ship** it is far too wide, and nothing said so.
 
 ## Decision
 
-**dowel reports it and ships the directory unchanged.**
+**Warn when an installed include directory contains compilable source files. Copy the directory without filtering it.**
 
-Filtering by extension is the obvious move and it is wrong. `public.includes`
-puts the whole directory on the consumer's `-I` path; shipping a subset
-breaks a single-file library that does `#include "impl.c"`, which is a real
-if uncommon shape. Deciding which files are the interface from their names is
-guessing, and the install path already refuses to guess — it copies the
-search path *because* the search path was declared.
+`public.includes` makes the entire directory available on the consumer's include search path. Filtering files by extension could remove an intentional dependency such as `#include "impl.c"`. File names alone cannot determine which files consumers need, so installation preserves the declared directory's contents.
 
-Recognising a source is not guessing, though. That question is closed
-([ADR-0051](0051-source-language-is-closed.md)), and the same predicate that
-decides what dowel compiles decides what to name here — one answer, in one
-place, so that a spelling added later is added once.
+Use the existing source-extension predicate to identify files for the warning ([ADR-0051](0051-source-language-is-closed.md)). Compilation and this check share the predicate, so adding support for an extension updates both.
 
-So the warning names the declaration, not the files' fate:
+The warning identifies the declaration and the source files that will be installed:
 
 ```
 warning[source-among-headers]: `src` holds 2 files that dowel compiles, and install ships them as the interface
@@ -66,9 +58,7 @@ fix is an edit to that line.
 
 ## Consequences
 
-- The install still produces the same bytes it did before. This decision
-  adds a sentence, not a behaviour change, because the behaviour was
-  declared and the declaration was the thing that was wrong.
+- The installed files and their contents are unchanged. This decision adds a warning about a potentially unintended include-directory declaration.
 - A project that deliberately ships a `.c` to be `#include`d gets a warning
   it does not need. It is a warning, the install succeeds, and the note says
   what dowel could not tell apart. The alternative — staying silent — leaves

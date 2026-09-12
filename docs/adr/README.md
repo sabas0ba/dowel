@@ -64,7 +64,7 @@ was originally written in.
 | [0055](0055-tool-identity-in-freshness.md) | A tool's identity is an input, recorded as a file the actions depend on | Accepted |
 | [0056](0056-direct-backend-parallelism.md) | The direct backend runs steps concurrently, and every backend orders by both edges and files | Accepted |
 | [0057](0057-progress-is-shown-while-it-runs.md) | Progress is output, shown while the build runs, one line per step | Accepted |
-| [0058](0058-a-command-a-backend-cannot-spell.md) | A command a backend cannot spell is refused, never altered | Accepted |
-| [0059](0059-an-interface-directory-holds-the-interface.md) | A directory shipped as an interface is reported when it holds sources, not filtered | Accepted |
-| [0060](0060-the-surface-is-readable.md) | What was installed is asked whether it can be read | Accepted |
-| [0061](0061-the-state-is-a-question.md) | What a build would do is a question, asked without doing it | Accepted |
+| [0058](0058-a-command-a-backend-cannot-spell.md) | Reject line terminators that a backend cannot represent | Accepted |
+| [0059](0059-an-interface-directory-holds-the-interface.md) | Warn about source files in installed include directories | Accepted |
+| [0060](0060-the-surface-is-readable.md) | Check installed headers with the consumer's preprocessing options | Accepted |
+| [0061](0061-the-state-is-a-question.md) | Report rebuild reasons and evaluation reuse without running a build | Accepted |

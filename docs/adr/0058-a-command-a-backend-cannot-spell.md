@@ -1,4 +1,4 @@
-# ADR-0058: A command a backend cannot spell is refused, never altered
+# ADR-0058: Reject line terminators that a backend cannot represent
 
 **Status**: Accepted
 
@@ -31,24 +31,13 @@ directory, with nothing pointing back at the manifest.
 `direct` was right in both cases: it passes `argv` to `exec` and never
 assembles a shell line at all.
 
-The project already had the shape of the answer. The make backend refuses a
-build whose paths make cannot name, "rather than writing a makefile that
-builds something else" ([14-build-graph.md](../14-build-graph.md)). That rule
-covered paths and stopped there.
+The make backend already rejects paths that its output format cannot represent ([14-build-graph.md](../14-build-graph.md)). The same validation is needed for line terminators in commands and other generated fields.
 
 ## Decision
 
-**A backend that cannot spell a command refuses the build and names what it
-cannot spell.** It never rewrites the command into one it can spell.
+**Reject a build when a backend cannot represent its command without changing its meaning.** The diagnostic identifies the unsupported character and the affected field.
 
-The unspellable thing here is a line terminator — `\n` or `\r` — **anywhere
-the backend writes a single line**, not only in the command. Getting that
-list wrong is the same defect one field over: ninja writes `depfile = <path>`
-and `default <paths>` outside the build edge, and make puts the step's
-description inside its `printf` recipe. Each is checked where it is written;
-make's existing path check already refuses whitespace, which covers its
-paths. Both backends check before writing anything — a half-written build
-file would leave the previous one broken.
+Check `\n` and `\r` in every field written on a single line. This includes commands, ninja's `depfile` and `default` fields, and make's step descriptions. Make's existing whitespace check covers its paths. Both backends validate all fields before writing, preserving the previous build file if validation fails.
 
 **The message names the fix, because most of the time this is a typo.** The
 declaration above does not want a newline at all: it wants `printf` to
@@ -72,11 +61,7 @@ sent the reader to ninja, which now refuses the same path — advice that ends
 in a second refusal is worse than none. A path that make cannot name for its
 own reasons still points at ninja.
 
-**The silent rewrite is removed, not kept as a fallback.** ninja's `value`
-now escapes `$` and nothing else. Leaving the newline replacement in place
-"just in case" would keep the path by which a value that slipped past the
-check becomes a different command; without it, such a value produces a ninja
-file that fails loudly instead.
+Remove newline-to-space replacement from ninja's `value`; it only escapes `$`. If an unchecked newline reaches the output, ninja will report a syntax error instead of executing a command whose meaning was changed.
 
 ## Consequences
 

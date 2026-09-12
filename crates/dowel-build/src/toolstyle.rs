@@ -1,18 +1,13 @@
-//! 道具に渡す引数の綴り（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)）。
+//! ツールチェーンの引数形式（[ADR-0027](../../../docs/adr/0027-toolchain-style.md)）。
 //!
-//! 道具の**名前**は `[toolchain]` が宣言できても、綴りが Unix 固定なら
-//! `cl` は解釈できない命令が組み上がる。しかもこれらは利用者が `flags` で
-//! 上書きできる旗ではない——dowel 自身が組み立てる部分だからである
-//! （issue #113）。
+//! `[toolchain]` で指定したコンパイラに合わせ、dowel が生成する引数の形式を選ぶ。
+//! GNU 形式の引数を固定で使用すると、MSVC の `cl` では解釈できない（issue #113）。
 //!
-//! ここに閉じるのは**dowel が組み立てる引数だけ**である。利用者が書いた
-//! `flags` は素通しする。綴りを翻訳しようとすると、どの旗をどう写すかの
-//! 表を持つことになり、それは「コンパイラを知っている」ことに他ならない。
+//! このモジュールは dowel が生成する引数だけを扱う。利用者が指定した
+//! `flags` は変換しない。任意のフラグの変換には、コンパイラごとの意味の対応表が必要になる。
 //!
-//! 危ないのは `-MD` である。MSVC で `/MD` は「動的 CRT をリンクする」と
-//! いう**別の、それ自体は正当な意味**を持つ。依存の書き出しを頼んだつもりの
-//! 旗が ABI を選ぶ旗として解釈される——`docs/00-overview.md` が
-//! 「No single ABI」の例として挙げているまさにその旗である。
+//! 例えば GNU の `-MD` は依存ファイルの生成を指定するが、MSVC の `/MD` は
+//! 動的 CRT とのリンクを指定する。引数形式の取り違えは ABI にも影響する。
 
 use dowel_eval::config::Style;
 use dowel_eval::{Config, Opt};
@@ -118,8 +113,7 @@ pub fn archive(cfg: &Config, out: &Path, objects: &[String]) -> Vec<String> {
 
 /// リンクの引数。`inputs` はオブジェクトと書庫を並べたもの。
 ///
-/// 利用者の `link_flags` は綴りを変えずに置く。翻訳しようとすると、旗の
-/// 対応表を持つことになる。
+/// 利用者の `link_flags` は変更せずに渡す。変換にはツールごとのフラグ対応表が必要になる。
 pub fn link(cfg: &Config, inputs: &[String], link_flags: &[String], out: &Path) -> Vec<String> {
     let mut args = Vec::new();
     if cfg.style == Style::Msvc {
@@ -147,7 +141,7 @@ pub fn object_extension(cfg: &Config) -> &'static str {
     }
 }
 
-/// 静的ライブラリの綴り。GNU は `lib<名前>.a`、MSVC は `<名前>.lib`。
+/// 静的ライブラリのファイル名。GNU は `lib<名前>.a`、MSVC は `<名前>.lib`。
 pub fn archive_name(cfg: &Config, target: &str) -> String {
     match cfg.style {
         Style::Gnu => format!("lib{target}.a"),
@@ -157,26 +151,24 @@ pub fn archive_name(cfg: &Config, target: &str) -> String {
 
 // --- 共有ライブラリ（ADR-0030）---
 
-/// 書き出す形式。同じ `exports` の一覧から、リンカが読む形を作る。
+/// `exports` 宣言から生成する、リンカ用の公開シンボル指定形式。
 ///
-/// 様式だけでは決まらない。GNU 様式の中で Mach-O だけが版指令書を読まず、
-/// 別の綴りと別の名前の付け方を要求する——`target.os` が語彙として在る
-/// （[ADR-0026](../../../docs/adr/0026-target-os-arch.md)）ので、そこで分ける。
+/// 引数の GNU / MSVC 形式だけでなく、対象 OS でも形式を選択する。
+/// 例えば GNU 形式でも Mach-O では ELF 用 version script を使用できない（ADR-0026）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExportForm {
-    /// ELF の版指令書（`--version-script`）
+    /// ELF 用 version script（`--version-script`）
     VersionScript,
-    /// Mach-O の記号一覧（`-exported_symbols_list`）。名前に `_` が付く
+    /// Mach-O 用シンボル一覧（`-exported_symbols_list`）。名前に `_` が付く
     SymbolList,
     /// Windows のモジュール定義（`/DEF:`）
     ModuleDefinition,
 }
 
-/// 形式は**対象の形式**が決める。様式ではない。
+/// ツールの引数形式と対象 OS から、公開シンボルの指定形式を選ぶ。
 ///
-/// mingw は GNU 様式のまま PE を作る。版指令書は ELF のものであり、PE では
-/// 意味を持たない——この2つが別の軸であることは、ここで分けておかないと
-/// 「GNU 様式なら版指令書」という取り違えとして残る。
+/// MinGW は GNU 形式の引数で PE を生成するため、ELF 用 version script は使わない。
+/// 引数形式だけで判定せず、Windows 向けにはモジュール定義ファイルを選ぶ。
 pub fn export_form(cfg: &Config) -> ExportForm {
     match (cfg.style, dowel_eval::config::triple_os(&cfg.target)) {
         (Style::Msvc, _) => ExportForm::ModuleDefinition,
@@ -248,11 +240,9 @@ pub fn assemble_flags(cfg: &Config) -> Vec<String> {
 
 /// 実行可能スタックを断るリンク時の引数（ADR-0050）。
 ///
-/// 別のアセンブラが組み立てた目的ファイルに `.note.GNU-stack` は無く、
-/// dowel はその道具の綴りで印を頼めない。リンカの綴りは様式が決めるので
-/// 知っている——同じ主張を、まだ言える場所で言う。
-/// `link_flags` はこの後に並ぶので、本当に要る稀な場合は `-z execstack` で
-/// 言い直せる。
+/// 外部アセンブラの出力に `.note.GNU-stack` がない場合に備え、リンカへ
+/// 非実行スタックを指定する。アセンブラ固有の引数には依存しない。
+/// 利用者の `link_flags` は後に追加されるため、必要なら `-z execstack` で上書きできる。
 pub fn noexecstack_link_flags(cfg: &Config) -> Vec<String> {
     match cfg.style {
         Style::Gnu => vec!["-z".into(), "noexecstack".into()],
@@ -297,7 +287,7 @@ pub fn shared_object_flags(cfg: &Config) -> Vec<String> {
     }
 }
 
-/// 共有ライブラリの綴り。版を書けば、それが名前に入る
+/// 共有ライブラリのファイル名。バージョンが指定されていれば名前に含める
 /// （[ADR-0040](../../../docs/adr/0040-shared-library-version.md)）。
 ///
 /// 版の入る位置は形式ごとに違う。ELF は末尾に足し、Mach-O は拡張子の前に
@@ -314,7 +304,7 @@ pub fn shared_library_name(cfg: &Config, target: &str, soversion: Option<i64>) -
     }
 }
 
-/// 版を持たない綴り。`-lcore` が見つける名前である。
+/// バージョンを含まないライブラリ名。`-lcore` などで検索される名前である。
 pub fn shared_library_link_name(cfg: &Config, target: &str) -> String {
     match (cfg.style, dowel_eval::config::triple_os(&cfg.target)) {
         (Style::Msvc, _) => format!("{target}.dll"),
@@ -399,20 +389,15 @@ pub enum HeaderLanguage {
     Cxx,
 }
 
-/// 前処理だけ行う綴り（ADR-0060）。
+/// ヘッダの前処理検査に使うコンパイラ引数（ADR-0060）。
 ///
-/// 翻訳はしない。確かめたいのは「読めるか」——`#include` が届くか——であり、
-/// 型の整合は別の問いである。出力は捨てる。
+/// `#include` 先を解決できるか検査する。型検査やコード生成は行わず、前処理結果は破棄する。
 ///
-/// **言語は明示する。** 綴りから決めさせると、driver の知らない綴り
-/// （`.HH` など）は「リンクの入力」として読まれずに終わり、警告と終了状態 0
-/// が返る——[ADR-0051](../../../docs/adr/0051-source-language-is-closed.md)
-/// が直したのと同じ、読まれないまま成功する形である。
+/// 言語を明示し、コンパイラによる拡張子の推測を避ける。未対応の拡張子
+/// （`.HH` など）はリンク入力として扱われ、前処理せず終了状態 0 を返す場合がある。
 ///
-/// **公開の語も渡す。** `public.defines` と `public.flags` は pkg-config の
-/// `Cflags` に載る（[ADR-0043](../../../docs/adr/0043-pkgconfig-generation.md)）。
-/// 使う側がそれを持って読む以上、こちらも持たなければ、定義で開く
-/// `#include` を見落とす。
+/// 利用側へ伝播する公開コンパイル引数も渡す。pkg-config の `Cflags` と同じ
+/// マクロ定義を使い、条件付きの `#include` を検査する（ADR-0043）。
 pub fn preprocess_only(
     cfg: &Config,
     include_dir: &Path,
@@ -448,7 +433,7 @@ pub fn preprocess_only(
     args
 }
 
-/// 捨て場の名前。
+/// 出力を破棄するデバイスのパス。
 fn devnull() -> String {
     if cfg!(windows) {
         "NUL".to_string()
@@ -469,9 +454,9 @@ pub fn list_exports(cfg: &Config, library: &Path) -> Vec<String> {
     }
 }
 
-/// 道具の出力から記号の名前だけを拾う。
+/// シンボル一覧の出力からシンボル名を抽出する。
 ///
-/// 綴りは様式で違う。GNU の `nm` は `<番地> <種別> <名前>`、MSVC の
+/// 出力形式はツールによって異なる。GNU の `nm` は `<アドレス> <種別> <名前>`、MSVC の
 /// `dumpbin /exports` は見出しと表の後に `<序数> <hint> <RVA> <名前>` を
 /// 並べる。どちらも「行の最後の語」が名前であることを使う——書式の全体を
 /// 解釈すると、道具の版ごとの差に付き合うことになる。

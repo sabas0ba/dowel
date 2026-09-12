@@ -1,4 +1,4 @@
-//! 実行の下請け。
+//! バックエンド共通のプロセス実行補助と、再実行の判定。
 //!
 //! バックエンドが共通で使うもの——失敗の表現、`PATH` の探索、そして
 //! 「直前の実行で各出力を作ったコマンド」の記録——を置く。走らせ方そのものは
@@ -58,7 +58,7 @@ pub fn program_exists(name: &str) -> bool {
     resolve(name).is_some()
 }
 
-/// 起動される実体の道。
+/// 実行ファイルの解決済みパス。
 ///
 /// 名前だけでは同一性を採れない。`PATH` の前の方に別の `cc` が現れれば、
 /// 同じ名前で別のものが走る（[ADR-0055](../../../docs/adr/0055-tool-identity-in-freshness.md)）。
@@ -122,8 +122,8 @@ pub fn progress(line: &str) {
 /// 現れた。走っている間は何も出ないので、大きなビルドでは止まって見える
 /// （ADR-0057）。
 ///
-/// 子の stdout と stderr は別の糸で読む。1つの糸で順に読むと、片方の管が
-/// 一杯になったときにもう片方が進まず、子ごと止まる。
+/// 子プロセスの stdout と stderr は別スレッドで読む。順番に読むと、一方の
+/// パイプが満杯になって子プロセスがブロックし、もう一方の読み取りも完了しなくなる。
 pub fn drive(program: &str, args: &[String], build_dir: &Path) -> Result<(), Failure> {
     let shown = format!("{program} {}", args.join(" "));
     let mut cmd = Command::new(program);
@@ -276,13 +276,10 @@ fn fingerprint(s: &str) -> u64 {
     h.finish()
 }
 
-/// この段を走らせる理由。`None` が返らないかぎり走る。
+/// ステップの再実行が必要な理由。最新の場合は `None` を返す。
 ///
-/// 判定と、その報告が同じ関数を読む。`--backend=direct` は走らせる直前に
-/// これを呼び、`dowel status` は走らせずに同じものを呼ぶ——判定と報告が
-/// それぞれの写しを持てば、報告しない理由で走り、走らない理由を報告する
-/// ようになる（[ADR-0058](../../../docs/adr/0058-a-command-a-backend-cannot-spell.md)
-/// が命令の綴りで避けたのと同じずれである）。
+/// direct バックエンドは実行直前に、`dowel status` は状態報告時にこの関数を呼ぶ。
+/// 判定規則を共有し、実行時の判定と報告の不一致を防ぐ。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stale {
     /// この出力を作ったという記録が無い。まだ1度も組んでいない

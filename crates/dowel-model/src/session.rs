@@ -109,7 +109,7 @@ pub struct Session {
     forwards: Vec<(PathBuf, String, Site)>,
     /// 値の入れ子の上限（`--max-nesting`）。既定は `dowel_syntax::MAX_NESTING`
     max_nesting: usize,
-    /// エディタの緩衝。ここに在るパスはディスクより優先して読む。
+    /// エディタバッファ。登録されたパスはディスク上の内容より優先して読む。
     /// 保存されていない内容で解析するための経路（docs/20-architecture.md 6節）
     overlay: BTreeMap<PathBuf, String>,
     /// git 依存の取得を行うか。エディタからは打鍵ごとにネットワークへ
@@ -169,7 +169,7 @@ impl Session {
 
     /// エディタのために読み込む。
     ///
-    /// 開いている緩衝（`overlay`）がディスクより優先され、正本になる。
+    /// 開いているエディタバッファ（`overlay`）を、ディスク上の内容より優先する。
     /// ストアは読みも書きもしない（未保存の内容から得た結果を書かないため —
     /// docs/20-architecture.md 6節）。git 依存の取得も行わず、取得済みの
     /// checkout の再利用に留める。打鍵ごとに作って捨てる前提であり、常駐しない。
@@ -201,7 +201,7 @@ impl Session {
         sess
     }
 
-    /// ファイルを読む。エディタの緩衝が在ればそちらが正本。
+    /// ファイルを読む。エディタバッファがあれば、その内容を使用する。
     fn read_source(&mut self, path: &Path) -> std::io::Result<FileId> {
         match self.overlay.get(path) {
             Some(text) => {
@@ -259,7 +259,7 @@ impl Session {
             public.insert("link_flags".to_string(), strs(&r.libs));
         }
         let tid = TargetId(self.targets.len());
-        // 外部のパッケージは宣言を持たない。pkg-config が答えた面だけを持つ
+        // 外部パッケージには dowel の宣言がなく、pkg-config の取得結果を公開プロパティに使う
         // ターゲットとして置く。
         let mut decl = TargetDecl::bare(TableKind::Lib, name.to_string(), site);
         decl.public = public;
@@ -328,7 +328,7 @@ impl Session {
         self.db.stats()
     }
 
-    /// 構成と名札の表をクエリへ渡す。
+    /// 構成とターゲット名の一覧をクエリへ渡す。
     ///
     /// 名前解決そのものは導出である（[`query::deps`]）。ここで渡すのは
     /// **どのパッケージにどの名前が在るか**だけで、これだけは1ファイルからの
@@ -339,7 +339,7 @@ impl Session {
         query::set_name_table(&self.db, self.name_table());
     }
 
-    /// 名前解決に要る名札の表を組む。値は持たない。
+    /// 名前解決用のターゲット一覧を構築する。プロパティ値は含めない。
     fn name_table(&self) -> query::NameTable {
         let mut table = query::NameTable::default();
         for t in &self.targets {
@@ -1976,7 +1976,7 @@ impl TargetSink<'_> {
             }
         }
 
-        // ABI 札を成分で書いた場合、成分の名前と値も閉じた語彙である
+        // ABI ラベルを成分で指定する場合、成分名と値は許可された一覧から選ぶ
         // （ADR-0042）。綴りを誤った成分は、どちらの側も名指していない
         // ことになり、比べられずに素通りする——制約を書いたつもりの記述が
         // 何も制約しない。
@@ -2015,7 +2015,7 @@ impl TargetSink<'_> {
         self.targets[tid.0].props_mut(block).insert(name, value);
     }
 
-    /// ABI 札の1成分を語彙に照らす（ADR-0042）。
+    /// ABI ラベルの成分名と値が許可された一覧に含まれるか検査する（ADR-0042）。
     ///
     /// 名前も値も閉じている。開いていると、綴りを誤った成分は「片方しか
     /// 名指していない成分」として扱われ、比べられずに通る——制約を書いた
@@ -2242,8 +2242,8 @@ fn canonical(p: &Path) -> PathBuf {
 
 /// 実在しないパスの字句的な正規化。`.` と `..` を畳む。
 ///
-/// エディタの緩衝は保存前の（ディスクに無い）パスを持ちうる。畳まないと
-/// `dir/../lib` と `lib` が別の鍵になり、緩衝の重ね合わせが一致しない。
+/// エディタバッファは未保存ファイルのパスも保持する。パスを正規化しないと、
+/// `dir/../lib` と `lib` が別のキーになり、対応するバッファを参照できない。
 fn lexical(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {

@@ -25,7 +25,7 @@ pub enum Type {
     TargetRef,
     /// `template("name")`（[ADR-0035](../../../docs/adr/0035-template-kind.md)）
     TemplateRef,
-    /// ABI 札。`must_equal` で検証される。
+    /// ABI ラベル。`must_equal` で互換性を検証する。
     /// 1つの文字列としても、成分の表としても書ける
     /// （[ADR-0042](../../../docs/adr/0042-abi-label-components.md)）
     AbiLabel,
@@ -91,7 +91,7 @@ impl Type {
         }
         match (self, other) {
             (Type::Cfg(a), b) => a.accepts(b),
-            // ABI 札は1つの語でも、成分の表でも書ける（ADR-0042）。
+            // ABI ラベルは文字列、または成分名と値のテーブルで指定できる（ADR-0042）。
             // 表の値は文字列に限る——成分は「何であるか」を名指す語であり、
             // 数や真偽で書けるものは無い。
             (Type::AbiLabel, Type::Str) => true,
@@ -145,7 +145,7 @@ pub enum Ns {
     Cfg,
     /// 組む側の機械（[ADR-0026](../../../docs/adr/0026-target-os-arch.md)）
     Host,
-    /// 組む**相手**。値は `--target` の三つ組から導かれる
+    /// ビルド対象。値は `--target` のターゲットトリプルから導出する
     Target,
     Feature,
     Tc,

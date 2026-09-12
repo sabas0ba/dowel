@@ -54,11 +54,7 @@ from becoming a third environment distinct from host and container.
 for evaluating the dotfiles flake from this repository's CI is not set up,
 and there is no present need to build it.
 
-To keep the eventual migration cheap, **what is checked is decoupled from
-where it runs**: local runs and CI both invoke the same entry point,
-`scripts/verify.sh`, and the workflow does nothing but launch it. Moving the
-execution environment later swaps the workflow's internals only; the
-definition of the checks does not move.
+Local runs and CI both invoke `scripts/verify.sh`. The checks are defined in that script, so a future change to the CI execution environment can be made in the workflow without redefining the checks.
 
 ## 3.1 Verification
 
@@ -68,9 +64,7 @@ Verification has a single entry point.
 make verify      # run every stage, leaving results in .work/verify/
 ```
 
-A failing stage does not stop the run; everything executes and the run fails
-at the end. Knowing "what else passed" in the same run — not just "where it
-failed" — makes the repair loop faster.
+A failing stage does not stop later stages. The script collects all stage results, then exits with a failure status if any required stage failed. This allows one run to identify multiple failures.
 
 | Output | Contents |
 |---|---|
